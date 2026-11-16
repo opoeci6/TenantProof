@@ -11,6 +11,7 @@ import json
 import os
 import re
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -28,10 +29,7 @@ RUN_BUDGET_S = 60.0  # the run target
 CALL_TIMEOUT_S = RUN_BUDGET_S
 MAX_RETRIES = 1
 EFFORT = "medium"  # output_config.effort: suggested start for multistep tool use
-PRICE_IN_USD_PER_MTOK = 2.0  # claude-sonnet-5-5 list price, 2026-11
-PRICE_OUT_USD_PER_MTOK = 10.0
 CACHE_WRITE_PRICE_FACTOR = 1.25  # of the input price: writing a 5-minute cache entry
-CACHE_READ_PRICE_FACTOR = 0.1  # of the input price: reading one
 CACHE_CONTROL = {"type": "ephemeral"}  # the default 5-minute lifetime; a run lasts under 60 s
 DEFAULT_MAX_TOKENS = 16000  # thinking counts against max_tokens
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -81,6 +79,29 @@ class ToolUse(BaseModel):
     input: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class Price:
+    """List price in USD per million tokens. Cache writes cost CACHE_WRITE_PRICE_FACTOR times the
+    input price; the cache read price differs by model (0.1, 0.05 or 0.025 times it).
+    `long_prompt_tokens`: above this many prompt tokens in one request the model has a second,
+    dearer rate card that this table does not carry, so such a run has no estimate."""
+
+    in_per_mtok: float
+    out_per_mtok: float
+    cache_read_per_mtok: float
+    long_prompt_tokens: int | None = None
+
+
+# Anthropic list prices, 2026-11-03. Add a model here only with its published prices. A model that
+# is not listed gets no estimate (None), never another model's price.
+PRICES: dict[str, Price] = {
+    "claude-haiku-5-5": Price(0.10, 0.50, 0.01, long_prompt_tokens=100_000),
+    "claude-sonnet-5-5": Price(2.0, 10.0, 0.10),
+    "claude-opus-5-5": Price(4.0, 20.0, 0.20),
+    "claude-fable-5-2": Price(8.0, 40.0, 0.20),
+}
+
+
 class Usage(BaseModel):
     # As the API reports them: `input_tokens` is only the input that was neither read from nor
     # written to the prompt cache; the two cache counts are separate.
@@ -88,9 +109,18 @@ class Usage(BaseModel):
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    # The largest prompt (input plus cache tokens) of any single request counted here, for the
+    # long-prompt rate card. A sum of requests would overstate it.
+    max_prompt_tokens: int = 0
+
+    @property
+    def peak_prompt_tokens(self) -> int:
+        own = self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
+        return self.max_prompt_tokens or own
 
     def __add__(self, other: "Usage") -> "Usage":
         return Usage(
+            max_prompt_tokens=max(self.peak_prompt_tokens, other.peak_prompt_tokens),
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             cache_creation_input_tokens=(
@@ -335,18 +365,25 @@ def _stop_details(raw: Any) -> dict[str, Any] | None:
     return details.model_dump(mode="json") if hasattr(details, "model_dump") else dict(details)
 
 
-def estimate_cost_usd(usage: Usage) -> float:
-    """Estimated from MODEL's list price; the same price is used for any other LLM_MODEL, so
-    the figure is only a rough guide then. A cache write costs 1.25 times the input price and a
-    cache read 0.1 times."""
-    input_equivalent = (
-        usage.input_tokens
-        + usage.cache_creation_input_tokens * CACHE_WRITE_PRICE_FACTOR
-        + usage.cache_read_input_tokens * CACHE_READ_PRICE_FACTOR
-    )
+def model_name(provider: Any) -> str:
+    """The model a provider calls. The fixture provider replays runs recorded on MODEL."""
+    return str(getattr(provider, "model", None) or MODEL)
+
+
+def estimate_cost_usd(usage: Usage, model: str = MODEL) -> float | None:
+    """Estimated from `model`'s list price (PRICES), or None when the model is not listed or a
+    request's prompt was long enough for a rate card the table does not carry: "unknown" rather
+    than another model's number."""
+    price = PRICES.get(model)
+    if price is None:
+        return None
+    if price.long_prompt_tokens is not None and usage.peak_prompt_tokens > price.long_prompt_tokens:
+        return None
+    in_tokens = usage.input_tokens + usage.cache_creation_input_tokens * CACHE_WRITE_PRICE_FACTOR
     return round(
-        input_equivalent * PRICE_IN_USD_PER_MTOK / 1e6
-        + usage.output_tokens * PRICE_OUT_USD_PER_MTOK / 1e6,
+        in_tokens * price.in_per_mtok / 1e6
+        + usage.cache_read_input_tokens * price.cache_read_per_mtok / 1e6
+        + usage.output_tokens * price.out_per_mtok / 1e6,
         4,
     )
 

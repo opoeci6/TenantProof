@@ -134,3 +134,20 @@ def test_a_partly_reviewed_timeline_is_not_done() -> None:
 ])
 def test_kind_label(kind: str, mime: str, label: str) -> None:
     assert js(f"kindLabel({json.dumps({'kind': kind, 'mime': mime})})") == label
+
+
+# --------------------------------------------------------------------------- run cost line
+
+
+def test_cost_label_shows_a_number_or_says_unknown() -> None:
+    def label(usage: dict) -> list:
+        return js(f"[costLabel({json.dumps(usage)}), costNote({json.dumps(usage)})]")  # type: ignore[return-value]
+
+    known = label({"est_cost_usd": 0.0056, "model": "claude-haiku-5-5"})
+    assert known == ["Est. cost under $0.01", "At claude-haiku-5-5's list prices"]
+    assert label({"est_cost_usd": 0.1255, "model": "claude-sonnet-5-5"})[0] == "Est. cost $0.13"
+    unknown, note = label({"est_cost_usd": None, "model": "claude-haiku-4-5"})
+    assert unknown == "Est. cost unknown"
+    assert "claude-haiku-4-5" in note and "$" not in unknown
+    assert label({"est_cost_usd": 0, "model": None})[0] == "Est. cost under $0.01"  # zero is known
+    assert label({"model": "x"})[0] == "Est. cost unknown"  # a missing value is unknown too

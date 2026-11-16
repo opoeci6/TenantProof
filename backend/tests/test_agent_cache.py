@@ -194,14 +194,17 @@ def test_missing_or_null_cache_counts_are_zero(extra: dict[str, Any]) -> None:
 def test_usage_adds_every_count() -> None:
     a = llm.Usage(input_tokens=1, output_tokens=2, cache_creation_input_tokens=3,
                   cache_read_input_tokens=4)
-    assert a + a == llm.Usage(input_tokens=2, output_tokens=4, cache_creation_input_tokens=6,
-                              cache_read_input_tokens=8)
+    total = a + a
+    assert (total.input_tokens, total.output_tokens, total.cache_creation_input_tokens,
+            total.cache_read_input_tokens) == (2, 4, 6, 8)
+    assert total.peak_prompt_tokens == 8  # the biggest single prompt (1 + 3 + 4), not the sum
 
 
-def test_cost_prices_cache_writes_at_1_25_and_reads_at_0_1_of_the_input_price() -> None:
+def test_cost_prices_cache_writes_at_1_25_and_reads_at_the_models_read_price() -> None:
+    """The default model (Sonnet 5.5): reads are $0.10 per MTok, 0.05 of its $2 input price."""
     usage = llm.Usage(input_tokens=1_000_000, cache_creation_input_tokens=1_000_000,
                       cache_read_input_tokens=1_000_000, output_tokens=0)
-    assert llm.estimate_cost_usd(usage) == round(2.0 * (1 + 1.25 + 0.1), 4)
+    assert llm.estimate_cost_usd(usage) == round(2.0 * (1 + 1.25) + 0.10, 4)
     assert llm.estimate_cost_usd(llm.Usage(output_tokens=1_000_000)) == 10.0  # unchanged
 
 
@@ -249,14 +252,16 @@ def test_cache_tokens_survive_a_pause_and_are_counted_once(
 
 
 def test_the_api_usage_is_unchanged(fresh_db: None, client: Any, session: Session) -> None:
-    """Cache counts are stored on the run; RunUsage in the contract has no such fields."""
+    """Cache counts are stored on the run; RunUsage in the contract has no such fields (it has
+    `model`, which est_cost_usd was priced with)."""
     case = session.get(CaseRow, CASE)
     assert case is not None
     row = asyncio.run(execute_timeline(
         session, runner.create_run(session, case),
         RecordingProvider({"timeline-turn1": turn(t_use("finish")), }), demo_store()))
     body = client.get(f"/api/runs/{row.id}").json()
-    assert set(body["usage"]) == {"input_tokens", "output_tokens", "est_cost_usd", "duration_ms"}
+    assert set(body["usage"]) == {
+        "input_tokens", "output_tokens", "est_cost_usd", "duration_ms", "model"}
 
 
 def t_use(name: str) -> dict[str, Any]:

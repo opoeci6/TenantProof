@@ -721,6 +721,12 @@ function packageChecks(st) {
 // The Type shown for an evidence file. The server says "other" for a PDF it cannot place; show
 // "document" for that, and keep any better type (lease, receipt, letter) as it is.
 const kindLabel = e => e.kind === "other" && e.mime === "application/pdf" ? "document" : e.kind;
+// The run's cost line. `est_cost_usd` is null when the server has no list price for the model used
+// (or the prompts were too long for the price it has): say so, never show a made-up number.
+const costLabel = u => u.est_cost_usd == null ? "Est. cost unknown" : `Est. cost ${u.est_cost_usd < 0.01 ? "under $0.01" : "$" + u.est_cost_usd.toFixed(2)}`;
+const costNote = u => u.est_cost_usd == null
+  ? `No list price on file for ${u.model || "this model"}, or a prompt too long for the price on file`
+  : `At ${u.model || "the default model"}'s list prices`;
 /* pure:end */
 /* runState:start (pure; tests/test_run_state.py runs it under node) */
 // What the rail and the run pill say. "Needs your input" is only for a run paused on a question the
@@ -754,7 +760,6 @@ function fmtDate(d, long) {
 }
 const fmtDay = v => fmtDate({ value: v, precision: "day" });
 const fmtDur = ms => { const s = Math.round(ms / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
-const fmtCost = usd => usd < 0.01 ? "under $0.01" : `$${usd.toFixed(2)}`;
 const fmtTime = s => { if (!s) return "—"; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); };
 const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
 const evLabel = id => (S.evidence.find(e => e.id === id) || {}).label || id;
@@ -909,7 +914,7 @@ function viewRun() {
     </form>` : "";
   const waiting = run.status === "needs_review" && !asking && !USE_MOCK ? `<div class="note"><span class="note-ico">i</span><span>The run has finished. Check the events on <a href="#timeline">Review timeline</a>. Steps marked "Not in this prototype" are not built yet.</span></div>` : run.status === "needs_review" && !asking ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
   return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div>
-    <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="Priced at the default model's list rates, so a cheaper model costs less">Est. cost ${fmtCost(run.usage.est_cost_usd)}</span>` : ""}</div></div>
+    <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="${esc(costNote(run.usage))}">${esc(costLabel(run.usage))}</span>` : ""}</div></div>
     ${ask}${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
 }
 

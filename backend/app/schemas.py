@@ -147,8 +147,9 @@ class RunStep(BaseModel):
 class RunUsage(BaseModel):
     input_tokens: int
     output_tokens: int
-    est_cost_usd: float
+    est_cost_usd: float | None  # null: no list price for the model used
     duration_ms: int
+    model: str | None = None
 
 
 class Run(BaseModel):

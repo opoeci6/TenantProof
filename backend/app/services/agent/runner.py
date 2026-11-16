@@ -39,7 +39,14 @@ from app.schemas import ToolCall
 from app.services import activity
 from app.services.agent import extract, prompts
 from app.services.agent.evidence_text import EvidenceTextStore
-from app.services.agent.llm import RUN_BUDGET_S, LLMProvider, Message, Usage, estimate_cost_usd
+from app.services.agent.llm import (
+    RUN_BUDGET_S,
+    LLMProvider,
+    Message,
+    Usage,
+    estimate_cost_usd,
+    model_name,
+)
 from app.services.agent.loop import (
     LoopResult,
     StepState,
@@ -178,7 +185,7 @@ def _apply_result(step: dict[str, Any], state: StepState, result: LoopResult) ->
 # --------------------------------------------------------------------------- the run
 
 
-def _usage_totals(run: RunRow, duration_ms: int) -> dict[str, Any]:
+def _usage_totals(run: RunRow, duration_ms: int, model: str) -> dict[str, Any]:
     total = Usage()
     for step in run.steps:
         if step.get("usage"):
@@ -186,10 +193,11 @@ def _usage_totals(run: RunRow, duration_ms: int) -> dict[str, Any]:
     return {
         "input_tokens": total.input_tokens,
         "output_tokens": total.output_tokens,
-        # Stored on the run, not part of the API's RunUsage (that needs a schema: change).
+        # The cache counts are stored on the run, not part of the API's RunUsage.
         "cache_creation_input_tokens": total.cache_creation_input_tokens,
         "cache_read_input_tokens": total.cache_read_input_tokens,
-        "est_cost_usd": estimate_cost_usd(total),
+        "model": model,
+        "est_cost_usd": estimate_cost_usd(total, model),  # None: no price listed for this model
         "duration_ms": duration_ms,
     }
 
@@ -398,7 +406,8 @@ async def execute_run(
             step, state = current
             _write_step(step, state, "failed", f"The step failed ({type(exc).__name__}).")
     run.steps = copy.deepcopy(all_steps)
-    run.usage = _usage_totals(run, previous_ms + int((time.monotonic() - started) * 1000))
+    run.usage = _usage_totals(
+        run, previous_ms + int((time.monotonic() - started) * 1000), model_name(provider))
     run.status = _final_status(session, run)
     paused = any(s["status"] == "needs_input" for s in run.steps)
     run.finished_at = None if paused else datetime.now(UTC)
