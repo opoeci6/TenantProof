@@ -330,6 +330,10 @@ body.dev .contract{display:block}
 .contract .eps{display:flex;flex-wrap:wrap;gap:6px}
 .contract code.ep{font-family:var(--font-mono);font-size:11.5px;background:var(--surface);color:var(--ink);padding:2px 6px;border-radius:3px;font-weight:500}
 .contract pre{margin:0;padding:12px 14px;max-height:360px;overflow:auto;font-family:var(--font-mono);font-size:11.5px;line-height:1.5;background:var(--surface);border-top:1px dashed var(--accent);color:var(--ink-2)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;z-index:30}
+.modal-card{background:var(--bg);width:min(900px,94vw);height:90vh;border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
+.modal-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.modal iframe{flex:1;border:0;background:#fff}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:6px;font-size:13.5px;z-index:20;max-width:calc(100% - 32px)}
 
 @media (max-width:960px){
@@ -908,7 +912,7 @@ function viewRun() {
       <p class="ask-err" id="ask-err" role="alert">${esc(S.askError)}</p>
     </form>` : "";
   const waiting = run.status === "needs_review" && !asking && !USE_MOCK ? `<div class="note"><span class="note-ico">i</span><span>The run has finished. Check the events on <a href="#timeline">Review timeline</a>. Steps marked "Not in this prototype" are not built yet.</span></div>` : run.status === "needs_review" && !asking ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
-  return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div>
+  return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><div class="btn-row">${run.status === "running" ? "" : briefButton()}<button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div></div>
     <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="Priced at the default model's list rates, so a cheaper model costs less">Est. cost ${fmtCost(run.usage.est_cost_usd)}</span>` : ""}</div></div>
     ${ask}${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
 }
@@ -1010,7 +1014,7 @@ function viewPackage() {
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${esc(r.filename)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
     <div class="note"><span class="note-ico">i</span><span>Version ${S.pkg.version} · prepared by ${esc(S.pkg.prepared_by)} · ${fmtTime(S.pkg.built_at)}. ${USE_MOCK ? "In the real app this downloads as one zip." : `<a href="${API_BASE}${C}/package/download?version=${S.pkg.version}" download>Download the zip (v${S.pkg.version})</a> · SHA-256 <span class="mono">${esc(S.pkg.sha256.slice(0, 16))}…</span>`}</span></div>
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
-  return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div></div>
+  return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>
     <div class="panel panel-pad"><ul class="checklist">
       <li>${ck(!noAnalysis)}<span>Analysis: ${noAnalysis ? `<a href="${doneRun ? "#timeline" : "#run"}">${esc(noAnalysis)}</a>` : "done, with accepted events"}</span></li>
       ${row(pc.missing, "Required missing info")}
@@ -1134,11 +1138,38 @@ function pollRun() {
 }
 
 /* ---------- events ---------- */
+/* ---------- case brief (PDF) ---------- */
+const briefButton = () => USE_MOCK ? "" : `<button class="btn" type="button" data-action="brief">Case brief (PDF)</button>`;
+async function openBrief() {
+  try {
+    const r = await fetch(`${API_BASE}${C}/case-brief`, { credentials: "include" });
+    if (!r.ok) {
+      let msg = "The case brief could not be built";
+      try { const j = await r.json(); msg = (j.detail && j.detail.reasons ? j.detail.reasons.join(" ") : j.detail) || msg; } catch {}
+      toast(msg); return;
+    }
+    showBrief(URL.createObjectURL(await r.blob()));
+  } catch (err) { toast(err.message); }
+}
+function showBrief(url) {
+  closeBrief();
+  const d = document.createElement("div");
+  d.id = "briefModal"; d.className = "modal"; d.dataset.url = url;
+  d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-label", "Case brief");
+  d.innerHTML = `<div class="modal-card"><div class="modal-bar"><strong>Case brief</strong><span class="btn-row"><a class="btn small" href="${url}" download="case-brief-${esc(CASE_ID)}.pdf">Download</a><button class="btn small" type="button" data-action="close-brief">Close</button></span></div><iframe title="Case brief PDF" src="${url}"></iframe></div>`;
+  document.body.appendChild(d);
+  d.querySelector("button").focus();
+}
+function closeBrief() { const d = $("#briefModal"); if (d) { URL.revokeObjectURL(d.dataset.url); d.remove(); } }
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeBrief(); });
+
 document.addEventListener("click", async ev => {
   const b = ev.target.closest("[data-action]");
   if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
   const a = b.dataset.action, id = b.dataset.id;
   if (a === "logout") return logout();
+  if (a === "brief") return openBrief();
+  if (a === "close-brief") return closeBrief();
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { toast(b.dataset.text); } }
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { setCase(id); await refresh(); } location.hash = "timeline"; } }
   if (a === "new-case") toast("Creating cases isn't part of this prototype yet.");

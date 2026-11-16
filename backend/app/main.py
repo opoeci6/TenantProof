@@ -12,6 +12,7 @@ from app.ratelimit import limiter
 from app.routers import (
     activity,
     auth,
+    brief,
     cases,
     evidence,
     form,
@@ -49,7 +50,8 @@ async def check_origin(request: Request, call_next):
 api.add_middleware(UploadBodyLimit)  # WS1: caps upload bodies before FastAPI reads them
 
 for module in (
-    auth, me, cases, package, evidence, runs, timeline, gaps, sources, form, activity, intake
+    auth, me, cases, package, brief, evidence, runs, timeline, gaps, sources, form, activity,
+    intake,
 ):
     api.include_router(module.router)
 app.mount("/api", api)
