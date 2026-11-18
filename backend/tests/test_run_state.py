@@ -38,7 +38,7 @@ def evaluate(expression: str):
     match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
     assert match, "runState block not found in web/index.html"
     script = (
-        'const RESUMABLE = ["extract", "timeline", "gaps"];\n'
+        'const RESUMABLE = ["extract", "timeline", "gaps"];\nconst esc = String;\n'
         + match.group(1)
         + f"\nconsole.log(JSON.stringify({expression}));"
     )
@@ -179,19 +179,58 @@ def test_open_items_come_from_the_page_counts() -> None:
     assert left == {"pending": 2, "blocking": 1}
 
 
-def labelled(key: str, label: str) -> dict:
-    return {**step(key, "incomplete"), "label": label}
+def steps_with(**statuses: str) -> list[dict]:
+    """Steps in run order, each labelled with its own key in capitals."""
+    return [{**step(key, status), "label": key.upper()} for key, status in statuses.items()]
 
 
-def test_the_page_warns_in_the_same_words_as_the_server() -> None:
+@pytest.mark.parametrize(
+    ("statuses", "timeline_sentence", "not_run"),
+    [
+        (
+            {"ingest": "pending", "extract": "incomplete", "timeline": "pending",
+             "rules": "pending", "gaps": "pending"},
+            True, "Not run: TIMELINE, RULES, GAPS",
+        ),
+        ({"timeline": "incomplete", "rules": "done", "gaps": "incomplete"}, True, None),
+        ({"timeline": "incomplete", "rules": "pending"}, True, "Not run: RULES"),
+        ({"extract": "done", "timeline": "done", "gaps": "incomplete"}, False, None),
+        ({"timeline": "done", "rules": "incomplete", "gaps": "pending"}, False, "Not run: GAPS"),
+        ({"gaps": "incomplete"}, False, None),
+        ({"timeline": "incomplete", "rules": "running", "gaps": "pending"}, True, None),
+        ({"timeline": "incomplete", "gaps": "needs_input", "draft": "pending"}, True, None),
+    ],
+)  # fmt: skip
+def test_the_page_warns_in_the_same_words_as_the_server(
+    statuses: dict[str, str], timeline_sentence: bool, not_run: str | None
+) -> None:
+    from app.services.package import STOPPED_OTHER, STOPPED_TIMELINE, analysis_warning
+
+    steps = steps_with(**statuses)
+    shown = evaluate(f"analysisWarning({json.dumps(run('needs_review', *steps))})")
+    lines = [shown["lead"], shown["steps"], *([shown["notRun"]] if shown["notRun"] else [])]
+    assert lines == analysis_warning(steps)
+    assert shown["lead"] == (STOPPED_TIMELINE if timeline_sentence else STOPPED_OTHER)
+    assert shown["notRun"] == not_run
+
+
+def test_no_step_stopped_early_means_no_warning() -> None:
     from app.services.package import analysis_warning
 
-    gaps = labelled("gaps", "Find missing information")
-    for stopped in ([labelled("timeline", "Build timeline"), gaps], [gaps]):
-        shown = evaluate(f"analysisWarning({json.dumps(run('needs_review', *stopped))})")
-        assert [shown["lead"], shown["steps"]] == analysis_warning(stopped)
-    assert evaluate(f"analysisWarning({json.dumps(run('done', step('gaps', 'done')))})") is None
+    finished = run("done", step("timeline", "done"), step("gaps", "pending"))
+    assert evaluate(f"analysisWarning({json.dumps(finished)})") is None
+    assert analysis_warning(finished["steps"]) == []
     assert evaluate("analysisWarning(null)") is None
+    assert evaluate("analysisNote(null)") == ""
+
+
+def test_the_note_shows_the_not_run_line_only_when_there_is_one() -> None:
+    with_rest = run("needs_review", *steps_with(extract="incomplete", timeline="pending"))
+    without = run("needs_review", *steps_with(timeline="done", gaps="incomplete"))
+    assert "<br>Stopped early: EXTRACT<br>Not run: TIMELINE<" in evaluate(
+        f"analysisNote({json.dumps(with_rest)})"
+    )
+    assert "Not run" not in evaluate(f"analysisNote({json.dumps(without)})")
 
 
 def test_the_run_and_package_pages_show_the_warning() -> None:

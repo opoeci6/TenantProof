@@ -11,7 +11,12 @@ from sqlmodel import Session, delete, select
 from app.models import CaseRow, EvidencePageRow, FormFieldRow, GapRow, RunRow, TimelineEventRow
 from app.services.agent import llm, loop, runner
 from app.services.case_brief import NEEDS
-from app.services.package import HINDI_NOTE, STOPPED_OTHER, STOPPED_TIMELINE
+from app.services.package import (
+    HINDI_NOTE,
+    STOPPED_OTHER,
+    STOPPED_TIMELINE,
+    analysis_warning,
+)
 from tests.agent_support import CASE, RecordingProvider, demo_store, run, tool_use, turn
 from tests.test_case_brief import add_event, brief, set_gaps_step, squash
 from tests.test_package import build, download, make_ready, pdf_text, unzip
@@ -298,6 +303,53 @@ def test_only_the_latest_run_counts(fresh_db: None, client, session: Session) ->
     runner.create_run(session, case)
     manifest, _ = built_package(client)
     assert manifest["analysis_incomplete"] is False
+
+
+def test_a_deadline_during_extract_warns_about_the_timeline_that_never_ran(
+    fresh_db: None, client, session: Session
+) -> None:
+    row = execute(session, Slow({}), *runner.IMPLEMENTED_STEPS, deadline_s=0.1)
+    assert step_of(row, "extract")["status"] == "incomplete"
+    assert step_of(row, "timeline")["status"] == "pending"
+    expected = [
+        STOPPED_TIMELINE,
+        "Stopped early: Extract facts",
+        "Not run: Build timeline, Look up official rules, Draft form, Find missing information",
+    ]
+    assert analysis_warning(row.steps) == expected
+
+    text = brief(client)
+    assert all(line in text for line in expected)
+    assert text.index(expected[2]) < text.index("1. Case summary")
+    manifest, pdf = built_package(client)
+    assert manifest["incomplete_steps"] == ["Extract facts"]
+    assert manifest["notes"] == expected
+    assert all(squash(line) in pdf for line in expected)
+
+
+def test_a_gaps_only_stop_keeps_the_other_wording_with_no_not_run_line(
+    fresh_db: None, client, session: Session
+) -> None:
+    script = {
+        "timeline-turn1": turn(FINISH), "draft-turn1": turn(FINISH), **capped("gaps"),
+    }  # fmt: skip
+    row = execute(session, RecordingProvider(script), "timeline", "rules", "draft", "gaps")
+    assert step_of(row, "timeline")["status"] == "done"
+    assert step_of(row, "gaps")["status"] == "incomplete"
+    expected = [STOPPED_OTHER, f"Stopped early: {GAPS}"]
+    assert analysis_warning(row.steps) == expected
+
+    text = brief(client)
+    assert all(line in text for line in expected)
+    assert "Not run:" not in text and STOPPED_TIMELINE not in text
+    for gap in session.exec(select(GapRow).where(GapRow.case_id == CASE)):
+        if gap.id not in ("gap_01", "gap_02"):
+            gap.status = "resolved"
+            session.add(gap)
+    session.commit()
+    manifest, pdf = built_package(client)
+    assert manifest["notes"] == expected
+    assert squash(STOPPED_OTHER) in pdf and squash("Not run:") not in pdf
 
 
 def test_the_warning_comes_before_the_hindi_note(

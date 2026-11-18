@@ -847,12 +847,24 @@ const incompleteSteps = run => run ? run.steps.filter(s => s.status === "incompl
 function analysisWarning(run) {
   const stopped = incompleteSteps(run);
   if (!stopped.length) return null;
+  const labels = steps => steps.map(s => s.label).join(", ");
+  const timeline = run.steps.find(s => s.key === "timeline");
+  // A timeline that stopped or never ran gets the timeline sentence. Steps still pending are "not
+  // run" only once nothing is in progress.
+  const inProgress = run.steps.some(s => ["running", "needs_input"].includes(s.status));
+  const notRun = inProgress ? [] : run.steps.slice(run.steps.indexOf(stopped[0]) + 1).filter(s => s.status === "pending");
   return {
-    lead: stopped.some(s => s.key === "timeline")
+    lead: timeline && ["incomplete", "pending"].includes(timeline.status)
       ? "The analysis stopped early: the timeline may be missing events. Run the analysis again before relying on this."
       : "The analysis stopped early: some results may be missing. Run the analysis again before relying on this.",
-    steps: `Stopped early: ${stopped.map(s => s.label).join(", ")}`,
+    steps: `Stopped early: ${labels(stopped)}`,
+    notRun: notRun.length ? `Not run: ${labels(notRun)}` : null,
   };
+}
+// The warning on the Run and Package pages.
+function analysisNote(run) {
+  const w = analysisWarning(run);
+  return w ? `<div class="note warn"><span class="note-ico">!</span><span>${esc(w.lead)}<br>${esc(w.steps)}${w.notRun ? `<br>${esc(w.notRun)}` : ""}</span></div>` : "";
 }
 // `open` is what is left for the caseworker: { pending, blocking }. Run.status is only written when
 // the run ends, so this is what turns "Needs review" into "Done" once the review is finished.
@@ -1130,12 +1142,6 @@ function viewEvidence() {
     <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>For files the tenant brought to the clinic. JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
     <div class="panel ev-list">${rows}</div>
     ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
-}
-
-// #119: the warning on the Run and Package pages when a step of the latest run stopped early.
-function analysisNote(run) {
-  const w = analysisWarning(run);
-  return w ? `<div class="note warn"><span class="note-ico">!</span><span>${esc(w.lead)}<br>${esc(w.steps)}</span></div>` : "";
 }
 
 function viewRun() {
