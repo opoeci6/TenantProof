@@ -1,5 +1,5 @@
 """Runs a script under node and returns what it prints, parsed as JSON. Used by the tests that
-check pure functions from web/index.html.
+check pure functions from web/index.js.
 
 node writes UTF-8 whatever the locale. Without `encoding="utf-8"`, `text=True` decodes with the
 locale's code page, so on a Chinese Windows (cp936) "·" comes back as "路" and "…" raises

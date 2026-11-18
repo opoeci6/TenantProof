@@ -11,7 +11,7 @@ import pytest
 from app.services import package
 from app.services.legal import corpus
 
-INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+INDEX = Path(__file__).resolve().parents[2] / "web" / "index.js"
 SERVICES = "registered mail, express post or courier"
 # "E-mail counts ..." is fine; "Mail counts ..." and "Mailed evidence counts ..." are not.
 LOOSE_MAIL = re.compile(r"(?<![-\w])mail(?:ed)? (?:evidence )?counts\b", re.IGNORECASE)
@@ -20,7 +20,7 @@ LOOSE_4PM = re.compile(r"(?<!at or )after 4 p\.m\.")
 
 def _mock_reminders() -> str:
     match = re.search(r"reminders: \[(.*?)\] \}", INDEX.read_text(encoding="utf-8"))
-    assert match, "mock package reminders not found in web/index.html"
+    assert match, "mock package reminders not found in web/index.js"
     return match.group(1)
 
 

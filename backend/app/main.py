@@ -6,8 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlmodel import Session
@@ -128,6 +127,9 @@ app.mount("/api", api)
 
 _web = Path(__file__).resolve().parent.parent.parent / "web"
 _index = _web / "index.html"
+_index_css = _web / "index.css"
+_index_js = _web / "index.js"
+_NO_CACHE = {"Cache-Control": "no-cache"}  # the UI changes more often than a browser cache lives
 
 
 @app.get("/healthz")
@@ -146,11 +148,27 @@ def favicon() -> Response:
 
 
 @app.get("/")
+def serve_ui() -> FileResponse:
+    """The caseworker UI. Its stylesheet and script are relative, so they load from "/"."""
+    return FileResponse(_index, headers=_NO_CACHE)  # always revalidate
+
+
 @app.get("/i/{token}")
-def serve_ui(token: str | None = None) -> FileResponse:
-    """The same UI serves caseworkers (/) and tenants (/i/{token})."""
-    return FileResponse(_index, headers={"Cache-Control": "no-cache"})  # always revalidate
+def serve_tenant_ui(token: str) -> HTMLResponse:
+    """The tenant page: the same UI, one path segment deeper (/i/{token}). A root <base> makes
+    its relative stylesheet and script load, while file:// mock mode keeps its own directory."""
+    page = _index.read_text(encoding="utf-8")
+    base = '<base href="/">'
+    return HTMLResponse(page.replace("<head>", f"<head>\n  {base}", 1), headers=_NO_CACHE)
 
 
-if _web.exists():
-    app.mount("/static", StaticFiles(directory=_web), name="static")
+@app.get("/index.css", include_in_schema=False)
+def stylesheet() -> FileResponse:
+    """The UI's stylesheet. Both "/" and "/i/{token}" load it from the site root."""
+    return FileResponse(_index_css, media_type="text/css", headers=_NO_CACHE)
+
+
+@app.get("/index.js", include_in_schema=False)
+def page_script() -> FileResponse:
+    """The UI's script. Same paths as the stylesheet."""
+    return FileResponse(_index_js, media_type="text/javascript", headers=_NO_CACHE)

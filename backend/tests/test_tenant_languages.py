@@ -1,4 +1,4 @@
-"""The tenant page's text (web/index.html: LANGS, LANG_EN, I18N, UPLOAD_SOON, NEW_CASE_LANGS),
+"""The tenant page's text (web/index.js: LANGS, LANG_EN, I18N, UPLOAD_SOON, NEW_CASE_LANGS),
 run under node. Every language the New case form offers has every string, with the same
 placeholders as the English; Russian and Hindi are machine-translated and say so (#68, #69)."""
 
@@ -10,7 +10,7 @@ import pytest
 
 from tests.node_support import node_json
 
-INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+INDEX = Path(__file__).resolve().parents[2] / "web" / "index.js"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 PLACEHOLDER = re.compile(r"\{\w+\}")
 SCRIPT = {"ru": re.compile("[Ѐ-ӿ]"), "hi": re.compile("[ऀ-ॿ]")}
@@ -20,7 +20,7 @@ def _statement(source: str, name: str) -> str:
     # I18N spans lines and ends with "};" on its own line; the others are one line.
     pattern = rf"^const {name} = \{{.*?^\}};" if name == "I18N" else rf"^const {name} = [^\n]*$"
     match = re.search(pattern, source, re.S | re.M)
-    assert match, f"{name} not found in web/index.html"
+    assert match, f"{name} not found in web/index.js"
     return match.group(0)
 
 
