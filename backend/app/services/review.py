@@ -126,6 +126,11 @@ def patch_gap(
     return gap
 
 
+def request_sent_line(gap_title: str) -> str:
+    """The activity line of a sent request. It is the only record once a gap is reopened."""
+    return f"Sent a request to the tenant: {gap_title}"
+
+
 def request_from_tenant(session: Session, case: CaseRow, gap: GapRow, user: UserRow) -> GapRow:
     if gap.tenant_request is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "No drafted message for this item")
@@ -133,8 +138,7 @@ def request_from_tenant(session: Session, case: CaseRow, gap: GapRow, user: User
         raise HTTPException(status.HTTP_409_CONFLICT, "This item is already closed")
     gap.status = "waiting_tenant"
     session.add(gap)
-    activity.log(session, case.id, "caseworker", user.name,
-                 f"Sent a request to the tenant: {gap.title}")
+    activity.log(session, case.id, "caseworker", user.name, request_sent_line(gap.title))
     refresh_stage(session, case, waiting_on_tenant=True)
     return gap
 

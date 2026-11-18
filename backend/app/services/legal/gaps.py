@@ -10,11 +10,13 @@ for a caseworker. That is design rule 7 and the reason the tools are draft-only.
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
 
 from app.models import (
+    ActivityRow,
     CaseRow,
     EvidenceRow,
     FormFieldRow,
@@ -26,9 +28,11 @@ from app.services import activity
 from app.services.agent.tools import clean_text
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
+from app.services.review import request_sent_line
 from app.services.strength import SourceFacts
 
 ACTOR_NAME = "TenantProof gaps"
+EVENT_TITLE_CHARS = 80  # an event title inside a gap title
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,7 @@ def case_facts(session: Session, case: CaseRow) -> CaseFacts:
         # A title the timeline agent wrote from the evidence: cleaned and kept short, since it
         # becomes part of a gap title.
         EventFact(
-            title=clean_text(row.title, 80), strength=row.strength,
+            title=clean_text(row.title, EVENT_TITLE_CHARS), strength=row.strength,
             rejected=row.review_status == "rejected",
         )  # fmt: skip
         for row in session.exec(
@@ -150,6 +154,36 @@ def write_gaps(session: Session, case: CaseRow, specs: list[GapSpec]) -> list[Ga
             fields.add(spec.field_key)
         added.append(gap)
     return added
+
+
+def remove_support_gaps(
+    session: Session, case: CaseRow, removed: Sequence[TimelineEventRow]
+) -> None:
+    """`removed` were just deleted (and flushed): their "Support for" gaps asked about something
+    no longer on the timeline. A gap stays if another event still needs it, if it is not open, or
+    if its request ever went to the tenant. Caller commits."""
+    titles = {
+        gap_checks.support_title(clean_text(event.title, EVENT_TITLE_CHARS))
+        for event in removed
+        if event.strength == "needs_support"
+    }
+    if not titles:
+        return
+    titles -= {spec.title for spec in gap_checks.specs(case_facts(session, case))}
+    rows = session.exec(
+        select(GapRow).where(
+            GapRow.case_id == case.id, GapRow.status == "open", col(GapRow.title).in_(titles)
+        )
+    ).all()
+    for gap in rows:
+        sent = session.exec(
+            select(ActivityRow.id).where(
+                ActivityRow.case_id == case.id, ActivityRow.action == request_sent_line(gap.title)
+            )
+        ).first()
+        if sent is None:
+            session.delete(gap)
+            activity.log(session, case.id, "agent", ACTOR_NAME, f"Removed gap “{gap.title}”")
 
 
 def open_gap_lines(session: Session, case: CaseRow) -> tuple[str, ...]:

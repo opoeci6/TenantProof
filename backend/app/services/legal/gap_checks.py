@@ -131,13 +131,17 @@ def _no_written_notice(facts: CaseFacts) -> list[GapSpec]:
     ]
 
 
+def support_title(event_title: str) -> str:
+    return f"Support for: {event_title}"
+
+
 def _unsupported_events(facts: CaseFacts) -> list[GapSpec]:
     """An event no verified source supports is only the tenant's word. Ask for something that
     shows it: the officer weighs how reliable each piece of evidence is (Evidence Policy #42)."""
     return [
         GapSpec(
             severity="recommended",
-            title=f"Support for: {event.title}",
+            title=support_title(event.title),
             why=(
                 f"Nothing in the evidence backs up “{event.title}”, so it rests on the "
                 "tenant's word alone and carries less weight."
