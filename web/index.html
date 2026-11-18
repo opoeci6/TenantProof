@@ -231,6 +231,12 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .src summary .loc{color:var(--ink-2)}
 .src[open] summary{border-color:var(--accent)}
 .src blockquote{margin:6px 0 2px;padding:6px 10px;border-left:3px solid var(--tag);background:var(--surface-2);font-size:13px;color:var(--ink-2);max-width:60ch}
+.tr{margin-top:6px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.tr .tr-out p{margin:4px 0;font-size:13.5px}
+.answer-box{display:flex;flex-direction:column;gap:4px;margin-top:10px;font-size:13px;color:var(--ink-2)}
+.answer-box textarea{font:inherit;resize:vertical}
+.gap-answer{border-left:3px solid var(--tag);background:var(--surface-2);padding:6px 10px;border-radius:4px}
+.gap-answer blockquote{margin:4px 0;font-size:13px;color:var(--ink-2)}
 .flags{display:flex;flex-direction:column;gap:4px}
 .flag{font-size:12.5px;color:var(--warn);display:flex;gap:6px}
 .flag::before{content:"!";font-weight:800;width:14px;text-align:center;flex:none}
@@ -450,7 +456,7 @@ const ENDPOINTS = {
   evidence: ["GET /cases/{id}/evidence", "POST /cases/{id}/evidence (multipart)", "POST /cases/{id}/intake-link"],
   run: ["POST /cases/{id}/runs", "GET /cases/{id}/runs/latest", "GET /runs/{run_id}  (poll)", "POST /runs/{run_id}/answer"],
   timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
-  gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "GET /cases/{id}/sources"],
+  gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "POST /cases/{id}/translate-excerpt", "GET /cases/{id}/sources"],
   form: ["GET /cases/{id}/form-draft", "PATCH /cases/{id}/form-draft/fields/{key}"],
   package: ["POST /cases/{id}/package", "GET /cases/{id}/activity"],
   intake: ["GET /intake/{token}", "POST /intake/{token}/files (multipart)", "POST /intake/{token}/submit"]
@@ -700,14 +706,14 @@ const LANGS = { en: "English", zh: "中文", fr: "Français", es: "Español", ru
 const LANG_EN = { en: "English", zh: "Chinese", fr: "French", es: "Spanish", ru: "Russian", hi: "Hindi", ar: "Arabic" };
 const langLabel = k => k === "en" ? "English" : LANG_EN[k] ? `${LANG_EN[k]} (${LANGS[k]})` : (k || "");
 const I18N = {
-  en: { showEn: "Show in English", title: "Share evidence for your case", intro: "{org} is helping you with the repair problem at {unit}. Upload what you have. You don't need to organize anything.", what: "What helps", items: ["Photos of the problem. Use the originals from your camera roll, not copies from chat apps.", "Your lease", "Messages or emails with your landlord", "Receipts for costs you paid"], req: "{org} asked for", choose: "Choose files", selected: "{n} file(s) selected", privacy: "Location and device data are removed before any file is analyzed by AI. Only {org} can see your files.", attest: "These files are genuine and I haven't changed what they show.", consent: "I agree to share these files with {org} for my case.", send: "Send to {org}", sent: "Sent. {org} will contact you after reviewing your files.", lang: "Language", sendHint: "To send, choose at least one file and tick both boxes above.", sendHint: "To send, choose at least one file and tick both boxes above." },
-  zh: { showEn: "显示英文", title: "为你的案件提交证据", intro: "{org} 正在协助处理你在 {unit} 的维修问题。把你手上的材料上传就行，不需要自己整理。", what: "有用的材料", items: ["问题的照片。请上传相册里的原图，不要用聊天软件转发的图片。", "租约", "和房东的聊天记录或邮件", "你自己垫付费用的收据"], req: "{org} 需要你补充", choose: "选择文件", selected: "已选择 {n} 个文件", privacy: "在 AI 分析之前，会先删除文件里的位置和设备信息。只有 {org} 能看到你的文件。", attest: "这些文件是真实的，我没有修改过其中的内容。", consent: "我同意把这些文件提供给 {org}，用于处理我的案件。", send: "发送给 {org}", sent: "已发送。{org} 审核文件后会联系你。", lang: "语言", sendHint: "要发送，请先选择至少一个文件，并勾选上面的两个框。", sendHint: "要发送，请先选择至少一个文件，并勾选上面的两个框。" },
-  fr: { showEn: "Afficher en anglais", title: "Partagez vos preuves pour votre dossier", intro: "{org} vous aide avec votre problème de réparation au {unit}. Téléversez ce que vous avez. Vous n'avez rien à organiser.", what: "Ce qui aide", items: ["Des photos du problème. Utilisez les originaux de votre galerie, pas des copies envoyées par messagerie.", "Votre bail", "Vos messages ou courriels avec le propriétaire", "Les reçus des dépenses que vous avez payées"], req: "{org} vous demande", choose: "Choisir des fichiers", selected: "{n} fichier(s) sélectionné(s)", privacy: "Les données de localisation et d'appareil sont retirées avant toute analyse par l'IA. Seul {org} peut voir vos fichiers.", attest: "Ces fichiers sont authentiques et je n'ai pas modifié ce qu'ils montrent.", consent: "J'accepte de partager ces fichiers avec {org} pour mon dossier.", send: "Envoyer à {org}", sent: "Envoyé. {org} vous contactera après avoir examiné vos fichiers.", lang: "Langue", sendHint: "Pour envoyer, choisissez au moins un fichier et cochez les deux cases ci-dessus.", sendHint: "Pour envoyer, choisissez au moins un fichier et cochez les deux cases ci-dessus." },
-  es: { showEn: "Ver en inglés", title: "Comparta pruebas para su caso", intro: "{org} le está ayudando con su problema de reparación en {unit}. Suba lo que tenga. No necesita organizar nada.", what: "Lo que ayuda", items: ["Fotos del problema. Use las originales de su galería, no copias de aplicaciones de chat.", "Su contrato de arrendamiento", "Mensajes o correos con su arrendador", "Recibos de gastos que usted pagó"], req: "{org} le pide", choose: "Elegir archivos", selected: "{n} archivo(s) seleccionado(s)", privacy: "Los datos de ubicación y del dispositivo se eliminan antes de que la IA analice cualquier archivo. Solo {org} puede ver sus archivos.", attest: "Estos archivos son auténticos y no he cambiado lo que muestran.", consent: "Acepto compartir estos archivos con {org} para mi caso.", send: "Enviar a {org}", sent: "Enviado. {org} se comunicará con usted después de revisar sus archivos.", lang: "Idioma", sendHint: "Para enviar, elija al menos un archivo y marque las dos casillas de arriba." },
+  en: { showEn: "Show in English", title: "Share evidence for your case", intro: "{org} is helping you with the repair problem at {unit}. Upload what you have. You don't need to organize anything.", what: "What helps", items: ["Photos of the problem. Use the originals from your camera roll, not copies from chat apps.", "Your lease", "Messages or emails with your landlord", "Receipts for costs you paid"], req: "{org} asked for", choose: "Choose files", selected: "{n} file(s) selected", privacy: "Location and device data are removed before any file is analyzed by AI. Only {org} can see your files.", attest: "These files are genuine and I haven't changed what they show.", consent: "I agree to share these files with {org} for my case.", send: "Send to {org}", sent: "Sent. {org} will contact you after reviewing your files.", lang: "Language", answerLabel: "Your answer (optional)", answerHint: "If you can answer in a few words, type it here.", sendHint: "To send, add at least one file or a short answer, and tick both boxes above.", sendHint: "To send, add at least one file or a short answer, and tick both boxes above." },
+  zh: { showEn: "显示英文", title: "为你的案件提交证据", intro: "{org} 正在协助处理你在 {unit} 的维修问题。把你手上的材料上传就行，不需要自己整理。", what: "有用的材料", items: ["问题的照片。请上传相册里的原图，不要用聊天软件转发的图片。", "租约", "和房东的聊天记录或邮件", "你自己垫付费用的收据"], req: "{org} 需要你补充", choose: "选择文件", selected: "已选择 {n} 个文件", privacy: "在 AI 分析之前，会先删除文件里的位置和设备信息。只有 {org} 能看到你的文件。", attest: "这些文件是真实的，我没有修改过其中的内容。", consent: "我同意把这些文件提供给 {org}，用于处理我的案件。", send: "发送给 {org}", sent: "已发送。{org} 审核文件后会联系你。", lang: "语言", answerLabel: "你的回答（可选）", answerHint: "如果能用几句话回答，请写在这里。", sendHint: "要发送，请至少添加一个文件或写一句回答，并勾选上面的两个框。", sendHint: "要发送，请至少添加一个文件或写一句回答，并勾选上面的两个框。" },
+  fr: { showEn: "Afficher en anglais", title: "Partagez vos preuves pour votre dossier", intro: "{org} vous aide avec votre problème de réparation au {unit}. Téléversez ce que vous avez. Vous n'avez rien à organiser.", what: "Ce qui aide", items: ["Des photos du problème. Utilisez les originaux de votre galerie, pas des copies envoyées par messagerie.", "Votre bail", "Vos messages ou courriels avec le propriétaire", "Les reçus des dépenses que vous avez payées"], req: "{org} vous demande", choose: "Choisir des fichiers", selected: "{n} fichier(s) sélectionné(s)", privacy: "Les données de localisation et d'appareil sont retirées avant toute analyse par l'IA. Seul {org} peut voir vos fichiers.", attest: "Ces fichiers sont authentiques et je n'ai pas modifié ce qu'ils montrent.", consent: "J'accepte de partager ces fichiers avec {org} pour mon dossier.", send: "Envoyer à {org}", sent: "Envoyé. {org} vous contactera après avoir examiné vos fichiers.", lang: "Langue", answerLabel: "Votre réponse (facultatif)", answerHint: "Si vous pouvez répondre en quelques mots, écrivez-le ici.", sendHint: "Pour envoyer, ajoutez au moins un fichier ou une courte réponse, et cochez les deux cases ci-dessus.", sendHint: "Pour envoyer, ajoutez au moins un fichier ou une courte réponse, et cochez les deux cases ci-dessus." },
+  es: { showEn: "Ver en inglés", title: "Comparta pruebas para su caso", intro: "{org} le está ayudando con su problema de reparación en {unit}. Suba lo que tenga. No necesita organizar nada.", what: "Lo que ayuda", items: ["Fotos del problema. Use las originales de su galería, no copias de aplicaciones de chat.", "Su contrato de arrendamiento", "Mensajes o correos con su arrendador", "Recibos de gastos que usted pagó"], req: "{org} le pide", choose: "Elegir archivos", selected: "{n} archivo(s) seleccionado(s)", privacy: "Los datos de ubicación y del dispositivo se eliminan antes de que la IA analice cualquier archivo. Solo {org} puede ver sus archivos.", attest: "Estos archivos son auténticos y no he cambiado lo que muestran.", consent: "Acepto compartir estos archivos con {org} para mi caso.", send: "Enviar a {org}", sent: "Enviado. {org} se comunicará con usted después de revisar sus archivos.", lang: "Idioma", answerLabel: "Su respuesta (opcional)", answerHint: "Si puede responder en pocas palabras, escríbalo aquí.", sendHint: "Para enviar, añada al menos un archivo o una respuesta breve, y marque las dos casillas de arriba." },
   // ru reviewed by Lameda12 2026-11-17
-  ru: { showEn: "Показать на английском", title: "Отправьте доказательства по вашему делу", intro: "{org} помогает вам решить проблему с ремонтом по адресу {unit}. Загрузите всё, что у вас есть. Ничего сортировать не нужно.", what: "Что пригодится", items: ["Фотографии проблемы. Загружайте оригиналы из галереи телефона, а не копии из мессенджеров.", "Ваш договор аренды", "Переписка с арендодателем: сообщения или письма", "Чеки за то, что вы оплатили сами"], req: "{org} просит прислать", choose: "Выбрать файлы", selected: "Выбрано файлов: {n}", privacy: "Перед анализом файлов искусственным интеллектом данные о местоположении и устройстве удаляются. Ваши файлы видит только {org}.", attest: "Подтверждаю, что эти файлы подлинные и в них ничего не изменено.", consent: "Даю согласие передать эти файлы организации {org} для моего дела.", send: "Отправить организации {org}", sent: "Отправлено. {org} свяжется с вами после проверки файлов.", lang: "Язык", sendHint: "Чтобы отправить, выберите хотя бы один файл и отметьте обе галочки выше." },
+  ru: { showEn: "Показать на английском", title: "Отправьте доказательства по вашему делу", intro: "{org} помогает вам решить проблему с ремонтом по адресу {unit}. Загрузите всё, что у вас есть. Ничего сортировать не нужно.", what: "Что пригодится", items: ["Фотографии проблемы. Загружайте оригиналы из галереи телефона, а не копии из мессенджеров.", "Ваш договор аренды", "Переписка с арендодателем: сообщения или письма", "Чеки за то, что вы оплатили сами"], req: "{org} просит прислать", choose: "Выбрать файлы", selected: "Выбрано файлов: {n}", privacy: "Перед анализом файлов искусственным интеллектом данные о местоположении и устройстве удаляются. Ваши файлы видит только {org}.", attest: "Подтверждаю, что эти файлы подлинные и в них ничего не изменено.", consent: "Даю согласие передать эти файлы организации {org} для моего дела.", send: "Отправить организации {org}", sent: "Отправлено. {org} свяжется с вами после проверки файлов.", lang: "Язык", answerLabel: "Ваш ответ (необязательно)", answerHint: "Если можете ответить в двух словах, напишите здесь.", sendHint: "Чтобы отправить, добавьте хотя бы один файл или короткий ответ и отметьте обе галочки выше." },
   // machine-translated, needs native-speaker review
-  hi: { showEn: "अंग्रेज़ी में देखें", title: "अपने मामले के लिए सबूत भेजें", intro: "{org} आपकी {unit} की मरम्मत की समस्या में आपकी मदद कर रहा है। जो भी आपके पास है, अपलोड करें। आपको कुछ भी व्यवस्थित करने की ज़रूरत नहीं है।", what: "क्या काम आएगा", items: ["समस्या की तस्वीरें। अपने फ़ोन की गैलरी से असली तस्वीरें लें, चैट ऐप से आई नकल नहीं।", "आपका किराये का अनुबंध", "मकान मालिक के साथ संदेश या ईमेल", "आपने जो खर्च चुकाया उसकी रसीदें"], req: "{org} ने यह माँगा है", choose: "फ़ाइलें चुनें", selected: "{n} फ़ाइल चुनी गई", privacy: "AI से फ़ाइलों की जाँच होने से पहले लोकेशन और डिवाइस की जानकारी हटा दी जाती है। आपकी फ़ाइलें सिर्फ़ {org} देख सकता है।", attest: "ये फ़ाइलें असली हैं और मैंने इनमें दिखाई गई चीज़ों को बदला नहीं है।", consent: "मैं अपने मामले के लिए ये फ़ाइलें {org} के साथ साझा करने के लिए सहमत हूँ।", send: "{org} को भेजें", sent: "भेज दिया गया। फ़ाइलें देखने के बाद {org} आपसे संपर्क करेगा।", lang: "भाषा", sendHint: "भेजने के लिए कम से कम एक फ़ाइल चुनें और ऊपर के दोनों बॉक्स पर टिक करें।" },
+  hi: { showEn: "अंग्रेज़ी में देखें", title: "अपने मामले के लिए सबूत भेजें", intro: "{org} आपकी {unit} की मरम्मत की समस्या में आपकी मदद कर रहा है। जो भी आपके पास है, अपलोड करें। आपको कुछ भी व्यवस्थित करने की ज़रूरत नहीं है।", what: "क्या काम आएगा", items: ["समस्या की तस्वीरें। अपने फ़ोन की गैलरी से असली तस्वीरें लें, चैट ऐप से आई नकल नहीं।", "आपका किराये का अनुबंध", "मकान मालिक के साथ संदेश या ईमेल", "आपने जो खर्च चुकाया उसकी रसीदें"], req: "{org} ने यह माँगा है", choose: "फ़ाइलें चुनें", selected: "{n} फ़ाइल चुनी गई", privacy: "AI से फ़ाइलों की जाँच होने से पहले लोकेशन और डिवाइस की जानकारी हटा दी जाती है। आपकी फ़ाइलें सिर्फ़ {org} देख सकता है।", attest: "ये फ़ाइलें असली हैं और मैंने इनमें दिखाई गई चीज़ों को बदला नहीं है।", consent: "मैं अपने मामले के लिए ये फ़ाइलें {org} के साथ साझा करने के लिए सहमत हूँ।", send: "{org} को भेजें", sent: "भेज दिया गया। फ़ाइलें देखने के बाद {org} आपसे संपर्क करेगा।", lang: "भाषा", answerLabel: "आपका जवाब (वैकल्पिक)", answerHint: "अगर आप कुछ शब्दों में जवाब दे सकते हैं, तो यहाँ लिखें।", sendHint: "भेजने के लिए कम से कम एक फ़ाइल या छोटा जवाब जोड़ें और ऊपर के दोनों बॉक्स पर टिक करें।" },
 };
 
 /* =====================================================================
@@ -715,7 +721,7 @@ const I18N = {
    ===================================================================== */
 const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null,
   attest: { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false }, pkgError: null,
-  intake: { view: null, lang: null, files: [], attest: false, consent: false, sent: false } };
+  intake: { view: null, lang: null, files: [], answers: {}, attest: false, consent: false, sent: false } };
 const RESUMABLE = ["extract", "timeline", "gaps"];  // steps the runner can resume after an answer (the others' needs_input is not a question)
 const BUILT = ["extract", "timeline", "rules", "draft", "gaps"];  // steps the runner implements; `rules` is deterministic and never pauses
 S.askError = ""; S.askDraft = ""; S.answering = false;
@@ -830,9 +836,32 @@ const route = () => { if (TENANT_MODE) return "intake"; const h = location.hash.
 function contract(key, data) {
   return `<details class="contract"><summary>Data contract <span class="eps">${ENDPOINTS[key].map(e => `<code class="ep">${esc(e)}</code>`).join("")}</span></summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
 }
+/* #96: a reading aid next to a quote in another language. Never the evidence itself. */
+const hasNonAscii = s => /[^\x00-\x7F]/.test(s || "");
+function englishToggle(text, language) {
+  if (!hasNonAscii(text)) return "";
+  return `<div class="tr" data-language="${esc(language || "")}"><button class="btn small" type="button" data-action="translate-excerpt" data-excerpt="${esc(text)}">Show in English</button><div class="tr-out" hidden></div></div>`;
+}
+async function translateExcerpt(btn) {
+  const box = btn.closest(".tr"), out = box.querySelector(".tr-out");
+  if (!out.hidden) { out.hidden = true; out.innerHTML = ""; btn.textContent = "Show in English"; return; }
+  if (USE_MOCK) { out.innerHTML = `<span class="flag">Translation isn't available in mock mode.</span>`; out.hidden = false; return; }
+  const language = box.dataset.language || (S.case && S.case.tenant && S.case.tenant.preferred_language) || "en";
+  btn.disabled = true; btn.textContent = "Translating…";
+  try {
+    const r = await request("POST", `${C}/translate-excerpt`, { excerpt: btn.dataset.excerpt, language });
+    out.innerHTML = `<p lang="en">${esc(r.text_en)}</p><span class="flag">Machine translation, not the evidence.</span>`;
+    out.hidden = false; btn.textContent = "Hide English";
+  } catch (err) {
+    out.innerHTML = `<span class="flag">${esc(err.message)}</span>`; out.hidden = false;
+    btn.textContent = "Show in English";
+  }
+  btn.disabled = false;
+}
 function srcChips(sources) {
   if (!sources.length) return `<span class="flag">No source. Not shown as fact.</span>`;
-  return sources.map(s => `<details class="src"><summary><span class="exhibit">${esc(evLabel(s.evidence_id))}</span><span class="loc">${esc(s.locator)}</span></summary>${s.excerpt ? `<blockquote>${esc(s.excerpt)}</blockquote>` : ""}</details>`).join("");
+  const tenantLang = S.case && S.case.tenant ? S.case.tenant.preferred_language : "";
+  return sources.map(s => `<details class="src"><summary><span class="exhibit">${esc(evLabel(s.evidence_id))}</span><span class="loc">${esc(s.locator)}</span></summary>${s.excerpt ? `<blockquote>${esc(s.excerpt)}</blockquote>${englishToggle(s.excerpt, tenantLang)}` : ""}</details>`).join("");
 }
 function stats() {
   const reviewed = S.timeline.filter(e => e.review_status !== "pending").length;
@@ -894,7 +923,7 @@ function renderChrome() {
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
   clearInterval(poller);
-  S.intake.view = null; S.pkg = null; S.pkgError = null; S.run = null;
+  S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
   S.editing = null; S.drafting = null; S.draftEdit = null; S.draftError = ""; S.askError = ""; S.askDraft = "";
   S.attest = { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false };
 }
@@ -1125,6 +1154,7 @@ function viewGaps() {
       ${open ? `<p>${esc(g.why)}</p><p><b>How to fix:</b> ${esc(g.how_to_fix)}</p>` : g.resolution_note ? `<span class="resolved-note">${esc(g.resolution_note)}</span>` : ""}
       ${s && open ? `<p style="font-size:12.5px;color:var(--ink-3)">Source: ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</p>` : ""}
       ${g.status === "waiting_tenant" && g.input && g.input.type === "text" ? `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="Enter the tenant's answer" required><button class="btn primary small" type="submit">Save answer</button></form>` : ""}
+      ${g.answer ? `<div class="gap-answer"><span class="muted">Tenant's answer · ${esc(fmtTime(g.answer.received_at))}</span><blockquote>${esc(g.answer.text)}</blockquote>${englishToggle(g.answer.text, S.case.tenant.preferred_language)}</div>` : ""}
       ${input}${draft}${acts.length ? `<div class="btn-row">${acts.join("")}</div>` : ""}</div></div>`;
   };
   const vs = { unchanged: `<span class="pill ok">Checked · unchanged</span>`, changed: `<span class="pill warn">Changed since saved</span>`, unreachable: `<span class="pill bad">Link unreachable</span>`, unverified: `<span class="pill plain">Not verified yet</span>` };
@@ -1201,7 +1231,9 @@ function reqHtml(r, pageLang, tenantLang, t, vars) {
     ? [english, "en", message, tenantLang, `Show in ${LANG_EN[tenantLang] || tenantLang}`]
     : [message, tenantLang, english, "en", t.showEn];
   const more = other && other !== shown ? `<details class="req-en"><summary>${esc(label)}</summary><p lang="${esc(otherLang)}">${esc(other)}</p></details>` : "";
-  return `<div class="req"><b>${esc(tpl(t.req, vars))}</b><span lang="${esc(shownLang)}">${esc(shown)}</span>${more}</div>`;
+  // #95: a short answer is optional, next to the upload. Only the real tenant page sends it.
+  const answer = TENANT_MODE ? `<label class="answer-box"><span>${esc(t.answerLabel)}</span><textarea class="field" rows="2" maxlength="1000" data-action="intake-answer" data-id="${esc(r.id)}" placeholder="${esc(t.answerHint)}">${esc((S.intake.answers || {})[r.id] || "")}</textarea></label>` : "";
+  return `<div class="req"><b>${esc(tpl(t.req, vars))}</b><span lang="${esc(shownLang)}">${esc(shown)}</span>${more}${answer}</div>`;
 }
 /* #48: above the preview, which language the tenant reads, and a one-click English view. */
 function previewBar(v, lang) {
@@ -1230,7 +1262,8 @@ function viewIntake() {
       <form class="attest" data-action="intake-attest">
         <label><input type="checkbox" id="in-attest" name="attest" ${S.intake.attest ? "checked" : ""}>${esc(t.attest)}</label>
         <label><input type="checkbox" id="in-consent" name="consent" ${S.intake.consent ? "checked" : ""}>${esc(tpl(t.consent, vars))}</label></form>
-      ${(() => { const ok = (S.intake.files.length || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent;
+      ${(() => { const answered = Object.values(S.intake.answers || {}).some(v => (v || "").trim());
+        const ok = (S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent;
         return `<button class="btn primary" data-action="intake-send" ${ok ? "" : `disabled aria-describedby="send-hint"`}>${esc(tpl(t.send, vars))}</button>${ok ? "" : `<p class="muted send-hint" id="send-hint">${esc(t.sendHint)}</p>`}`; })()}`;
   const link = TENANT_MODE ? null : sessionLink(S.lastLink, CASE_ID);  // Fix #38: the link just sent, for this case only
   const qr = TENANT_MODE ? null : sessionQr(S.lastLink, CASE_ID);
@@ -1404,6 +1437,7 @@ document.addEventListener("click", async ev => {
   if (a === "cancel-draft") { S.drafting = null; S.draftEdit = null; S.draftError = ""; render(); }
   if (a === "translate-draft") return translateDraft(id);
   if (a === "preview-lang") { S.intake.lang = b.dataset.lang; render(); return; }  /* #48 */
+  if (a === "translate-excerpt") return translateExcerpt(b);  /* #96 */
   if (a === "send-request") return sendDraft(id);
   if (a === "gap") { const st = b.dataset.status; await request("PATCH", `/gaps/${id}`, { status: st, resolution_note: st === "resolved" ? "Marked done" : st === "dismissed" ? "Dismissed by caseworker" : null }); await refresh(["gaps", "form", "intake"]); }
   if (a === "build") {
@@ -1413,12 +1447,14 @@ document.addEventListener("click", async ev => {
   }
   if (a === "intake-send") {
     try {
-      if (UPLOADS_ENABLED) await uploadFiles(`/intake/${intakeTok()}/files`, S.intake.files);
-      await request("POST", `/intake/${intakeTok()}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language });
-      S.intake.sent = true; await refresh(["evidence", "case"]);
+      if (UPLOADS_ENABLED && S.intake.files.length) await uploadFiles(`/intake/${intakeTok()}/files`, S.intake.files);
+      const answers = Object.entries(S.intake.answers || {})
+        .map(([request_id, text]) => ({ request_id, text: text.trim() })).filter(a => a.text);
+      await request("POST", `/intake/${intakeTok()}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language, answers });
+      S.intake.sent = true; S.intake.answers = {}; await refresh(["evidence", "case"]);
     } catch (err) { toast(err.message); }
   }
-  if (a === "intake-reset") { S.intake = { ...S.intake, files: [], attest: false, consent: false, sent: false }; render(); }
+  if (a === "intake-reset") { S.intake = { ...S.intake, files: [], answers: {}, attest: false, consent: false, sent: false }; render(); }
 });
 document.addEventListener("submit", async ev => {
   const f = ev.target; if (!f.dataset.action) return; ev.preventDefault();
@@ -1455,6 +1491,17 @@ document.addEventListener("submit", async ev => {
   }
   if (a === "resolve-text") { const v = new FormData(f).get("value").trim(); if (!v) return; await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v, resolution_note: `Saved: ${v}` }); toast("Saved to the form draft"); await refresh(["gaps", "form", "intake"]); }
   if (a === "resolve-choice") { const v = new FormData(f).getAll("opt"); if (!v.length) { toast("Pick at least one option"); return; } await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v.join("; "), resolution_note: `Tenant's choice: ${v.join("; ")}` }); toast("Saved to the form draft"); await refresh(["gaps", "form"]); }
+});
+document.addEventListener("input", ev => {
+  const t = ev.target;
+  if (!t.dataset || t.dataset.action !== "intake-answer") return;
+  S.intake.answers = S.intake.answers || {};
+  S.intake.answers[t.dataset.id] = t.value;
+  const btn = document.querySelector('[data-action="intake-send"]');
+  if (btn) {
+    const answered = Object.values(S.intake.answers).some(v => (v || "").trim());
+    btn.disabled = !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
+  }
 });
 document.addEventListener("change", async ev => {
   const t = ev.target;
