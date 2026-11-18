@@ -26,7 +26,14 @@ from app.models import (
     TimelineEventRow,
 )
 from app.services.mappers import OPEN_GAP, has_completed_run
-from app.services.package import HINDI_NOTE, NOT_ANALYSED, new_pdf, pdf_text
+from app.services.package import (
+    HINDI_NOTE,
+    NOT_ANALYSED,
+    analysis_warning,
+    incomplete_steps,
+    new_pdf,
+    pdf_text,
+)
 from app.services.verifier import normalize, verify_citation
 
 NEEDS = "NEEDS CASEWORKER VERIFICATION"
@@ -164,6 +171,7 @@ def _timeline(doc: Doc, events, by_id, pages) -> None:
         doc.add(event.description)
         for flag in event.flags:
             doc.add(f"Flag: {flag.get('message', '')}", "small")
+            doc.flagged.append(f"timeline event “{event.title}”: {flag.get('message', '')}")
         if not _sources(doc, event, by_id, pages):
             doc.add(doc.flag(f"timeline event “{event.title}” has no supporting upload"), "b")
 
@@ -205,7 +213,10 @@ def _evidence(doc: Doc, evidence, events) -> None:
 def _gaps(doc: Doc, gaps, sources: dict[str, str], latest: RunRow | None) -> None:
     doc.add("4. Gaps and items for caseworker review", "h2")
     step = next((s for s in (latest.steps if latest else []) if s.get("key") == "gaps"), None)
-    if step is None or step.get("status") != "done":
+    if step is not None and step.get("status") == "incomplete":
+        doc.add(doc.flag("the gaps step stopped early, so some missing items may not have been "
+                         "checked"), "b")
+    elif step is None or step.get("status") != "done":
         doc.add(doc.flag("the gaps step has not completed for this case, so missing items have "
                          "not been checked"), "b")
     if not gaps:
@@ -213,6 +224,7 @@ def _gaps(doc: Doc, gaps, sources: dict[str, str], latest: RunRow | None) -> Non
     for gap in gaps:
         state = "waiting for the tenant" if gap.status == "waiting_tenant" else "open"
         doc.add(f"[{gap.severity}] {gap.title}  ({state})", "b")
+        doc.flagged.append(f"open item ({gap.severity}): {gap.title}")
         doc.add(gap.why)
         doc.add(f"What to do: {gap.how_to_fix}", "small")
         basis = sources.get(gap.source_id or "")
@@ -266,6 +278,8 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     pdf.set_title(f"Case brief {case.id}")
     stamp = _when(now or datetime.now(UTC))
     _write(pdf, "Case brief for caseworker review", bold=True, size=16, gap=2)
+    for line in analysis_warning(incomplete_steps(latest.steps if latest else [])):
+        _write(pdf, line, bold=True)
     _write(pdf, f"{case.title} ({case.unit})  ·  case {case.id}  ·  prepared {stamp}", size=9)
     _write(
         pdf,
@@ -278,7 +292,8 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     if case.tenant_language == "hi":
         _write(pdf, HINDI_NOTE, size=9, gap=3)
     count = len(body.flagged)
-    _write(pdf, f"{count} item{'s' if count != 1 else ''} need caseworker verification.", bold=True)
+    items = "1 item needs" if count == 1 else f"{count} items need"
+    _write(pdf, f"{items} caseworker verification.", bold=True)
     styles = {"h2": dict(bold=True, size=13, gap=2), "b": dict(bold=True), "small": dict(size=9),
               "p": dict()}
     for text, style in body.blocks:

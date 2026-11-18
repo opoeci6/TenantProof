@@ -1,6 +1,7 @@
 """Row -> contract-shape mappers. Keeps routers thin and shapes in one place."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import ColumnElement, exists, or_
 from sqlalchemy import select as sa_select  # sqlmodel.select takes at most four columns
@@ -111,6 +112,15 @@ def has_completed_run(session: Session, case_id: str) -> bool:
             col(RunRow.finished_at).is_not(None),
         ).limit(1)
     ).first() is not None
+
+
+def latest_run_steps(session: Session, case_id: str) -> list[dict[str, Any]]:
+    """The steps of the case's newest run; empty when it has none."""
+    row = session.exec(
+        select(RunRow).where(RunRow.case_id == case_id)
+        .order_by(col(RunRow.started_at).desc()).limit(1)
+    ).first()
+    return row.steps if row else []
 
 
 def reviewed_event_count(session: Session, case_id: str) -> int:

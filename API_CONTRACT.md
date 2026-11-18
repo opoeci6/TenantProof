@@ -22,7 +22,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
    **deterministic rules** (independent sources, metadata, date agreement, deadlines, blocking items).
 2. **Every AI-produced item carries `sources`.** Items without a file + location are not shown as fact.
 3. **Dates carry precision and basis** (`day` / `month` / `unknown`, from EXIF, message time, document, filename, user).
-4. **Long work is a job.** Analysis is a `Run` with six steps. The UI polls; steps can be `failed` or `needs_input`.
+4. **Long work is a job.** Analysis is a `Run` with six steps. The UI polls; steps can be `failed`, `incomplete` or `needs_input`.
 5. **The caseworker gates the output.** The form narrative uses only events with `review_status`
    `accepted` or `edited`. Rejected events never reach the form.
 6. **The agent never decides legal questions.** The remedy is the tenant's choice, recorded by the caseworker.
@@ -68,7 +68,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 if blocking gaps open or tenant hasn't attested. |
 | GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built package. Query `version` (default: the latest); 404 if none is built. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
-| GET | `/cases/{case_id}/case-brief` | PDF (`application/pdf`) | The caseworker's case brief, built on request: summary, timeline, evidence index, gaps. 404 for another org's case, 409 `{ detail: { reasons } }` until an analysis has completed. Not stored. |
+| GET | `/cases/{case_id}/case-brief` | PDF (`application/pdf`) | The caseworker's case brief, built on request: summary, timeline, evidence index, gaps. 404 for another org's case, 409 `{ detail: { reasons } }` until an analysis has completed. Starts with a warning when a step of the latest run is `incomplete`. Not stored. |
 
 ### Answering a paused run
 
@@ -170,8 +170,8 @@ type EvidenceItem = {
 type RunStep = {
   key: "ingest" | "extract" | "timeline" | "rules" | "gaps" | "draft";
   label: string;
-  status: "pending" | "running" | "done" | "failed" | "needs_input";
-  summary: string | null;               // for `needs_input`: the question for the caseworker
+  status: "pending" | "running" | "done" | "incomplete" | "failed" | "needs_input";
+  summary: string | null;               // for `needs_input`: the question for the caseworker; for `incomplete`: why it stopped early
   tool_calls: { tool: string; input: string; output: string }[];
 };
 type Run = { id: string; case_id: string; status: "running" | "needs_review" | "done" | "failed";

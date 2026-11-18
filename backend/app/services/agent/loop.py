@@ -30,9 +30,13 @@ from app.services.agent.tools import (
 
 log = logging.getLogger(__name__)
 
-MAX_TOOL_CALLS = 25
+# 25 was too few (#118): `read_evidence` returns one page per call, and each message of a chat
+# export is a page, so five files with a few messages each used the whole budget on reading and the
+# timeline stopped after 4 of about 8 events. Reading many pages per call is the real fix; until
+# then the step gets more calls. A run used under 50k input tokens, far below the token budget.
+MAX_TOOL_CALLS = 40
 MAX_TOTAL_TOKENS = 200_000  # input plus output, summed over the turns of one step
-MAX_TURNS = 40  # model calls, so a model that never calls a tool still stops
+MAX_TURNS = 50  # model calls, so a model that never calls a tool still stops; above the call cap
 SUMMARY_CHARS = 1000
 
 # Called at the end of every turn that ran tools, just before the commit: (state, pending). The
