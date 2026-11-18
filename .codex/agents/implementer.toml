@@ -1,0 +1,11 @@
+# Codex version of .claude/agents/implementer.md. The instructions live in that file; edit them there.
+# Change this file only for the model, effort or description.
+name = "implementer"
+description = "Use whenever code needs to be written, modified, refactored, or tests need to be added or fixed after the task is sufficiently understood. Delegate substantial implementation work to this agent."
+model = "gpt-6.1-sol"
+model_reasoning_effort = "medium"
+developer_instructions = """
+Read .claude/agents/implementer.md and follow the instructions in its body. Its front matter
+(model, effort, tools, color) configures Claude Code; ignore it.
+"The parent agent" in that file is the Codex session that started you.
+"""

@@ -1,0 +1,1031 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>TenantProof Prototype (Copy)</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;600&display=swap">
+<style>
+/* Layout: clinic case-file workspace. Sticky app bar; caseload table as home; numbered workflow rail inside a case; tenant intake shown in a phone frame. */
+:root{
+  --bg:#F3F5F4; --surface:#FFFFFF; --surface-2:#E9EEEC; --line:#D3DBD8;
+  --ink:#16201D; --ink-2:#465450; --ink-3:#6A7773;
+  --accent:#1D4F91; --accent-ink:#FFFFFF; --accent-soft:#E2EBF7;
+  --ok:#2C6D45; --ok-soft:#E0F0E6; --warn:#8F5506; --warn-soft:#FAEED7; --bad:#A3241C; --bad-soft:#F8E2DF;
+  --tag:#F6E7A8; --tag-ink:#4A3B00;
+  --font-ui:"Public Sans", "Noto Sans SC", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono:"JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --r:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1513; --surface:#161E1B; --surface-2:#1E2824; --line:#2D3935;
+    --ink:#E5ECE9; --ink-2:#ADBAB5; --ink-3:#85928D;
+    --accent:#8DB2EC; --accent-ink:#0C1830; --accent-soft:#1B2A41;
+    --ok:#7FC897; --ok-soft:#1A2F22; --warn:#E8B166; --warn-soft:#382A13; --bad:#F2928A; --bad-soft:#3B1C19;
+    --tag:#5A4B12; --tag-ink:#F8EBB8;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1513; --surface:#161E1B; --surface-2:#1E2824; --line:#2D3935;
+  --ink:#E5ECE9; --ink-2:#ADBAB5; --ink-3:#85928D;
+  --accent:#8DB2EC; --accent-ink:#0C1830; --accent-soft:#1B2A41;
+  --ok:#7FC897; --ok-soft:#1A2F22; --warn:#E8B166; --warn-soft:#382A13; --bad:#F2928A; --bad-soft:#3B1C19;
+  --tag:#5A4B12; --tag-ink:#F8EBB8;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:15px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+button,input,textarea,select{font:inherit;color:inherit}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--font-mono);font-size:.82em;font-variant-numeric:tabular-nums}
+.gutter{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.muted{color:var(--ink-3);font-size:13px}
+
+/* top bar */
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.topbar-in{max-width:1200px;margin:0 auto;padding-block:10px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.01em;font-size:17px;text-decoration:none;color:var(--ink)}
+.brand-mark{width:26px;height:26px;border-radius:5px;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font-size:13px;font-weight:800}
+.ctx{display:flex;flex-direction:column;min-width:0;flex:1 1 240px}
+.ctx strong{font-size:14px;font-weight:700;overflow-wrap:anywhere}
+.ctx span{font-size:12.5px;color:var(--ink-3)}
+.topnav{display:flex;gap:2px;flex-wrap:wrap}
+.topnav a{font-size:13.5px;font-weight:600;color:var(--ink-2);text-decoration:none;padding:6px 10px;border-radius:5px}
+.topnav a:hover{background:var(--surface-2)}
+.topnav a[aria-current="page"]{background:var(--accent-soft);color:var(--accent)}
+.topbar-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.demo-pill{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:var(--tag);color:var(--tag-ink);padding:3px 8px;border-radius:3px}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);cursor:pointer;user-select:none}
+.switch input{appearance:none;width:34px;height:20px;border-radius:20px;background:var(--surface-2);border:1px solid var(--line);position:relative;cursor:pointer;margin:0}
+.switch input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--ink-3);transition:transform .15s}
+.switch input:checked{background:var(--accent-soft);border-color:var(--accent)}
+.switch input:checked::after{transform:translateX(14px);background:var(--accent)}
+
+/* layout */
+.layout{max-width:1200px;margin:0 auto;padding-block:22px 60px;display:grid;grid-template-columns:232px minmax(0,1fr);gap:28px;align-items:start}
+.layout.single{grid-template-columns:minmax(0,1fr)}
+.layout.single .rail{display:none}
+.rail{position:sticky;top:calc(env(safe-area-inset-top,0px) + 74px);display:flex;flex-direction:column;gap:2px}
+.rail-back{font-size:13px;font-weight:600;text-decoration:none;color:var(--accent);padding:0 10px 10px}
+.rail-label{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;padding:0 10px 8px}
+.step-link{display:grid;grid-template-columns:26px 1fr;gap:2px 10px;align-items:start;padding:9px 10px;border-radius:var(--r);text-decoration:none;color:var(--ink);border:1px solid transparent}
+.step-link:hover{background:var(--surface)}
+.step-link[aria-current="page"]{background:var(--surface);border-color:var(--line)}
+.step-no{grid-row:span 2;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.step-link[aria-current="page"] .step-no{border-color:var(--accent);color:var(--accent)}
+.step-link.is-done .step-no{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.step-link.is-attn .step-no{border-color:var(--warn);color:var(--warn)}
+.step-name{font-weight:600;font-size:14px}
+.step-meta{font-size:12.5px;color:var(--ink-3)}
+.step-link.is-attn .step-meta{color:var(--warn)}
+
+main{min-width:0;display:flex;flex-direction:column;gap:20px}
+.view-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+.view-head h1{margin:0;font-size:26px;letter-spacing:-.015em;line-height:1.15;text-wrap:balance}
+.view-head p{margin:4px 0 0;color:var(--ink-2);max-width:64ch}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.panel-pad{padding:18px}
+.note{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--ink-2);background:var(--surface-2);border-radius:var(--r);padding:10px 12px}
+.note b{color:var(--ink)}
+.note.warn{background:var(--warn-soft);color:var(--ink)}
+.note.bad{background:var(--bad-soft);color:var(--ink)}
+.note-ico{flex:none;font-weight:800;width:18px;text-align:center}
+.section-h{margin:4px 0 0;font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:5px;padding:7px 12px;font-size:13.5px;font-weight:600;cursor:pointer;color:var(--ink);text-decoration:none}
+.btn:hover{border-color:var(--ink-3)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.ok{color:var(--ok)} .btn.bad{color:var(--bad)}
+.btn.small{padding:4px 9px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap;background:var(--surface-2);color:var(--ink-2)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.info{background:var(--accent-soft);color:var(--accent)}
+.pill.plain::before{display:none}
+.exhibit{display:inline-block;font-family:var(--font-mono);font-size:11.5px;font-weight:500;background:var(--tag);color:var(--tag-ink);padding:1px 6px;border-radius:3px;letter-spacing:.02em}
+
+/* caseload */
+.summary-row{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:14px;color:var(--ink-2)}
+.summary-row b{color:var(--ink);font-variant-numeric:tabular-nums;font-size:18px;margin-right:4px}
+.cl{display:flex;flex-direction:column}
+.cl-head,.cl-row{display:grid;grid-template-columns:6px minmax(0,2.2fr) minmax(0,1.1fr) minmax(0,1.5fr) minmax(0,1fr) minmax(0,.8fr);gap:8px 16px;align-items:center}
+.cl-head{padding:10px 18px 10px 0;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:700;border-bottom:1px solid var(--line)}
+.cl-row{padding:0 18px 0 0;border-bottom:1px solid var(--line);text-decoration:none;color:var(--ink);cursor:pointer;background:none;border-left:0;border-right:0;border-top:0;text-align:left;width:100%}
+.cl-row:last-child{border-bottom:0}
+.cl-row:hover{background:var(--surface-2)}
+.cl-row > *{padding-block:13px}
+.cl-stripe{align-self:stretch;padding:0!important;grid-row:span 2}
+.cl-row.p-high .cl-stripe{background:var(--bad)}
+.cl-who{display:flex;flex-direction:column;min-width:0}
+.cl-who strong{font-size:14.5px}
+.cl-who span{font-size:12.5px;color:var(--ink-3);overflow-wrap:anywhere}
+.cl-dead{font-size:13px;display:flex;flex-direction:column;gap:2px}
+.cl-dead small{color:var(--ink-3);font-size:12px}
+.cl-dead .soon{color:var(--bad);font-weight:700}
+.cl-open{display:flex;flex-direction:column;gap:3px;font-size:12.5px}
+.cl-reason{grid-column:2 / -1;font-size:12.5px;color:var(--ink-3);padding-top:0!important;margin-top:-8px}
+.cl-row.p-high .cl-reason{color:var(--bad)}
+
+/* evidence */
+.drop{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;border:1.5px dashed var(--line);border-radius:var(--r);padding:16px 18px;background:var(--surface)}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop p{margin:0;font-size:13.5px;color:var(--ink-2)}
+.drop strong{display:block;color:var(--ink);font-size:14.5px}
+.file-in{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.intake-panel{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px 18px;align-items:center}
+.intake-panel .ip-main{display:flex;flex-direction:column;gap:6px;min-width:0}
+.intake-panel .ip-title{font-weight:700}
+.linkbox{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.linkbox code{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);padding:3px 8px;border-radius:4px;overflow-wrap:anywhere}
+.ev-list{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.3fr) minmax(0,1fr);gap:8px 18px;padding:14px 18px;border-top:1px solid var(--line)}
+.ev:first-child{border-top:0}
+.ev-name{display:flex;flex-direction:column;gap:4px;min-width:0}
+.ev-name .fn{font-weight:600;overflow-wrap:anywhere}
+.ev-name .sub{font-size:12.5px;color:var(--ink-3)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;font-size:12.5px;min-width:0;margin:0}
+.kv dt{color:var(--ink-3)} .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.ev-checks{display:flex;flex-direction:column;gap:6px;align-items:flex-start;font-size:12.5px}
+.hash{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.copy{border:0;background:none;color:var(--accent);cursor:pointer;font-size:12px;padding:0;font-weight:600}
+.ev.is-new{background:var(--accent-soft)}
+
+/* run */
+.run-head{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between}
+.run-meta{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--ink-2)}
+.run-steps{list-style:none;margin:0;padding:0}
+.run-step{display:grid;grid-template-columns:30px minmax(0,1fr);gap:4px 14px;padding:16px 18px;border-top:1px solid var(--line)}
+.run-step:first-child{border-top:0}
+.rs-ico{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;border:1.5px solid var(--line);color:var(--ink-3)}
+.rs-done .rs-ico{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.rs-running .rs-ico{border-color:var(--accent);color:var(--accent);animation:pulse 1s ease-in-out infinite}
+.rs-needs_input .rs-ico{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.rs-failed .rs-ico{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+@keyframes pulse{50%{box-shadow:0 0 0 5px var(--accent-soft)}}
+@media (prefers-reduced-motion: reduce){.rs-running .rs-ico{animation:none}}
+.rs-title{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:600}
+.rs-sum{color:var(--ink-2);font-size:13.5px;margin:2px 0 0}
+.tools{grid-column:2;margin-top:6px}
+.tools summary{cursor:pointer;font-size:12.5px;color:var(--accent);font-weight:600}
+.tool-calls{margin:8px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.tool-calls li{font-size:12.5px;background:var(--surface-2);border-radius:5px;padding:7px 10px;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 10px}
+.tool-calls .t{font-family:var(--font-mono);font-size:12px;color:var(--accent);font-weight:500}
+.tool-calls .io{overflow-wrap:anywhere;color:var(--ink-2)}
+.tool-calls .io b{color:var(--ink);font-weight:600}
+
+/* timeline */
+.tl-bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between}
+.progress{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2)}
+.meter{width:140px;height:6px;border-radius:6px;background:var(--surface-2);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ok)}
+.tl{list-style:none;margin:0;padding:0;position:relative}
+.tl::before{content:"";position:absolute;left:96px;top:8px;bottom:8px;width:1.5px;background:var(--line)}
+.tl-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:24px;padding:8px 0}
+.tl-date{text-align:right;padding-top:15px;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink-2);line-height:1.3}
+.tl-date small{display:block;font-weight:500;color:var(--ink-3);font-size:11.5px}
+.tl-card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+.tl-card::before{content:"";position:absolute;left:-17px;top:18px;width:9px;height:9px;border-radius:50%;background:var(--surface);border:2px solid var(--ink-3)}
+.tl-item.st-accepted .tl-card::before,.tl-item.st-edited .tl-card::before{background:var(--ok);border-color:var(--ok)}
+.tl-item.st-rejected .tl-card{opacity:.6}
+.tl-item.st-rejected .tl-card::before{border-color:var(--bad)}
+.tl-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;justify-content:space-between}
+.tl-title{font-weight:700;font-size:15px}
+.tl-item.st-rejected .tl-title{text-decoration:line-through}
+.tl-desc{margin:0;color:var(--ink-2);font-size:14px;max-width:70ch}
+.cw-note{font-size:13px;background:var(--accent-soft);border-radius:5px;padding:7px 10px;color:var(--ink)}
+.cw-note b{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin-right:6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chips-label{font-size:12px;color:var(--ink-3);font-weight:600}
+.src{font-size:12.5px}
+.src summary{list-style:none;cursor:pointer;display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:4px;padding:1px 7px 1px 2px;background:var(--surface)}
+.src summary::-webkit-details-marker{display:none}
+.src summary .loc{color:var(--ink-2)}
+.src[open] summary{border-color:var(--accent)}
+.src blockquote{margin:6px 0 2px;padding:6px 10px;border-left:3px solid var(--tag);background:var(--surface-2);font-size:13px;color:var(--ink-2);max-width:60ch}
+.flags{display:flex;flex-direction:column;gap:4px}
+.flag{font-size:12.5px;color:var(--warn);display:flex;gap:6px}
+.flag::before{content:"!";font-weight:800;width:14px;text-align:center;flex:none}
+.reasons{font-size:12.5px;color:var(--ink-3)}
+.tl-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
+.tl-actions .state{font-size:12.5px;color:var(--ink-3);margin-right:auto}
+.edit-form{display:grid;gap:8px}
+.edit-form label{font-size:12.5px;font-weight:600;color:var(--ink-2);display:grid;gap:4px}
+.field{width:100%;border:1px solid var(--line);border-radius:5px;background:var(--bg);padding:7px 10px;font-size:14px}
+textarea.field{min-height:72px;resize:vertical}
+.field:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
+
+/* gaps */
+.gap-group{display:flex;flex-direction:column;gap:10px}
+.gap{display:grid;grid-template-columns:4px minmax(0,1fr);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.gap-stripe{background:var(--ink-3)}
+.gap.sev-blocking .gap-stripe{background:var(--bad)}
+.gap.sev-recommended .gap-stripe{background:var(--warn)}
+.gap.st-waiting_tenant .gap-stripe{background:var(--accent)}
+.gap.st-resolved .gap-stripe,.gap.st-dismissed .gap-stripe{background:var(--ok)}
+.gap-body{padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.gap-top{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;justify-content:space-between}
+.gap-title{font-weight:700}
+.gap p{margin:0;font-size:13.5px;color:var(--ink-2);max-width:68ch}
+.gap p b{color:var(--ink);font-weight:600}
+.gap-input{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.gap-input .field{flex:1 1 240px}
+.choices{display:flex;flex-direction:column;gap:6px}
+.choices label{display:flex;gap:8px;align-items:flex-start;font-size:14px}
+.gap.st-resolved .gap-title,.gap.st-dismissed .gap-title{color:var(--ink-2)}
+.resolved-note{font-size:13px;color:var(--ok)}
+.gap.st-waiting_tenant .resolved-note{color:var(--accent)}
+.draft{border:1px solid var(--accent);border-radius:var(--r);background:var(--accent-soft);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.draft-h{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.draft-msg{background:var(--surface);border-radius:5px;padding:10px 12px;font-size:14.5px;margin:0}
+.draft-en{font-size:13px;color:var(--ink-2);margin:0}
+.sources{list-style:none;margin:0;padding:0}
+.sources li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;padding:12px 16px;border-top:1px solid var(--line);align-items:start}
+.sources li:first-child{border-top:0}
+.sources .s-title{font-weight:600;font-size:14px}
+.sources .s-sub{font-size:12.5px;color:var(--ink-3);grid-column:1}
+
+/* form */
+.form-grid{display:flex;flex-direction:column}
+.frow{display:grid;grid-template-columns:200px minmax(0,1fr) 170px;gap:8px 16px;padding:12px 18px;border-top:1px solid var(--line);align-items:start}
+.frow:first-child{border-top:0}
+.frow .fl{font-weight:600;font-size:13.5px;padding-top:7px}
+.frow .fl small{display:block;font-weight:500;color:var(--ink-3);font-size:12px}
+.frow .fs{display:flex;flex-direction:column;gap:6px;align-items:flex-start;padding-top:5px}
+.narr{white-space:pre-wrap;font-size:14px;line-height:1.65;background:var(--surface-2);border-radius:5px;padding:12px 14px;margin:0;max-width:78ch}
+.narr-cite{font-family:var(--font-mono);font-size:11.5px;color:var(--accent)}
+
+/* package */
+.checklist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.checklist li{display:flex;gap:10px;align-items:flex-start;font-size:14px}
+.ck{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;margin-top:1px}
+.ck.yes{background:var(--ok);color:var(--surface)}
+.ck.no{background:var(--bad-soft);color:var(--bad)}
+.ck.maybe{background:var(--warn-soft);color:var(--warn)}
+.attest{display:flex;flex-direction:column;gap:10px}
+.attest label{display:flex;gap:10px;align-items:flex-start;font-size:14px;cursor:pointer}
+.attest input{margin-top:4px;accent-color:var(--accent)}
+.manifest{width:100%;border-collapse:collapse;font-size:13px}
+.manifest th{text-align:left;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:8px 12px;border-bottom:1px solid var(--line)}
+.manifest td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl-wrap{overflow-x:auto}
+.log{list-style:none;margin:0;padding:0}
+.log li{display:grid;grid-template-columns:150px 92px minmax(0,1fr);gap:4px 14px;padding:9px 16px;border-top:1px solid var(--line);font-size:13px;align-items:baseline}
+.log li:first-child{border-top:0}
+.log time{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:12.5px}
+.log .who{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.who-agent{color:var(--accent)} .who-tenant{color:var(--warn)} .who-caseworker{color:var(--ok)}
+
+/* tenant intake (phone frame) */
+.intake-wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,400px);gap:28px;align-items:start}
+.intake-side{display:flex;flex-direction:column;gap:12px}
+.phone{background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:22px 20px 26px;box-shadow:0 1px 0 var(--line),0 18px 40px -24px rgba(16,32,28,.35);display:flex;flex-direction:column;gap:16px;width:100%;max-width:400px}
+.phone-top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.phone-org{font-size:12.5px;font-weight:700;color:var(--ink-2)}
+.phone h2{margin:0;font-size:21px;line-height:1.25;text-wrap:balance}
+.phone p{margin:0;font-size:14.5px;color:var(--ink-2)}
+.phone ul{margin:0;padding-left:20px;font-size:14px;color:var(--ink-2);display:flex;flex-direction:column;gap:4px}
+.phone .req{background:var(--warn-soft);border-radius:8px;padding:10px 12px;font-size:14px}
+.phone .req b{display:block;font-size:12px;letter-spacing:.04em;color:var(--warn);margin-bottom:2px}
+.phone .up{display:flex;align-items:center;justify-content:center;gap:8px;border:1.5px dashed var(--line);border-radius:10px;padding:16px;font-weight:700;color:var(--accent);cursor:pointer;text-align:center}
+.phone .attest label{font-size:14px}
+.phone .btn.primary{justify-content:center;padding:11px;font-size:15px}
+.phone .done{background:var(--ok-soft);color:var(--ok);border-radius:8px;padding:12px;font-weight:600;font-size:14.5px}
+.lang{border:1px solid var(--line);border-radius:5px;background:var(--bg);padding:4px 8px;font-size:13px}
+
+/* developer contract */
+.contract{display:none;border:1px dashed var(--accent);border-radius:var(--r);background:var(--accent-soft)}
+body.dev .contract{display:block}
+.contract summary{cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700;color:var(--accent);display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center}
+.contract .eps{display:flex;flex-wrap:wrap;gap:6px}
+.contract code.ep{font-family:var(--font-mono);font-size:11.5px;background:var(--surface);color:var(--ink);padding:2px 6px;border-radius:3px;font-weight:500}
+.contract pre{margin:0;padding:12px 14px;max-height:360px;overflow:auto;font-family:var(--font-mono);font-size:11.5px;line-height:1.5;background:var(--surface);border-top:1px dashed var(--accent);color:var(--ink-2)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:6px;font-size:13.5px;z-index:20;max-width:calc(100% - 32px)}
+
+@media (max-width:960px){
+  .cl-head{display:none}
+  .cl-row{grid-template-columns:6px minmax(0,1fr) auto;padding-right:14px}
+  .cl-row > .cl-stage,.cl-row > .cl-open,.cl-row > .cl-lang{display:none}
+  .cl-row > .cl-dead{text-align:right}
+  .cl-reason{grid-column:2 / -1}
+  .intake-wrap{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:860px){
+  .layout{grid-template-columns:minmax(0,1fr);gap:16px;padding-block:14px 48px}
+  .rail{position:static;flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:4px;margin:0 -4px}
+  .rail-label{display:none}
+  .rail-back{align-self:center;flex:none;padding:0 8px}
+  .step-link{flex:none;min-width:150px}
+  .ev{grid-template-columns:minmax(0,1fr)}
+  .frow{grid-template-columns:minmax(0,1fr)}
+  .frow .fl{padding-top:0}
+  .intake-panel{grid-template-columns:minmax(0,1fr)}
+  .log li{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:560px){
+  .topbar{position:static}
+  .tl::before{left:7px}
+  .tl-item{grid-template-columns:minmax(0,1fr);gap:4px;padding-left:24px}
+  .tl-date{text-align:left;padding-top:0}
+  .tl-date small{display:inline;margin-left:6px}
+  .tl-card::before{left:-22px}
+  .view-head h1{font-size:22px}
+  .phone{border-radius:14px;padding:18px 16px 20px}
+}
+</style>
+
+<header class="topbar">
+  <div class="topbar-in gutter">
+    <a class="brand" href="#cases"><span class="brand-mark" aria-hidden="true">TP</span>TenantProof</a>
+    <div class="ctx" id="ctx"><strong>Loading…</strong><span></span></div>
+    <nav class="topnav" id="topnav" aria-label="App"></nav>
+    <div class="topbar-tools">
+      <span class="demo-pill" title="All names, addresses, organizations and files are invented for the demo">Synthetic demo data</span>
+      <label class="switch" for="devToggle"><input type="checkbox" id="devToggle"> Show data contract</label>
+    </div>
+  </div>
+</header>
+
+<div class="layout gutter" id="layout">
+  <nav class="rail" id="rail" aria-label="Case workflow"></nav>
+  <main id="view" aria-live="polite"></main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/* =====================================================================
+   API LAYER — the only place that knows about mock vs. real backend.
+   Backend: implement these paths with the shapes in API_CONTRACT.md (v0.2),
+   then set USE_MOCK = false. Nothing else in this file needs to change.
+   ===================================================================== */
+const USE_MOCK = true;
+const API_BASE = "http://localhost:8000/api";
+const CASE_ID = "case_demo_001";
+const INTAKE_TOKEN = "7hk2-q9dm";
+
+async function request(method, path, body) {
+  if (!USE_MOCK) {
+    const res = await fetch(API_BASE + path, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.detail || res.statusText), { status: res.status });
+    return data;
+  }
+  await new Promise(r => setTimeout(r, 110));
+  return mockRoute(method, path, body);
+}
+async function uploadFiles(path, files) {
+  if (!USE_MOCK) {
+    const fd = new FormData(); for (const f of files) fd.append("file", f);
+    const res = await fetch(API_BASE + path, { method: "POST", body: fd });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    return res.json();
+  }
+  return mockUpload(path, files);
+}
+
+const ENDPOINTS = {
+  cases: ["GET /me", "GET /cases"],
+  evidence: ["GET /cases/{id}/evidence", "POST /cases/{id}/evidence (multipart)", "POST /cases/{id}/intake-link"],
+  run: ["POST /cases/{id}/runs", "GET /cases/{id}/runs/latest", "GET /runs/{run_id}  (poll)"],
+  timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
+  gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "GET /cases/{id}/sources"],
+  form: ["GET /cases/{id}/form-draft", "PATCH /form-draft/fields/{key}"],
+  package: ["POST /cases/{id}/package", "GET /cases/{id}/activity"],
+  intake: ["GET /intake/{token}", "POST /intake/{token}/files (multipart)", "POST /intake/{token}/submit"]
+};
+
+/* =====================================================================
+   MOCK DATA — synthetic clinic, caseworker, tenants and files.
+   ===================================================================== */
+const ORG = { id: "org_demo", name: "Example Community Legal Clinic" };
+const ME = { id: "usr_sam", name: "Sam Rivera", role: "caseworker", org: ORG };
+const iso = d => d.toISOString().slice(0, 10);
+const plusDays = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return iso(d); };
+
+const SEED = {
+  case: { id: CASE_ID, dispute_type: "maintenance", title: "Bathroom ceiling leak and mould", unit: "Unit 4B, 100 Example Street, Halifax, NS", assigned_to: { id: ME.id, name: ME.name }, tenant: { name: "Jordan Lee", preferred_language: "zh" }, intake: { url: `https://tenantproof.example/i/${INTAKE_TOKEN}`, status: "files_received", sent_at: "2026-10-27T10:14:00-03:00", last_upload_at: "2026-10-28T14:07:15-03:00", tenant_attested_genuine: true, tenant_attested_at: "2026-10-28T14:07:40-03:00" }, created_at: "2026-10-27T10:12:00-03:00", synthetic: true },
+  otherCases: [
+    { id: "case_002", tenant_name: "Priya Nair", title: "No heat in the unit", unit: "Unit 12, 45 Sample Avenue, Dartmouth", dispute_type: "maintenance", stage: "hearing_scheduled", next_deadline: { date: plusDays(2), label: `Evidence due · hearing ${plusDays(7)}` }, open_blocking: 1, pending_review: 0, tenant_language: "en", updated_at: plusDays(-1) + "T16:20:00-03:00", has_demo_data: false },
+    { id: "case_003", tenant_name: "Ahmed Karimi", title: "Broken entry door lock", unit: "8 Demo Lane, Halifax", dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: "ar", updated_at: plusDays(-2) + "T11:05:00-03:00", has_demo_data: false },
+    { id: "case_004", tenant_name: "Mei Wong", title: "Cockroach infestation", unit: "Unit 3, 22 Placeholder Road, Halifax", dispute_type: "maintenance", stage: "ready_to_file", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: "zh", updated_at: plusDays(-3) + "T09:40:00-03:00", has_demo_data: false },
+    { id: "case_005", tenant_name: "Luis Romero", title: "Water heater not repaired", unit: "Unit 7, 9 Mock Street, Bedford", dispute_type: "maintenance", stage: "hearing_scheduled", next_deadline: { date: plusDays(10), label: `Evidence due · hearing ${plusDays(15)}` }, open_blocking: 0, pending_review: 2, tenant_language: "es", updated_at: plusDays(-1) + "T13:15:00-03:00", has_demo_data: false }
+  ],
+  evidence: [
+    { id: "ev_01", label: "E-01", filename: "lease_2026.pdf", kind: "lease", mime: "application/pdf", size_bytes: 248113, sha256: "f13c03b2f889231f6111f7409961cc4a34257991eb74434ba035916159795cbb", received_at: "2026-10-28T14:05:11-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "none", note: "PDF is an accepted format." }, metadata: { captured_at: null, gps_present: false, device: null, software: "Adobe Acrobat" }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_02", label: "E-02", filename: "IMG_4412.HEIC", kind: "photo", mime: "image/heic", size_bytes: 2381022, sha256: "f288e579fa1980419fdfafdfff64814b3212fb02fe5b7a35b850762f044d3636", received_at: "2026-10-28T14:05:40-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "converted", note: "HEIC isn't an accepted format. Converted to JPG." }, metadata: { captured_at: "2026-08-14T21:03:12-03:00", gps_present: true, device: "Apple iPhone 15", software: null }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_03", label: "E-03", filename: "IMG_4419.HEIC", kind: "photo", mime: "image/heic", size_bytes: 2190877, sha256: "2bd4dc5b50df7f6b4a5e3aa4810798d699846c5abc2cdd0043f274e457486b7d", received_at: "2026-10-28T14:05:41-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "converted", note: "HEIC isn't an accepted format. Converted to JPG." }, metadata: { captured_at: "2026-08-14T21:05:47-03:00", gps_present: true, device: "Apple iPhone 15", software: null }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_04", label: "E-04", filename: "messages_landlord.txt", kind: "messages", mime: "text/plain", size_bytes: 3412, sha256: "1ecaade5897724dd6bfc4389108c4ac6ce5dba70db3165a47c209f02b2ce31df", received_at: "2026-10-28T14:06:02-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "will_export_pdf", note: "Text messages must be submitted digitally or printed. Will be exported to PDF in the package." }, metadata: { captured_at: null, gps_present: false, device: null, software: null }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_05", label: "E-05", filename: "WhatsApp Image 2026-09-21.jpeg", kind: "photo", mime: "image/jpeg", size_bytes: 184309, sha256: "9739ffa9f3d70d469d60387702273b96816a4c874ae4bb29df7a63c50c8961b0", received_at: "2026-10-28T14:06:30-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "none", note: "JPEG is an accepted format." }, metadata: { captured_at: null, gps_present: false, device: null, software: null }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_06", label: "E-06", filename: "mould_closeup.jpg", kind: "photo", mime: "image/jpeg", size_bytes: 1520744, sha256: "17d957506dde906445c8e2dd76aa8bc28c15e4d3e3921258ec8c174a3e632f6c", received_at: "2026-10-28T14:06:31-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "none", note: "JPEG is an accepted format." }, metadata: { captured_at: "2026-09-28T17:40:05-03:00", gps_present: true, device: "Apple iPhone 15", software: "Adobe Lightroom Mobile" }, metadata_stripped_for_ai: true, processing: "done", error: null },
+    { id: "ev_07", label: "E-07", filename: "dehumidifier_receipt.pdf", kind: "receipt", mime: "application/pdf", size_bytes: 96220, sha256: "f3f4f88b26ecc784037d087f34b3f1937cf2af4593a9385291babffe11725e13", received_at: "2026-10-28T14:07:15-03:00", uploaded_by: "tenant", format_check: { accepted: true, action: "none", note: "PDF is an accepted format." }, metadata: { captured_at: null, gps_present: false, device: null, software: null }, metadata_stripped_for_ai: true, processing: "done", error: null }
+  ],
+  timeline: [
+    { id: "te_01", date: { value: "2026-05-01", precision: "day", basis: "document_text" }, title: "Tenancy starts", description: "The tenancy began under a written one-year lease.", actor: "other", sources: [{ evidence_id: "ev_01", locator: "page 1", excerpt: "The term of this lease begins on May 1, 2026." }], strength: "single_source", strength_reasons: ["Stated in the signed lease"], flags: [], review_status: "accepted", caseworker_note: null, reviewed_by: "Sam Rivera" },
+    { id: "te_02", date: { value: "2026-08-14", precision: "day", basis: "exif" }, title: "Leak first photographed", description: "Water was dripping from the bathroom ceiling and a stain had formed.", actor: "tenant", sources: [{ evidence_id: "ev_02", locator: "EXIF", excerpt: "Captured Aug 14, 2026, 9:03 PM" }, { evidence_id: "ev_03", locator: "EXIF", excerpt: "Captured Aug 14, 2026, 9:05 PM" }, { evidence_id: "ev_04", locator: "message 1", excerpt: "water has been dripping from the bathroom ceiling since last night" }], strength: "corroborated", strength_reasons: ["2 photos with capture time", "Aug 15 message says “since last night”"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_03", date: { value: "2026-08-15", precision: "day", basis: "message_timestamp" }, title: "Tenant reports the leak", description: "The tenant told the landlord in writing about the leak and asked for someone to inspect it.", actor: "tenant", sources: [{ evidence_id: "ev_04", locator: "message 1", excerpt: "Hi, water has been dripping from the bathroom ceiling since last night. Can someone come look at it?" }], strength: "single_source", strength_reasons: ["Message log timestamp"], flags: [], review_status: "accepted", caseworker_note: "Written notice to the landlord. Key date for how long the repair has been outstanding.", reviewed_by: "Sam Rivera" },
+    { id: "te_04", date: { value: "2026-08-16", precision: "day", basis: "message_timestamp" }, title: "Landlord promises a visit", description: "The landlord replied that someone would be sent the following week.", actor: "landlord", sources: [{ evidence_id: "ev_04", locator: "message 2", excerpt: "Thanks for letting us know. We'll send someone next week." }], strength: "single_source", strength_reasons: ["Message log timestamp"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_05", date: { value: "2026-09-02", precision: "day", basis: "message_timestamp" }, title: "Tenant follows up", description: "The tenant wrote that no one had come and the stain was getting bigger.", actor: "tenant", sources: [{ evidence_id: "ev_04", locator: "message 3", excerpt: "No one has come yet and the stain is getting bigger." }], strength: "single_source", strength_reasons: ["Message log timestamp"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_06", date: { value: "2026-09-03", precision: "day", basis: "message_timestamp" }, title: "Landlord says a contractor is booked", description: "The landlord replied that a contractor was booked and asked the tenant to be patient.", actor: "landlord", sources: [{ evidence_id: "ev_04", locator: "message 4", excerpt: "A contractor is booked. Please be patient." }], strength: "single_source", strength_reasons: ["Message log timestamp"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_07", date: { value: "2026-09", precision: "month", basis: "filename" }, title: "Mould visible on the ceiling", description: "Mould appeared on the bathroom ceiling around the exhaust fan.", actor: "other", sources: [{ evidence_id: "ev_05", locator: "filename", excerpt: "WhatsApp Image 2026-09-21.jpeg" }, { evidence_id: "ev_06", locator: "EXIF", excerpt: "Captured Sep 28, 2026, 5:40 PM" }], strength: "needs_support", strength_reasons: ["E-05 has no capture metadata", "E-06 was saved by an editing app"], flags: [{ type: "no_metadata", message: "E-05 has no capture time. The date comes from the filename." }, { type: "edited_software", message: "E-06 was saved by Adobe Lightroom Mobile." }, { type: "date_inferred", message: "Photos give two different dates (Sep 21 and Sep 28). Shown as month only." }], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_08", date: { value: "2026-09-25", precision: "day", basis: "document_text" }, title: "Tenant buys a dehumidifier", description: "The tenant bought a dehumidifier for $89.99 to limit moisture damage.", actor: "tenant", sources: [{ evidence_id: "ev_07", locator: "page 1", excerpt: "1 × Dehumidifier 30-pint … $89.99 · 2026-09-25" }], strength: "single_source", strength_reasons: ["Dated store receipt"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null },
+    { id: "te_09", date: { value: "2026-10-01", precision: "day", basis: "message_timestamp" }, title: "Tenant reports mould, no reply", description: "The tenant reported mould and asked for the repair as soon as possible. The export shows no reply from the landlord.", actor: "tenant", sources: [{ evidence_id: "ev_04", locator: "message 5", excerpt: "There is now mould on the ceiling and around the fan. Please fix this as soon as possible." }], strength: "single_source", strength_reasons: ["Message log timestamp", "No landlord message after this date in the export"], flags: [], review_status: "pending", caseworker_note: null, reviewed_by: null }
+  ],
+  gaps: [
+    { id: "gap_01", severity: "blocking", title: "Landlord's address for service", why: "The application asks for the landlord's address. The lease names the landlord but gives no mailing address.", how_to_fix: "Ask the tenant, or check rent receipts and emails from the landlord.", source_id: "src_03", input: { type: "text", field_key: "landlord_address", placeholder: "Street, city, postal code" },
+      tenant_request: { language: "zh", message: "Jordan 你好，可以把房东的邮寄地址发给我们吗？房租收据或房东发来的邮件里可能会有。", message_en: "Hi Jordan, could you send us your landlord's mailing address? You might find it on a rent receipt or an email from them." }, status: "open", resolution_note: null },
+    { id: "gap_02", severity: "blocking", title: "Confirm what the tenant is asking for", why: "The application needs the outcome the tenant wants. TenantProof doesn't choose this.", how_to_fix: "Discuss the options with the tenant and record their choice.", source_id: "src_03", input: { type: "choice", field_key: "remedy", options: ["Order the landlord to complete the repair", "Reduce rent for the affected period", "Pay back the tenant's costs (dehumidifier receipt, E-07)"] }, tenant_request: null, status: "open", resolution_note: null },
+    { id: "gap_03", severity: "recommended", title: "Original photo for E-05", why: "E-05 is a WhatsApp copy with no capture time, so it carries less weight. The officer weighs how reliable each piece of evidence is.", how_to_fix: "Ask the tenant to upload the original from their phone's camera roll.", source_id: "src_02", input: null,
+      tenant_request: { language: "zh", message: "能否上传你通过 WhatsApp 发送的那张霉菌照片的原图？请使用手机相册里的那张。", message_en: "Could you upload the original of the mould photo you sent through WhatsApp? Please use the one in your phone's photo gallery." }, status: "open", resolution_note: null },
+    { id: "gap_04", severity: "recommended", title: "Unedited version of E-06", why: "E-06 was saved by an editing app. An unedited original is easier to trust.", how_to_fix: "Ask for the original file, or record what was changed (for example, cropping only).", source_id: "src_02", input: null,
+      tenant_request: { language: "zh", message: "能否上传 mould_closeup.jpg 未经编辑的原图？或者告诉我们改动了什么（比如只是裁剪）？", message_en: "Could you upload the unedited version of mould_closeup.jpg, or tell us what was changed (for example, cropping only)?" }, status: "open", resolution_note: null },
+    { id: "gap_05", severity: "recommended", title: "A recent photo of the current condition", why: "The newest evidence is from Oct 1. A current photo shows the problem is still there.", how_to_fix: "Ask the tenant for a new photo taken with the phone's camera app.", source_id: null, input: null,
+      tenant_request: { language: "zh", message: "能否用手机相机重新拍一张浴室天花板的照片并上传？", message_en: "Could you take a new photo of the bathroom ceiling with your phone's camera app and upload it?" }, status: "open", resolution_note: null }
+  ],
+  sources: [
+    { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
+    { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "Fields this draft is built against. Verify against the official form." },
+    { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
+  ],
+  fields: [
+    { key: "tenant_name", label: "Tenant name", value: "Jordan Lee", required: true, status: "auto_filled", sources: [{ evidence_id: "ev_01", locator: "page 1", excerpt: "Tenant: Jordan Lee" }] },
+    { key: "landlord_name", label: "Landlord name", value: "Sample Property Management Ltd.", required: true, status: "auto_filled", sources: [{ evidence_id: "ev_01", locator: "page 1", excerpt: "Landlord: Sample Property Management Ltd." }] },
+    { key: "landlord_address", label: "Landlord address", value: null, required: true, status: "missing", sources: [] },
+    { key: "rental_address", label: "Rental unit address", value: "Unit 4B, 100 Example Street, Halifax, NS", required: true, status: "auto_filled", sources: [{ evidence_id: "ev_01", locator: "page 1", excerpt: "Premises: Unit 4B, 100 Example Street, Halifax" }] },
+    { key: "tenancy_start", label: "Tenancy start date", value: "2026-05-01", required: true, status: "auto_filled", sources: [{ evidence_id: "ev_01", locator: "page 1", excerpt: "The term of this lease begins on May 1, 2026." }] },
+    { key: "monthly_rent", label: "Monthly rent", value: "$1,650", required: true, status: "needs_confirmation", note: "The lease shows two amounts ($1,650 on page 2, $1,700 in the addendum). Confirm which applies.", sources: [{ evidence_id: "ev_01", locator: "page 2", excerpt: "Rent: $1,650 per month, utilities extra" }, { evidence_id: "ev_01", locator: "page 6 (addendum)", excerpt: "Rent adjusted to $1,700 effective Sept 1" }] },
+    { key: "remedy", label: "What the tenant is asking for", value: null, required: true, status: "missing", sources: [] }
+  ],
+  activity: [
+    { at: "2026-10-29T09:31:00-03:00", actor: "caseworker", actor_name: "Sam Rivera", action: "Accepted event “Tenant reports the leak” and added a note" },
+    { at: "2026-10-29T09:30:00-03:00", actor: "caseworker", actor_name: "Sam Rivera", action: "Accepted event “Tenancy starts”" },
+    { at: "2026-10-28T14:09:31-03:00", actor: "agent", actor_name: "TenantProof agent", action: "Finished run_001: 9 events, 2 required items, 4 tenant requests drafted" },
+    { at: "2026-10-28T14:07:40-03:00", actor: "tenant", actor_name: "Jordan Lee", action: "Uploaded 7 files and confirmed they are genuine (中文)" },
+    { at: "2026-10-27T10:14:00-03:00", actor: "caseworker", actor_name: "Sam Rivera", action: "Created the case and sent the intake link in 中文" }
+  ]
+};
+
+/* ---------- mock backend ---------- */
+const db = JSON.parse(JSON.stringify(SEED));
+db.runs = {}; db.intakeRequests = []; let runCounter = 0;
+const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
+
+const RUN_SCRIPT = [
+  { key: "ingest", label: "Check files", summary: "7 files accepted. 2 HEIC photos converted to JPG. Capture time found in 3 of 4 photos. GPS removed before analysis.",
+    tool_calls: [{ tool: "check_format", input: "7 files", output: "7 accepted · 2 converted · 1 to export as PDF" }, { tool: "hash_files", input: "7 files", output: "SHA-256 recorded in evidence log" }, { tool: "read_metadata", input: "4 photos", output: "3 with capture time · 1 edited (E-06) · 1 none (E-05)" }, { tool: "strip_metadata", input: "4 photos", output: "GPS and device data removed from AI copies" }] },
+  { key: "extract", label: "Extract facts", summary: "Lease parties, address, start date and rent found. 5 messages between tenant and landlord. 4 photos described.",
+    tool_calls: [{ tool: "parse_pdf", input: "E-01 lease_2026.pdf", output: "tenant, landlord, premises, term start, rent (2 values)" }, { tool: "parse_messages", input: "E-04 messages_landlord.txt", output: "5 messages · 2 senders · Aug 15 – Oct 1" }, { tool: "describe_image", input: "E-02, E-03, E-05, E-06", output: "water stain, dripping ceiling, mould near fan" }, { tool: "parse_pdf", input: "E-07 dehumidifier_receipt.pdf", output: "$89.99 · 2026-09-25" }] },
+  { key: "timeline", label: "Build timeline", summary: "9 events, each linked to its evidence. 1 corroborated, 7 single source, 1 needs support.",
+    tool_calls: [{ tool: "merge_events", input: "facts from 7 files", output: "9 events" }, { tool: "score_strength", input: "9 events", output: "rule-based: sources × metadata × date agreement" }] },
+  { key: "rules", label: "Look up official rules", summary: "2 relevant passages found. 1 source re-checked and unchanged, 3 not yet verified.",
+    tool_calls: [{ tool: "rag_search", input: "“landlord repair obligation maintenance”", output: "Residential Tenancies Act, statutory conditions" }, { tool: "rag_search", input: "“photo evidence format deadline”", output: "Evidence Policy #42" }, { tool: "verify_source_url", input: "src_02 Evidence Policy #42", output: "content unchanged since Oct 31" }, { tool: "verify_source_url", input: "src_01, src_03, src_04", output: "not checked yet" }] },
+  { key: "gaps", label: "Find missing information", summary: "2 required items (landlord address, what the tenant is asking for) and 3 suggestions. 4 requests to the tenant drafted in 中文, waiting for your approval.", final: "needs_input",
+    tool_calls: [{ tool: "check_required_fields", input: "form fields vs. extracted facts", output: "landlord_address, remedy missing" }, { tool: "check_evidence_quality", input: "9 events", output: "E-05 no metadata · E-06 edited · nothing after Oct 1" }, { tool: "draft_tenant_request", input: "4 gaps · tenant language zh", output: "4 drafts, not sent" }] },
+  { key: "draft", label: "Draft form", summary: "5 of 7 fields filled. Narrative uses only the events a caseworker accepts.",
+    tool_calls: [{ tool: "fill_fields", input: "Form J field map", output: "5 filled · 1 to confirm · 2 missing" }, { tool: "write_narrative", input: "accepted events only", output: "plain-language summary with exhibit labels" }] }
+];
+function makeRun(instant) {
+  const id = "run_" + String(++runCounter).padStart(3, "0");
+  const run = { id, case_id: CASE_ID, status: "running", started_at: new Date().toISOString(), finished_at: null, steps: RUN_SCRIPT.map(s => ({ key: s.key, label: s.label, status: "pending", summary: null, tool_calls: [] })) };
+  db.runs[id] = run;
+  if (instant) { run.steps.forEach((_, i) => completeStep(run, i)); run.status = "needs_review"; run.started_at = "2026-10-28T14:08:02-03:00"; run.finished_at = "2026-10-28T14:09:31-03:00"; return run; }
+  let i = 0;
+  const tick = () => {
+    if (i > 0) completeStep(run, i - 1);
+    if (i < run.steps.length) { run.steps[i].status = "running"; i++; setTimeout(tick, 1100); }
+    else { run.status = "needs_review"; run.finished_at = new Date().toISOString(); log("agent", `Finished ${id}: 9 events, required items rechecked`); }
+  };
+  tick(); return run;
+}
+function completeStep(run, idx) { const s = RUN_SCRIPT[idx]; Object.assign(run.steps[idx], { status: s.final || "done", summary: s.summary, tool_calls: s.tool_calls }); }
+db.latestRun = makeRun(true).id;
+
+const isOpen = g => g.status === "open" || g.status === "waiting_tenant";
+function demoSummary() {
+  const blocking = db.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
+  const pending = db.timeline.filter(e => e.review_status === "pending").length;
+  return { id: CASE_ID, tenant_name: db.case.tenant.name, title: db.case.title, unit: "Unit 4B, 100 Example Street, Halifax", dispute_type: "maintenance", stage: blocking || pending ? "needs_review" : "ready_to_file", next_deadline: null, open_blocking: blocking, pending_review: pending, tenant_language: db.case.tenant.preferred_language, updated_at: db.activity[0].at, has_demo_data: true };
+}
+function prioritize(c) {
+  const days = c.next_deadline ? Math.round((new Date(c.next_deadline.date + "T12:00:00") - new Date(plusDays(0) + "T12:00:00")) / 864e5) : null;
+  let priority = "normal", reason;
+  if (days !== null && days <= 7) { priority = "high"; reason = `Evidence due in ${days} day${days === 1 ? "" : "s"} (5 days before hearing)`; }
+  if (c.open_blocking && c.stage === "hearing_scheduled") { priority = "high"; reason = (reason ? reason + " and " : "") + `${c.open_blocking} required item open with a hearing scheduled`; }
+  if (!reason) reason = c.stage === "waiting_tenant" ? "Intake link sent. No files from the tenant yet." : days !== null ? `Evidence due in ${days} days` : c.open_blocking || c.pending_review ? `${c.pending_review} events to review · ${c.open_blocking} required items open` : "No open items";
+  return { ...c, priority, priority_reason: reason, _days: days };
+}
+function caseload() {
+  return [demoSummary(), ...db.otherCases].map(prioritize).sort((a, b) =>
+    (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1) || (a._days ?? 999) - (b._days ?? 999) || b.open_blocking - a.open_blocking || b.pending_review - a.pending_review);
+}
+function buildNarrative() {
+  const ev = db.timeline.filter(e => e.review_status === "accepted" || e.review_status === "edited");
+  const lab = id => (db.evidence.find(x => x.id === id) || {}).label || id;
+  return { text: ev.map(e => `${fmtDate(e.date, true)}: ${e.description} [${[...new Set(e.sources.map(s => lab(s.evidence_id)))].join(", ")}]`).join("\n"), event_ids: ev.map(e => e.id) };
+}
+
+function mockRoute(method, path, body) {
+  let m; const clone = x => JSON.parse(JSON.stringify(x));
+  const C = `/cases/${CASE_ID}`;
+  if (method === "GET" && path === "/me") return clone(ME);
+  if (method === "GET" && path === "/cases") return clone(caseload());
+  if (method === "GET" && path === C) return clone(db.case);
+  if (method === "POST" && path === `${C}/intake-link`) { db.case.intake.sent_at = new Date().toISOString(); log("caseworker", "Re-sent the intake link in 中文"); return clone(db.case.intake); }
+  if (method === "GET" && path === `${C}/evidence`) return clone(db.evidence);
+  if (method === "POST" && path === `${C}/runs`) { const r = makeRun(false); db.latestRun = r.id; log("caseworker", `Started ${r.id}`); return clone(r); }
+  if (method === "GET" && path === `${C}/runs/latest`) return clone(db.runs[db.latestRun]);
+  if (method === "GET" && (m = path.match(/^\/runs\/(run_\d+)$/))) return clone(db.runs[m[1]]);
+  if (method === "GET" && path === `${C}/timeline`) return clone(db.timeline);
+  if (method === "PATCH" && (m = path.match(/^\/timeline\/(te_\w+)$/))) {
+    const e = db.timeline.find(x => x.id === m[1]); Object.assign(e, body);
+    e.reviewed_by = e.review_status === "pending" ? null : ME.name;
+    db.timeline.sort((a, b) => (a.date.value || "9").localeCompare(b.date.value || "9"));
+    log("caseworker", { accepted: "Accepted", edited: "Edited", rejected: "Rejected", pending: "Reopened" }[e.review_status] + ` event “${e.title}”` + (body.caseworker_note ? " and added a note" : ""));
+    return clone(e);
+  }
+  if (method === "GET" && path === `${C}/gaps`) return clone(db.gaps);
+  if (method === "PATCH" && (m = path.match(/^\/gaps\/(gap_\w+)$/))) {
+    const g = db.gaps.find(x => x.id === m[1]);
+    g.status = body.status; g.resolution_note = body.resolution_note ?? null;
+    const f = g.input && db.fields.find(x => x.key === g.input.field_key);
+    if (f && body.status === "resolved" && body.value) Object.assign(f, { value: body.value, status: "user_entered" });
+    if (f && body.status === "open") Object.assign(f, { value: null, status: "missing" });
+    db.intakeRequests = db.intakeRequests.filter(r => r.id !== g.id || g.status === "waiting_tenant");
+    log("caseworker", `${{ resolved: "Resolved", dismissed: "Dismissed", open: "Reopened" }[g.status]} “${g.title}”`);
+    return clone(g);
+  }
+  if (method === "POST" && (m = path.match(/^\/gaps\/(gap_\w+)\/tenant-request$/))) {
+    const g = db.gaps.find(x => x.id === m[1]);
+    g.status = "waiting_tenant"; g.resolution_note = `Request sent to ${db.case.tenant.name} through the intake link`;
+    db.intakeRequests.push({ id: g.id, message: g.tenant_request.message, message_en: g.tenant_request.message_en });
+    log("caseworker", `Approved and sent a request to the tenant: “${g.title}”`);
+    return clone(g);
+  }
+  if (method === "GET" && path === `${C}/sources`) return clone(db.sources);
+  if (method === "GET" && path === `${C}/form-draft`) return clone({ form_name: "Application to Director (Form J) — draft", disclaimer: "Prepared with the tenant to help fill in the official form. It is information, not legal advice, and is not submitted anywhere.", fields: db.fields, narrative: buildNarrative() });
+  if (method === "PATCH" && (m = path.match(/^\/form-draft\/fields\/(\w+)$/))) {
+    const f = db.fields.find(x => x.key === m[1]); f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
+    const g = db.gaps.find(x => x.input && x.input.field_key === f.key);
+    if (g) { g.status = f.value ? "resolved" : "open"; g.resolution_note = f.value ? "Entered on the form draft" : null; }
+    log("caseworker", `Updated form field “${f.label}”`);
+    return clone(f);
+  }
+  if (method === "GET" && path === `${C}/activity`) return clone(db.activity);
+  if (method === "POST" && path === `${C}/package`) {
+    const open = db.gaps.filter(g => g.severity === "blocking" && isOpen(g));
+    if (open.length) throw Object.assign(new Error(`${open.length} required item(s) still open`), { status: 409 });
+    if (!db.case.intake.tenant_attested_genuine) throw Object.assign(new Error("The tenant hasn't confirmed their files are genuine"), { status: 409 });
+    const a = body.attestations || {};
+    if (!a.reviewed_fields || !a.remedy_confirmed_with_tenant || !a.explained_not_legal_advice) throw Object.assign(new Error("All caseworker confirmations are required"), { status: 400 });
+    const files = db.evidence.filter(e => e.format_check.accepted).map(e => ({ label: e.label, filename: e.format_check.action === "converted" ? e.filename.replace(/\.(heic|heif)$/i, ".jpg") : e.format_check.action === "will_export_pdf" ? e.filename.replace(/\.\w+$/, ".pdf") : e.filename, sha256: e.sha256, note: e.format_check.action === "converted" ? "Converted from HEIC" : e.format_check.action === "will_export_pdf" ? "Exported to PDF" : (e.kind === "photo" && e.metadata.software ? "Saved by editing app" : e.kind === "photo" && !e.metadata.captured_at ? "No capture metadata" : "") }));
+    files.unshift({ label: "—", filename: "application_draft.pdf", sha256: "generated at build time", note: "Form fields + narrative" }, { label: "—", filename: "evidence_manifest.pdf", sha256: "generated at build time", note: "SHA-256, receipt time and uploader of every file" });
+    log("caseworker", "Built the filing package");
+    return { built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Submit evidence at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42).", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+  }
+  if (method === "GET" && path === `/intake/${INTAKE_TOKEN}`) return clone({ org_name: ORG.name, tenant_first_name: db.case.tenant.name.split(" ")[0], unit: "Unit 4B, 100 Example Street", language: db.case.tenant.preferred_language, requests: db.intakeRequests });
+  if (method === "POST" && path === `/intake/${INTAKE_TOKEN}/submit`) {
+    if (!body.attest_genuine || !body.consent_share) throw Object.assign(new Error("Both confirmations are required"), { status: 400 });
+    const n = db.evidence.filter(e => e._pendingIntake).length;
+    db.evidence.forEach(e => { if (e._pendingIntake) { delete e._pendingIntake; e.processing = e.format_check.accepted ? "queued" : "failed"; } });
+    db.case.intake.last_upload_at = new Date().toISOString(); db.case.intake.tenant_attested_genuine = true; db.case.intake.tenant_attested_at = new Date().toISOString();
+    log("tenant", `Uploaded ${n} file${n === 1 ? "" : "s"} and confirmed they are genuine (${LANGS[body.language] || body.language})`);
+    return { ok: true };
+  }
+  throw Object.assign(new Error(`No mock for ${method} ${path}`), { status: 404 });
+}
+
+async function sha256Hex(file) {
+  try { const buf = await crypto.subtle.digest("SHA-256", await file.arrayBuffer()); return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join(""); }
+  catch { return "computed on server"; }
+}
+function formatCheck(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (["jpg", "jpeg", "png", "bmp"].includes(ext)) return { kind: "photo", fc: { accepted: true, action: "none", note: `${ext.toUpperCase()} is an accepted format.` } };
+  if (["heic", "heif"].includes(ext)) return { kind: "photo", fc: { accepted: true, action: "converted", note: "HEIC isn't an accepted format. Will convert to JPG." } };
+  if (ext === "pdf") return { kind: "other", fc: { accepted: true, action: "none", note: "PDF is an accepted format." } };
+  if (["doc", "docx", "xls", "xlsx"].includes(ext)) return { kind: "other", fc: { accepted: true, action: "none", note: "Word and Excel files are accepted." } };
+  if (["txt", "csv", "eml"].includes(ext)) return { kind: "messages", fc: { accepted: true, action: "will_export_pdf", note: "Will be exported to PDF in the package." } };
+  if (["mp4", "m4v", "wmv", "mpg", "mpeg"].includes(ext)) return { kind: "other", fc: { accepted: true, action: "none", note: "Video format accepted." } };
+  if (["zip", "rar", "7z", "arc"].includes(ext)) return { kind: "other", fc: { accepted: false, action: "rejected", note: "Compressed files aren't accepted. Upload the files inside instead." } };
+  return { kind: "other", fc: { accepted: false, action: "rejected", note: `.${ext || "?"} isn't an accepted format. Use JPG, PNG, PDF, Word, Excel or MP4.` } };
+}
+async function mockUpload(path, files) {
+  const byTenant = path.startsWith("/intake/");
+  for (const file of files) {
+    const n = db.evidence.length + 1; const { kind, fc } = formatCheck(file.name);
+    db.evidence.push({ id: "ev_" + String(n).padStart(2, "0"), label: "E-" + String(n).padStart(2, "0"), filename: file.name, kind, mime: file.type || "application/octet-stream", size_bytes: file.size, sha256: await sha256Hex(file), received_at: new Date().toISOString(), uploaded_by: byTenant ? "tenant" : "caseworker", format_check: fc, metadata: { captured_at: null, gps_present: false, device: null, software: null }, metadata_stripped_for_ai: true, processing: fc.accepted ? "queued" : "failed", error: fc.accepted ? null : fc.note, _new: true, _pendingIntake: byTenant || undefined });
+  }
+  if (!byTenant) log("caseworker", `Added ${files.length} file${files.length === 1 ? "" : "s"}`);
+  return { received: files.length };
+}
+
+/* =====================================================================
+   TENANT INTAKE STRINGS (agent-drafted requests arrive in the tenant's language)
+   ===================================================================== */
+const LANGS = { en: "English", zh: "中文", fr: "Français", es: "Español", ar: "العربية" };
+const I18N = {
+  en: { title: "Share evidence for your case", intro: "{org} is helping you with the repair problem at {unit}. Upload what you have. You don't need to organize anything.", what: "What helps", items: ["Photos of the problem. Use the originals from your camera roll, not copies from chat apps.", "Your lease", "Messages or emails with your landlord", "Receipts for costs you paid"], req: "{org} asked for", choose: "Choose files", selected: "{n} file(s) selected", privacy: "Location and device data are removed before any file is analyzed by AI. Only {org} can see your files.", attest: "These files are genuine and I haven't changed what they show.", consent: "I agree to share these files with {org} for my case.", send: "Send to {org}", sent: "Sent. {org} will contact you after reviewing your files.", lang: "Language" },
+  zh: { title: "为你的案件提交证据", intro: "{org} 正在协助处理你在 {unit} 的维修问题。把你手上的材料上传就行，不需要自己整理。", what: "有用的材料", items: ["问题的照片。请上传相册里的原图，不要用聊天软件转发的图片。", "租约", "和房东的聊天记录或邮件", "你自己垫付费用的收据"], req: "{org} 需要你补充", choose: "选择文件", selected: "已选择 {n} 个文件", privacy: "在 AI 分析之前，会先删除文件里的位置和设备信息。只有 {org} 能看到你的文件。", attest: "这些文件是真实的，我没有修改过其中的内容。", consent: "我同意把这些文件提供给 {org}，用于处理我的案件。", send: "发送给 {org}", sent: "已发送。{org} 审核文件后会联系你。", lang: "语言" },
+  fr: { title: "Partagez vos preuves pour votre dossier", intro: "{org} vous aide avec votre problème de réparation au {unit}. Téléversez ce que vous avez. Vous n'avez rien à organiser.", what: "Ce qui aide", items: ["Des photos du problème. Utilisez les originaux de votre galerie, pas des copies envoyées par messagerie.", "Votre bail", "Vos messages ou courriels avec le propriétaire", "Les reçus des dépenses que vous avez payées"], req: "{org} vous demande", choose: "Choisir des fichiers", selected: "{n} fichier(s) sélectionné(s)", privacy: "Les données de localisation et d'appareil sont retirées avant toute analyse par l'IA. Seul {org} peut voir vos fichiers.", attest: "Ces fichiers sont authentiques et je n'ai pas modifié ce qu'ils montrent.", consent: "J'accepte de partager ces fichiers avec {org} pour mon dossier.", send: "Envoyer à {org}", sent: "Envoyé. {org} vous contactera après avoir examiné vos fichiers.", lang: "Langue" },
+  es: { title: "Comparta pruebas para su caso", intro: "{org} le está ayudando con su problema de reparación en {unit}. Suba lo que tenga. No necesita organizar nada.", what: "Lo que ayuda", items: ["Fotos del problema. Use las originales de su galería, no copias de aplicaciones de chat.", "Su contrato de arrendamiento", "Mensajes o correos con su arrendador", "Recibos de gastos que usted pagó"], req: "{org} le pide", choose: "Elegir archivos", selected: "{n} archivo(s) seleccionado(s)", privacy: "Los datos de ubicación y del dispositivo se eliminan antes de que la IA analice cualquier archivo. Solo {org} puede ver sus archivos.", attest: "Estos archivos son auténticos y no he cambiado lo que muestran.", consent: "Acepto compartir estos archivos con {org} para mi caso.", send: "Enviar a {org}", sent: "Enviado. {org} se comunicará con usted después de revisar sus archivos.", lang: "Idioma" }
+};
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null,
+  attest: { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false }, pkgError: null,
+  intake: { view: null, lang: null, files: [], attest: false, consent: false, sent: false } };
+const CASE_ROUTES = ["evidence", "run", "timeline", "gaps", "form", "package"];
+const ROUTES = ["cases", "intake", ...CASE_ROUTES];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const BASIS = { exif: "from photo metadata", message_timestamp: "from message time", document_text: "from document text", filename: "from filename, inferred", user: "entered by caseworker" };
+const STAGE = { waiting_tenant: ["Waiting for tenant", "plain"], needs_review: ["Needs your review", "warn"], ready_to_file: ["Ready to file", "ok"], hearing_scheduled: ["Hearing scheduled", "info"] };
+
+function fmtDate(d, long) {
+  if (!d || !d.value || d.precision === "unknown") return "Date unknown";
+  const [y, mo, da] = d.value.split("-").map(Number);
+  if (d.precision === "month") return `${MONTHS[mo - 1]} ${y}${long ? " (month only)" : ""}`;
+  return `${MONTHS[mo - 1]} ${da}, ${y}`;
+}
+const fmtDay = v => fmtDate({ value: v, precision: "day" });
+const fmtTime = s => { if (!s) return "—"; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); };
+const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
+const evLabel = id => (S.evidence.find(e => e.id === id) || {}).label || id;
+const tpl = (s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2600); }
+const route = () => { const h = location.hash.slice(1); return ROUTES.includes(h) ? h : "cases"; };
+
+function contract(key, data) {
+  return `<details class="contract"><summary>Data contract <span class="eps">${ENDPOINTS[key].map(e => `<code class="ep">${esc(e)}</code>`).join("")}</span></summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+}
+function srcChips(sources) {
+  if (!sources.length) return `<span class="flag">No source. Not shown as fact.</span>`;
+  return sources.map(s => `<details class="src"><summary><span class="exhibit">${esc(evLabel(s.evidence_id))}</span><span class="loc">${esc(s.locator)}</span></summary>${s.excerpt ? `<blockquote>${esc(s.excerpt)}</blockquote>` : ""}</details>`).join("");
+}
+function stats() {
+  const reviewed = S.timeline.filter(e => e.review_status !== "pending").length;
+  const blocking = S.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
+  const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
+  const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
+  const fields = S.form ? S.form.fields : [];
+  return { reviewed, total: S.timeline.length, blocking, recommended, waiting, filled: fields.filter(f => f.value).length, fieldsTotal: fields.length, reqMissing: fields.filter(f => f.required && !f.value).length };
+}
+
+/* ---------- chrome ---------- */
+function renderChrome() {
+  const r = route(), inCase = CASE_ROUTES.includes(r);
+  $("#layout").classList.toggle("single", !inCase);
+  $("#topnav").innerHTML = `<a href="#cases" ${r === "cases" || inCase ? 'aria-current="page"' : ""}>Caseload</a><a href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}>Tenant view</a>`;
+  const c = S.case;
+  $("#ctx").innerHTML = inCase && c ? `<strong>${esc(c.tenant.name)} · ${esc(c.title)}</strong><span>${esc(c.unit)} · Maintenance dispute</span>`
+    : `<strong>${esc(ORG.name)}</strong><span>Signed in as ${esc(ME.name)}, caseworker</span>`;
+  if (!inCase) { $("#rail").innerHTML = ""; return; }
+  const st = stats(), run = S.run;
+  const runMeta = !run ? "Not run yet" : run.status === "running" ? "Running…" : run.status === "needs_review" ? "Needs your input" : run.status === "failed" ? "Failed" : "Done";
+  const items = [
+    { id: "evidence", name: "Evidence", meta: `${S.evidence.length} files · from tenant`, done: S.evidence.length > 0 },
+    { id: "run", name: "Agent run", meta: runMeta, done: run && run.status === "done", attn: run && run.status === "needs_review" },
+    { id: "timeline", name: "Review timeline", meta: `${st.reviewed} of ${st.total} reviewed`, done: st.total && st.reviewed === st.total, attn: st.reviewed < st.total },
+    { id: "gaps", name: "Missing info", meta: st.blocking ? `${st.blocking} required open` : st.waiting ? `${st.waiting} waiting for tenant` : `${st.recommended} suggestions`, done: !st.blocking, attn: st.blocking > 0 },
+    { id: "form", name: "Form draft", meta: `${st.filled} of ${st.fieldsTotal} fields`, done: st.fieldsTotal && !st.reqMissing, attn: st.reqMissing > 0 },
+    { id: "package", name: "Package", meta: S.pkg ? "Built" : "Not built", done: !!S.pkg }
+  ];
+  $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("");
+}
+
+/* ---------- caseload ---------- */
+function viewCases() {
+  const cs = S.cases;
+  const review = cs.filter(c => c.stage === "needs_review").length;
+  const week = cs.filter(c => c._days !== null && c._days !== undefined && c._days <= 7).length;
+  const rows = cs.map(c => {
+    const [stLabel, stCls] = STAGE[c.stage];
+    const dl = c.next_deadline ? `<span class="${c._days <= 7 ? "soon" : ""}">${esc(fmtDay(c.next_deadline.date))}</span><small>${esc(c.next_deadline.label.replace(/hearing (\d{4}-\d\d-\d\d)/, (_, d) => "hearing " + fmtDay(d)))}</small>` : `<span class="muted">No hearing yet</span>`;
+    const open = [c.open_blocking ? `<span style="color:var(--bad)">${c.open_blocking} required open</span>` : "", c.pending_review ? `<span>${c.pending_review} events to review</span>` : ""].filter(Boolean).join("") || `<span class="muted">—</span>`;
+    return `<button class="cl-row p-${c.priority}" data-action="open-case" data-id="${c.id}" type="button">
+      <span class="cl-stripe"></span>
+      <span class="cl-who"><strong>${esc(c.tenant_name)}</strong><span>${esc(c.title)} · ${esc(c.unit)}</span></span>
+      <span class="cl-stage"><span class="pill ${stCls}">${stLabel}</span></span>
+      <span class="cl-dead">${dl}</span>
+      <span class="cl-open">${open}</span>
+      <span class="cl-lang muted">${esc(LANGS[c.tenant_language] || c.tenant_language)}</span>
+      <span class="cl-reason">${c.priority === "high" ? "High priority: " : ""}${esc(c.priority_reason)}</span>
+    </button>`;
+  }).join("");
+  return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases. The order follows fixed rules (evidence deadlines first, then required items), so you can always see why a case is on top.</p></div><button class="btn" data-action="new-case">New case</button></div>
+    <div class="summary-row"><span><b>${cs.length}</b>open cases</span><span><b>${review}</b>need your review</span><span><b>${week}</b>evidence deadline in 7 days</span></div>
+    <div class="panel cl" role="list"><div class="cl-head"><span></span><span>Tenant · issue</span><span>Stage</span><span>Next deadline</span><span>Open items</span><span>Language</span></div>${rows}</div>
+    <div class="note"><span class="note-ico">i</span><span>Full demo data is loaded for <b>Jordan Lee</b>. The other cases show what a caseload looks like.</span></div>
+    ${contract("cases", { me: S.me, cases: S.cases.map(({ _days, ...c }) => c) })}`;
+}
+
+/* ---------- case views ---------- */
+function viewEvidence() {
+  const ik = S.case.intake;
+  const rows = S.evidence.map(e => {
+    const fc = e.format_check, md = e.metadata;
+    const fcPill = !fc.accepted ? `<span class="pill bad">Rejected</span>` : fc.action === "converted" ? `<span class="pill info">Converted to JPG</span>` : fc.action === "will_export_pdf" ? `<span class="pill info">Export to PDF</span>` : `<span class="pill ok">Format OK</span>`;
+    const proc = e.processing === "done" ? "" : e.processing === "failed" ? `<span class="pill bad">Not processed</span>` : `<span class="pill">New · run analysis to include</span>`;
+    const mdRows = e.kind === "photo"
+      ? `<dt>Captured</dt><dd>${md.captured_at ? fmtTime(md.captured_at) : e._new ? "Read on server" : '<span style="color:var(--warn)">No capture time</span>'}</dd><dt>Device</dt><dd>${esc(md.device || "—")}</dd><dt>Edited with</dt><dd>${md.software ? `<span style="color:var(--warn)">${esc(md.software)}</span>` : "—"}</dd><dt>GPS</dt><dd>${md.gps_present ? "Present · removed before AI" : "—"}</dd>`
+      : `<dt>Type</dt><dd>${esc(e.kind)}</dd><dt>Size</dt><dd>${fmtSize(e.size_bytes)}</dd>`;
+    return `<div class="ev${e._new ? " is-new" : ""}">
+      <div class="ev-name"><div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received ${fmtTime(e.received_at)} (server time)</span>
+        <span class="hash mono" title="${esc(e.sha256)}">SHA-256 ${esc(e.sha256.slice(0, 12))}…<button class="copy" type="button" data-action="copy" data-text="${esc(e.sha256)}">Copy</button></span></div>
+      <dl class="kv">${mdRows}</dl>
+      <div class="ev-checks">${fcPill}${proc}<span style="color:var(--ink-3)">${esc(fc.note)}</span></div></div>`;
+  }).join("");
+  return `<div class="view-head"><div><h1>Evidence</h1><p>Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model.</p></div></div>
+    <div class="panel panel-pad intake-panel">
+      <div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(LANGS[S.case.tenant.preferred_language])}</span>
+        <span class="muted">Sent ${fmtTime(ik.sent_at)} · last upload ${fmtTime(ik.last_upload_at)} · ${ik.tenant_attested_genuine ? `<span style="color:var(--ok)">tenant confirmed files are genuine</span>` : "not confirmed yet"}</span>
+        <span class="linkbox"><code>${esc(ik.url)}</code><button class="copy" type="button" data-action="copy" data-text="${esc(ik.url)}">Copy link</button></span></div>
+      <div class="btn-row"><a class="btn" href="#intake">Open tenant view</a><button class="btn" type="button" data-action="resend">Re-send link</button></div>
+    </div>
+    <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple><div><strong>Add files yourself</strong><p>For files the tenant brought to the clinic. JPG, PNG, HEIC, PDF, Word, Excel, TXT or MP4.</p></div><span class="btn primary">Choose files</span></label>
+    <div class="panel ev-list">${rows}</div>
+    ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
+}
+
+function viewRun() {
+  const run = S.run;
+  if (!run) return `<div class="view-head"><div><h1>Agent run</h1><p>No analysis yet.</p></div><button class="btn primary" data-action="run">Run analysis</button></div>`;
+  const ico = { pending: "", running: "…", done: "✓", needs_input: "!", failed: "×" };
+  const pill = { pending: `<span class="pill">Waiting</span>`, running: `<span class="pill info">Running</span>`, done: `<span class="pill ok">Done</span>`, needs_input: `<span class="pill warn">Needs your input</span>`, failed: `<span class="pill bad">Failed</span>` };
+  const runPill = run.status === "running" ? `<span class="pill info">Running</span>` : run.status === "needs_review" ? `<span class="pill warn">Waiting for you</span>` : run.status === "failed" ? `<span class="pill bad">Failed</span>` : `<span class="pill ok">Complete</span>`;
+  const steps = run.steps.map((s, i) => `<li class="run-step rs-${s.status}"><span class="rs-ico">${ico[s.status] || i + 1}</span>
+      <div><div class="rs-title">${i + 1}. ${esc(s.label)} ${pill[s.status]}</div>${s.summary ? `<p class="rs-sum">${esc(s.summary)}</p>` : ""}</div>
+      ${s.tool_calls.length ? `<details class="tools"${s.status === "needs_input" ? " open" : ""}><summary>${s.tool_calls.length} tool calls</summary><ul class="tool-calls">${s.tool_calls.map(t => `<li><span class="t">${esc(t.tool)}</span><span class="io"><b>${esc(t.input)}</b> → ${esc(t.output)}</span></li>`).join("")}</ul></details>` : ""}</li>`).join("");
+  const waiting = run.status === "needs_review" ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
+  return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div>
+    <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span></div></div>
+    ${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
+}
+
+function viewTimeline() {
+  const st = stats(), pct = st.total ? Math.round(st.reviewed / st.total * 100) : 0;
+  const strengthPill = { corroborated: `<span class="pill ok">Corroborated</span>`, single_source: `<span class="pill plain">Single source</span>`, needs_support: `<span class="pill warn">Needs support</span>` };
+  const actor = { tenant: "Tenant", landlord: "Landlord", other: "" };
+  const items = S.timeline.map(e => {
+    const editing = S.editing === e.id;
+    const stateTxt = { pending: "Not reviewed", accepted: `Accepted by ${e.reviewed_by}`, edited: `Edited by ${e.reviewed_by}`, rejected: "Rejected. Left out of the form." }[e.review_status];
+    const body = editing ? `<form class="edit-form" data-action="save-edit" data-id="${e.id}">
+        <label>Title<input class="field" id="ed-title-${e.id}" name="title" value="${esc(e.title)}"></label>
+        <label>What happened (goes into the form)<textarea class="field" id="ed-desc-${e.id}" name="description">${esc(e.description)}</textarea></label>
+        <label>Date<input class="field" id="ed-date-${e.id}" type="date" name="date" value="${e.date.precision === "day" ? esc(e.date.value) : ""}"></label>
+        <label>Caseworker note (internal, never shown to the tenant or put in the form)<textarea class="field" id="ed-note-${e.id}" name="caseworker_note">${esc(e.caseworker_note || "")}</textarea></label>
+        <div class="btn-row"><button class="btn primary small" type="submit">Save</button><button class="btn small" type="button" data-action="cancel-edit">Cancel</button></div></form>`
+      : `<p class="tl-desc">${esc(e.description)}</p>${e.caseworker_note ? `<div class="cw-note"><b>Note</b>${esc(e.caseworker_note)}</div>` : ""}`;
+    const actions = e.review_status === "pending"
+      ? `<button class="btn small ok" data-action="review" data-id="${e.id}" data-status="accepted">Accept</button><button class="btn small" data-action="edit" data-id="${e.id}">Edit or add note</button><button class="btn small bad" data-action="review" data-id="${e.id}" data-status="rejected">Reject</button>`
+      : `<button class="btn small" data-action="review" data-id="${e.id}" data-status="pending">Undo</button>${e.review_status !== "rejected" ? `<button class="btn small" data-action="edit" data-id="${e.id}">Edit or add note</button>` : ""}`;
+    return `<li class="tl-item st-${e.review_status}"><div class="tl-date">${esc(fmtDate(e.date))}<small>${esc(BASIS[e.date.basis] || "")}</small></div>
+      <div class="tl-card"><div class="tl-top"><span class="tl-title">${esc(e.title)}</span><span class="chips">${actor[e.actor] ? `<span class="pill plain">${actor[e.actor]}</span>` : ""}${strengthPill[e.strength]}</span></div>
+        ${body}<div class="chips"><span class="chips-label">Based on</span>${srcChips(e.sources)}</div>
+        ${e.flags.length ? `<div class="flags">${e.flags.map(f => `<span class="flag">${esc(f.message)}</span>`).join("")}</div>` : `<div class="reasons">${esc(e.strength_reasons.join(" · "))}</div>`}
+        ${editing ? "" : `<div class="tl-actions"><span class="state">${esc(stateTxt)}</span>${actions}</div>`}</div></li>`;
+  }).join("");
+  return `<div class="view-head"><div><h1>Review timeline</h1><p>The agent built this from the tenant's files. Check each event and add your professional notes. Only events you accept or edit go into the form draft.</p></div></div>
+    <div class="tl-bar"><div class="progress"><span class="meter"><i style="width:${pct}%"></i></span>${st.reviewed} of ${st.total} reviewed</div>
+      <div class="btn-row"><button class="btn small" data-action="accept-all">Accept all corroborated and single-source</button></div></div>
+    <div class="note"><span class="note-ico">i</span><span><b>Strength is rule-based, not an AI guess.</b> Corroborated means two or more independent files agree. Needs support means the files are weak or disagree.</span></div>
+    <ol class="tl">${items}</ol>${contract("timeline", S.timeline)}`;
+}
+
+function viewGaps() {
+  const src = id => S.sources.find(s => s.id === id);
+  const gapCard = g => {
+    const s = src(g.source_id), open = g.status === "open";
+    let input = "";
+    if (open && g.input && g.input.type === "text") input = `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="${esc(g.input.placeholder)}" required><button class="btn primary small" type="submit">Save</button></form>`;
+    if (open && g.input && g.input.type === "choice") input = `<form data-action="resolve-choice" data-id="${g.id}" style="display:grid;gap:10px"><span class="muted">Record the tenant's choice:</span><div class="choices">${g.input.options.map((o, i) => `<label><input type="checkbox" id="gap-${g.id}-${i}" name="opt" value="${esc(o)}">${esc(o)}</label>`).join("")}</div><div class="btn-row"><button class="btn primary small" type="submit">Save tenant's choice</button></div></form>`;
+    const draft = open && g.tenant_request && S.drafting === g.id ? `<div class="draft"><span class="draft-h">Draft to ${esc(S.case.tenant.name)} · ${esc(LANGS[g.tenant_request.language])} · written by the agent</span>
+        <p class="draft-msg" lang="${esc(g.tenant_request.language)}">${esc(g.tenant_request.message)}</p><p class="draft-en"><b>English:</b> ${esc(g.tenant_request.message_en)}</p>
+        <div class="btn-row"><button class="btn primary small" data-action="send-request" data-id="${g.id}">Approve and send through intake link</button><button class="btn small" data-action="cancel-draft">Cancel</button></div></div>` : "";
+    const status = g.status === "resolved" ? `<span class="pill ok">Resolved</span>` : g.status === "dismissed" ? `<span class="pill plain">Dismissed</span>` : g.status === "waiting_tenant" ? `<span class="pill info">Waiting for tenant</span>` : g.severity === "blocking" ? `<span class="pill bad">Required</span>` : `<span class="pill warn">Suggested</span>`;
+    const acts = [];
+    if (open && g.tenant_request && S.drafting !== g.id) acts.push(`<button class="btn small" data-action="draft" data-id="${g.id}">Ask tenant</button>`);
+    if (open && g.severity === "recommended") acts.push(`<button class="btn small ok" data-action="gap" data-id="${g.id}" data-status="resolved">Mark done</button><button class="btn small" data-action="gap" data-id="${g.id}" data-status="dismissed">Dismiss</button>`);
+    if (g.status === "waiting_tenant" && g.severity === "recommended") acts.push(`<button class="btn small ok" data-action="gap" data-id="${g.id}" data-status="resolved">Tenant replied · mark done</button>`);
+    if (!open) acts.push(`<button class="btn small" data-action="gap" data-id="${g.id}" data-status="open">Reopen</button>`);
+    return `<div class="gap sev-${g.severity} st-${g.status}"><span class="gap-stripe"></span><div class="gap-body">
+      <div class="gap-top"><span class="gap-title">${esc(g.title)}</span>${status}</div>
+      ${open ? `<p>${esc(g.why)}</p><p><b>How to fix:</b> ${esc(g.how_to_fix)}</p>` : g.resolution_note ? `<span class="resolved-note">${esc(g.resolution_note)}</span>` : ""}
+      ${s && open ? `<p style="font-size:12.5px;color:var(--ink-3)">Source: ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</p>` : ""}
+      ${g.status === "waiting_tenant" && g.input && g.input.type === "text" ? `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="Enter the tenant's answer" required><button class="btn primary small" type="submit">Save answer</button></form>` : ""}
+      ${input}${draft}${acts.length ? `<div class="btn-row">${acts.join("")}</div>` : ""}</div></div>`;
+  };
+  const vs = { unchanged: `<span class="pill ok">Checked · unchanged</span>`, changed: `<span class="pill warn">Changed since saved</span>`, unreachable: `<span class="pill bad">Link unreachable</span>`, unverified: `<span class="pill plain">Not verified yet</span>` };
+  return `<div class="view-head"><div><h1>Missing info</h1><p>Required items block the package. For anything only the tenant knows, the agent drafts a message in the tenant's language. You approve it before it's sent.</p></div></div>
+    <section class="gap-group"><h2 class="section-h">Required</h2>${S.gaps.filter(g => g.severity === "blocking").map(gapCard).join("")}</section>
+    <section class="gap-group"><h2 class="section-h">Suggestions to strengthen evidence</h2>${S.gaps.filter(g => g.severity === "recommended").map(gapCard).join("")}</section>
+    <section class="gap-group"><h2 class="section-h">Official sources the agent used</h2>
+      <ul class="panel sources">${S.sources.map(s => `<li><span class="s-title">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</span>${vs[s.verify_status]}<span class="s-sub">${esc(s.used_for)}${s.last_verified_at ? ` · last checked ${fmtTime(s.last_verified_at)}` : ""}</span></li>`).join("")}</ul>
+      <div class="note"><span class="note-ico">i</span><span>Before using a source, the agent re-opens its official link to check whether the text changed. If the link fails, it falls back to the saved copy and says so.</span></div></section>
+    ${contract("gaps", { gaps: S.gaps, sources: S.sources })}`;
+}
+
+function viewForm() {
+  const f = S.form;
+  const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
+  const rows = f.fields.map(x => `<div class="frow"><div class="fl">${esc(x.label)}${x.required ? "<small>Required</small>" : ""}</div>
+      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="field" data-key="${x.key}" value="${esc(x.value || "")}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
+        ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
+      <div class="fs">${stPill[x.status]}</div></div>`).join("");
+  const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
+  const left = S.timeline.filter(e => e.review_status === "pending").length;
+  return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
+    <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
+    <div class="panel form-grid">${rows}</div>
+    <h2 class="section-h">Details of the problem</h2>
+    <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
+      <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} events still need review</a> and are left out.` : "All events reviewed."}</span></div>
+    ${contract("form", f)}`;
+}
+
+function viewPackage() {
+  const st = stats(), ik = S.case.intake;
+  const ready = !st.blocking && !st.reqMissing && ik.tenant_attested_genuine;
+  const allAttest = Object.values(S.attest).every(Boolean);
+  const ck = (ok, warn) => `<span class="ck ${ok ? "yes" : warn ? "maybe" : "no"}">${ok ? "✓" : warn ? "!" : "×"}</span>`;
+  const whoCls = { agent: "who-agent", tenant: "who-tenant", caseworker: "who-caseworker" };
+  const manifest = S.pkg ? `<h2 class="section-h">Package contents</h2>
+    <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${esc(r.filename)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="note"><span class="note-ico">i</span><span>Prepared by ${esc(S.pkg.prepared_by)} · ${fmtTime(S.pkg.built_at)}. In the real app this downloads as one PDF package plus the original files.</span></div>
+    <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
+  return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div></div>
+    <div class="panel panel-pad"><ul class="checklist">
+      <li>${ck(!st.blocking)}<span>Required missing info: ${st.blocking ? `<a href="#gaps">${st.blocking} still open${st.waiting ? `, ${st.waiting} waiting for tenant` : ""}</a>` : "all resolved"}</span></li>
+      <li>${ck(!st.reqMissing)}<span>Required form fields: ${st.reqMissing ? `<a href="#form">${st.reqMissing} empty</a>` : "all filled"}</span></li>
+      <li>${ck(ik.tenant_attested_genuine)}<span>Tenant confirmed the files are genuine${ik.tenant_attested_at ? ` (${fmtTime(ik.tenant_attested_at)}, intake link)` : ""}</span></li>
+      <li>${ck(st.reviewed === st.total, true)}<span>Timeline review: ${st.reviewed} of ${st.total}. ${st.reviewed < st.total ? "Unreviewed events are left out of the form." : ""}</span></li>
+      <li>${ck(!st.recommended, true)}<span>Suggestions: ${st.recommended ? `${st.recommended} open (optional)` : "none open"}</span></li></ul></div>
+    <form class="panel panel-pad attest" data-action="attest">
+      <label><input type="checkbox" id="at-reviewed" name="reviewed_fields" ${S.attest.reviewed_fields ? "checked" : ""}>I reviewed every field and the summary.</label>
+      <label><input type="checkbox" id="at-remedy" name="remedy_confirmed_with_tenant" ${S.attest.remedy_confirmed_with_tenant ? "checked" : ""}>The tenant confirmed what they are asking for.</label>
+      <label><input type="checkbox" id="at-legal" name="explained_not_legal_advice" ${S.attest.explained_not_legal_advice ? "checked" : ""}>I told the tenant this package is prepared information, not a decision about their case.</label></form>
+    ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
+    <div class="btn-row"><button class="btn primary" data-action="build" ${ready && allAttest ? "" : "disabled"}>Build package</button>${!ready ? `<span class="muted">Resolve the required items first.</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : ""}</div>
+    ${manifest}
+    <h2 class="section-h">Audit log</h2>
+    <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(a.action)}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
+    ${contract("package", { request: { attestations: S.attest }, response: S.pkg, activity: S.activity })}`;
+}
+
+/* ---------- tenant intake ---------- */
+function viewIntake() {
+  const v = S.intake.view; if (!v) return "<p>Loading…</p>";
+  const lang = S.intake.lang || v.language, t = I18N[lang] || I18N.en, vars = { org: v.org_name, unit: v.unit };
+  const reqs = v.requests.map(r => `<div class="req"><b>${esc(tpl(t.req, vars))}</b>${esc(lang === "zh" ? r.message : r.message_en)}</div>`).join("");
+  const body = S.intake.sent ? `<div class="done">${esc(tpl(t.sent, vars))}</div>` : `
+      <p>${esc(tpl(t.intro, vars))}</p>${reqs}
+      <div><strong style="font-size:14.5px">${esc(t.what)}</strong><ul>${t.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></div>
+      <label class="up" for="intakeFiles"><input class="file-in" type="file" id="intakeFiles" multiple>${S.intake.files.length ? esc(tpl(t.selected, { n: S.intake.files.length })) : esc(t.choose)}</label>
+      <p style="font-size:13px">${esc(tpl(t.privacy, vars))}</p>
+      <form class="attest" data-action="intake-attest">
+        <label><input type="checkbox" id="in-attest" name="attest" ${S.intake.attest ? "checked" : ""}>${esc(t.attest)}</label>
+        <label><input type="checkbox" id="in-consent" name="consent" ${S.intake.consent ? "checked" : ""}>${esc(tpl(t.consent, vars))}</label></form>
+      <button class="btn primary" data-action="intake-send" ${S.intake.files.length && S.intake.attest && S.intake.consent ? "" : "disabled"}>${esc(tpl(t.send, vars))}</button>`;
+  return `<div class="view-head"><div><h1>Tenant view</h1><p>What ${esc(v.tenant_first_name)} sees after opening the intake link on a phone. No account needed. It opens in the tenant's preferred language, and the tenant never sees the caseworker workspace.</p></div></div>
+    <div class="intake-wrap">
+      <div class="intake-side">
+        <div class="note"><span class="note-ico">i</span><span>Requests you approve on <a href="#gaps">Missing info</a> appear here in the tenant's language. Files sent here show up in the case as <b>Uploaded by tenant</b>.</span></div>
+        <div class="note"><span class="note-ico">i</span><span>The four languages in this prototype are examples. Agent-drafted requests are written in the tenant's language by the model; fixed page text should be checked by a native speaker.</span></div>
+        ${S.intake.sent ? `<div class="btn-row"><a class="btn" href="#evidence">See the files in the case</a><button class="btn" data-action="intake-reset">Reset tenant view</button></div>` : ""}
+      </div>
+      <div class="phone" lang="${esc(lang)}">
+        <div class="phone-top"><span class="phone-org">${esc(v.org_name)}</span><label class="muted" for="intakeLang">${esc(t.lang)} <select class="lang" id="intakeLang">${Object.keys(I18N).map(k => `<option value="${k}" ${k === lang ? "selected" : ""}>${LANGS[k]}</option>`).join("")}</select></label></div>
+        <h2>${esc(t.title)}</h2>${body}
+      </div>
+    </div>
+    ${contract("intake", v)}`;
+}
+
+const VIEWS = { cases: viewCases, intake: viewIntake, evidence: viewEvidence, run: viewRun, timeline: viewTimeline, gaps: viewGaps, form: viewForm, package: viewPackage };
+function render() {
+  renderChrome();
+  const r = route();
+  $("#view").innerHTML = (r === "cases" ? S.cases.length : r === "intake" ? S.intake.view : S.form) ? VIEWS[r]() : `<p>Loading…</p>`;
+  if (r === "evidence") wireDrop();
+}
+
+/* ---------- data loading ---------- */
+const C = `/cases/${CASE_ID}`;
+const LOADERS = {
+  me: () => request("GET", "/me").then(d => S.me = d),
+  cases: () => request("GET", "/cases").then(d => S.cases = prioritizeClient(d)),
+  case: () => request("GET", C).then(d => S.case = d),
+  evidence: () => request("GET", `${C}/evidence`).then(d => S.evidence = d),
+  run: () => request("GET", `${C}/runs/latest`).then(d => S.run = d).catch(() => S.run = null),
+  timeline: () => request("GET", `${C}/timeline`).then(d => S.timeline = d),
+  gaps: () => request("GET", `${C}/gaps`).then(d => S.gaps = d),
+  sources: () => request("GET", `${C}/sources`).then(d => S.sources = d),
+  form: () => request("GET", `${C}/form-draft`).then(d => S.form = d),
+  activity: () => request("GET", `${C}/activity`).then(d => S.activity = d),
+  intake: () => request("GET", `/intake/${INTAKE_TOKEN}`).then(d => S.intake.view = d)
+};
+function prioritizeClient(list) { return list.map(c => ({ ...c, _days: c.next_deadline ? Math.round((new Date(c.next_deadline.date + "T12:00:00") - new Date(plusDays(0) + "T12:00:00")) / 864e5) : null })); }
+async function refresh(parts) {
+  const keys = parts ? [...new Set([...parts, "activity", "cases"])] : Object.keys(LOADERS);
+  try { await Promise.all(keys.map(k => LOADERS[k]())); } catch (err) { toast(err.message); }
+  render();
+}
+
+let poller = null;
+function pollRun() {
+  clearInterval(poller);
+  poller = setInterval(async () => {
+    S.run = await request("GET", `/runs/${S.run.id}`);
+    if (S.run.status !== "running") { clearInterval(poller); toast("Analysis finished. Required items need your input."); await refresh(["timeline", "gaps", "form", "evidence"]); return; }
+    if (route() === "run") $("#view").innerHTML = viewRun();
+    renderChrome();
+  }, 700);
+}
+
+/* ---------- events ---------- */
+document.addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-action]");
+  if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
+  const a = b.dataset.action, id = b.dataset.id;
+  if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { toast(b.dataset.text); } }
+  if (a === "open-case") { if (id === CASE_ID) location.hash = "timeline"; else toast("Full demo data is only loaded for Jordan Lee's case."); }
+  if (a === "new-case") toast("Creating cases isn't part of this prototype yet.");
+  if (a === "resend") { await request("POST", `${C}/intake-link`); toast("Intake link re-sent"); await refresh(["case"]); }
+  if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
+  if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
+  if (a === "edit") { S.editing = id; render(); const el = document.getElementById("ed-desc-" + id); el && el.focus(); }
+  if (a === "cancel-edit") { S.editing = null; render(); }
+  if (a === "accept-all") {
+    for (const e of S.timeline.filter(e => e.review_status === "pending" && e.strength !== "needs_support")) await request("PATCH", `/timeline/${e.id}`, { review_status: "accepted" });
+    toast("Accepted. Events that need support were left for you."); await refresh(["timeline", "form"]);
+  }
+  if (a === "draft") { S.drafting = id; render(); }
+  if (a === "cancel-draft") { S.drafting = null; render(); }
+  if (a === "send-request") { await request("POST", `/gaps/${id}/tenant-request`); S.drafting = null; toast("Sent to the tenant's intake page"); await refresh(["gaps", "intake"]); }
+  if (a === "gap") { const st = b.dataset.status; await request("PATCH", `/gaps/${id}`, { status: st, resolution_note: st === "resolved" ? "Marked done" : st === "dismissed" ? "Dismissed by caseworker" : null }); await refresh(["gaps", "form", "intake"]); }
+  if (a === "build") {
+    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; toast("Package built"); }
+    catch (err) { S.pkgError = err.status === 409 ? `Can't build yet: ${err.message}.` : err.message; }
+    await refresh([]);
+  }
+  if (a === "intake-send") {
+    try {
+      await uploadFiles(`/intake/${INTAKE_TOKEN}/files`, S.intake.files);
+      await request("POST", `/intake/${INTAKE_TOKEN}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language });
+      S.intake.sent = true; await refresh(["evidence", "case"]);
+    } catch (err) { toast(err.message); }
+  }
+  if (a === "intake-reset") { S.intake = { ...S.intake, files: [], attest: false, consent: false, sent: false }; render(); }
+});
+document.addEventListener("submit", async ev => {
+  const f = ev.target; if (!f.dataset.action) return; ev.preventDefault();
+  const id = f.dataset.id, a = f.dataset.action;
+  if (a === "save-edit") {
+    const fd = new FormData(f), date = fd.get("date"), ex = S.timeline.find(e => e.id === id);
+    await request("PATCH", `/timeline/${id}`, { review_status: "edited", title: fd.get("title"), description: fd.get("description"), caseworker_note: fd.get("caseworker_note").trim() || null, date: date ? { value: date, precision: "day", basis: "user" } : ex.date });
+    S.editing = null; toast("Saved"); await refresh(["timeline", "form"]);
+  }
+  if (a === "resolve-text") { const v = new FormData(f).get("value").trim(); if (!v) return; await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v, resolution_note: `Saved: ${v}` }); toast("Saved to the form draft"); await refresh(["gaps", "form", "intake"]); }
+  if (a === "resolve-choice") { const v = new FormData(f).getAll("opt"); if (!v.length) { toast("Pick at least one option"); return; } await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v.join("; "), resolution_note: `Tenant's choice: ${v.join("; ")}` }); toast("Saved to the form draft"); await refresh(["gaps", "form"]); }
+});
+document.addEventListener("change", async ev => {
+  const t = ev.target;
+  if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
+  if (t.dataset.action === "field") { await request("PATCH", `/form-draft/fields/${t.dataset.key}`, { value: t.value.trim() }); await refresh(["form", "gaps"]); }
+  if (t.closest("form[data-action=attest]")) { S.attest[t.name] = t.checked; S.pkgError = null; render(); }
+  if (t.closest("form[data-action=intake-attest]")) { S.intake[t.name] = t.checked; render(); }
+  if (t.id === "intakeLang") { S.intake.lang = t.value; render(); }
+  if (t.id === "intakeFiles" && t.files.length) { S.intake.files = [...t.files]; render(); }
+  if (t.id === "fileIn" && t.files.length) handleFiles(t.files);
+});
+async function handleFiles(files) {
+  try { await uploadFiles(`${C}/evidence`, [...files]); } catch (err) { toast(err.message); }
+  toast(`${files.length} file(s) added. Run the analysis again to include them.`);
+  await refresh(["evidence"]);
+}
+function wireDrop() {
+  const d = $("#drop"); if (!d) return;
+  d.addEventListener("dragover", e => { e.preventDefault(); d.classList.add("over"); });
+  d.addEventListener("dragleave", () => d.classList.remove("over"));
+  d.addEventListener("drop", e => { e.preventDefault(); d.classList.remove("over"); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
+}
+window.addEventListener("hashchange", () => { S.editing = null; S.drafting = null; render(); window.scrollTo({ top: 0 }); });
+
+try { if (localStorage.getItem("tp-dev") === "1") { $("#devToggle").checked = true; document.body.classList.add("dev"); } } catch {}
+refresh();
+</script>
+
+</body></html>

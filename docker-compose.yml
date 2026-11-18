@@ -1,0 +1,82 @@
+# A `worker` service (arq) is added in M3 with the agent.
+# The API's settings, shared with the one-shot `migrate` service below.
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://tenantproof:tenantproof@postgres:5432/tenantproof
+  REDIS_URL: redis://redis:6379/0
+  PUBLIC_BASE_URL: http://localhost:8000
+  # Plain http on localhost: browsers drop Secure cookies there. Keep true everywhere else.
+  COOKIE_SECURE: "false"
+  # Runs without an API key by default: `fixture` replays recorded model replies (none are
+  # recorded yet, so a run ends failed, but nothing errors at start-up). For a real run:
+  #   LLM_MODE=live ANTHROPIC_API_KEY=... make up
+  LLM_MODE: ${LLM_MODE:-fixture}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  LLM_MODEL: ${LLM_MODEL:-}
+  ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+  RUN_BUDGET_S: ${RUN_BUDGET_S:-180}  # #49: seconds one analysis run may take
+  # OCR of photos and scanned PDF pages, on this server (#61): on by default, and the most one
+  # upload request spends on it.
+  OCR_ENABLED: ${OCR_ENABLED:-true}
+  OCR_REQUEST_SECONDS: ${OCR_REQUEST_SECONDS:-40}
+  SEED_PASSWORD: ${SEED_PASSWORD:-tenantproof-demo}
+  STORAGE_DIR: /data/storage
+  # #58: the proxies whose X-Forwarded-For is believed. Through a published port the API sees
+  # nginx as the compose network's gateway, never 127.0.0.1: list that gateway or its subnet,
+  # or use * when only nginx can reach this port (see docs/DEPLOY.md).
+  FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: tenantproof
+      POSTGRES_USER: tenantproof
+      POSTGRES_PASSWORD: tenantproof
+    # Host port is configurable: 5432 is often taken by a local Postgres.
+    ports: ["${POSTGRES_HOST_PORT:-5433}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenantproof -d tenantproof"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Database schema, then the demo seed, once per `docker compose up`, before any API
+  # container starts (from YCL0609's m2-deploy branch). Both steps are idempotent. With the
+  # steps in the API's own command, `--scale api=2` ran Alembic twice at the same moment.
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment: *app-env
+    command: >
+      sh -c "uv run --no-dev alembic upgrade head &&
+             uv run --no-dev python -m app.seed"
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment: *app-env
+    volumes: [blobs:/data]
+    command: uv run --no-dev uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  pgdata:
+  blobs:

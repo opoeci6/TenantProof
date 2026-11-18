@@ -1,0 +1,829 @@
+{
+  "SEED": {
+    "case": {
+      "id": "case_demo_001",
+      "dispute_type": "maintenance",
+      "title": "Bathroom ceiling leak and mould",
+      "unit": "Unit 4B, 100 Example Street, Halifax, NS",
+      "assigned_to": {
+        "id": "usr_sam",
+        "name": "Sam Rivera"
+      },
+      "tenant": {
+        "name": "Jordan Lee",
+        "preferred_language": "zh"
+      },
+      "intake": {
+        "url": "https://tenantproof.example/i/7hk2-q9dm",
+        "status": "files_received",
+        "sent_at": "2026-10-27T10:14:00-03:00",
+        "last_upload_at": "2026-10-28T14:07:15-03:00",
+        "tenant_attested_genuine": true,
+        "tenant_attested_at": "2026-10-28T14:07:40-03:00"
+      },
+      "created_at": "2026-10-27T10:12:00-03:00",
+      "synthetic": true
+    },
+    "liveCase": {
+      "id": "case_live_001",
+      "synthetic": true,
+      "_note": "Synthetic case for the live demo run: no evidence, no timeline, no runs. The tenant uploads the files in demo/ through its own intake link.",
+      "dispute_type": "maintenance",
+      "title": "Water leak and mould on bathroom wall",
+      "unit": "Unit 9, 77 Fictional Lane, Halifax, NS",
+      "tenant": {
+        "name": "Mei Chen",
+        "preferred_language": "zh"
+      },
+      "stage": "waiting_tenant",
+      "intake": {
+        "status": "sent",
+        "sent_at": "2026-11-15T09:00:00-04:00",
+        "last_upload_at": null,
+        "tenant_attested_genuine": false,
+        "tenant_attested_at": null
+      },
+      "created_at": "2026-11-15T09:00:00-04:00"
+    },
+    "otherCases": [
+      {
+        "id": "case_002",
+        "tenant_name": "Priya Nair",
+        "title": "No heat in the unit",
+        "unit": "Unit 12, 45 Sample Avenue, Dartmouth",
+        "dispute_type": "maintenance",
+        "stage": "hearing_scheduled",
+        "next_deadline": {
+          "date": "2026-11-08",
+          "label": "Must be received by · hearing 2026-11-13"
+        },
+        "open_blocking": 1,
+        "pending_review": 0,
+        "tenant_language": "en",
+        "updated_at": "2026-11-05T16:20:00-03:00",
+        "has_demo_data": false,
+        "synthetic_placeholder_rows": true
+      },
+      {
+        "id": "case_003",
+        "tenant_name": "Ahmed Karimi",
+        "title": "Broken entry door lock",
+        "unit": "8 Demo Lane, Halifax",
+        "dispute_type": "maintenance",
+        "stage": "waiting_tenant",
+        "next_deadline": null,
+        "open_blocking": 0,
+        "pending_review": 0,
+        "tenant_language": "ar",
+        "updated_at": "2026-11-04T11:05:00-03:00",
+        "has_demo_data": false,
+        "synthetic_placeholder_rows": true
+      },
+      {
+        "id": "case_004",
+        "tenant_name": "Mei Wong",
+        "title": "Cockroach infestation",
+        "unit": "Unit 3, 22 Placeholder Road, Halifax",
+        "dispute_type": "maintenance",
+        "stage": "ready_to_file",
+        "next_deadline": null,
+        "open_blocking": 0,
+        "pending_review": 0,
+        "tenant_language": "zh",
+        "updated_at": "2026-11-03T09:40:00-03:00",
+        "has_demo_data": false,
+        "synthetic_placeholder_rows": true
+      },
+      {
+        "id": "case_005",
+        "tenant_name": "Luis Romero",
+        "title": "Water heater not repaired",
+        "unit": "Unit 7, 9 Mock Street, Bedford",
+        "dispute_type": "maintenance",
+        "stage": "hearing_scheduled",
+        "next_deadline": {
+          "date": "2026-11-16",
+          "label": "Must be received by · hearing 2026-11-21"
+        },
+        "open_blocking": 0,
+        "pending_review": 2,
+        "tenant_language": "es",
+        "updated_at": "2026-11-05T13:15:00-03:00",
+        "has_demo_data": false,
+        "synthetic_placeholder_rows": true
+      }
+    ],
+    "evidence": [
+      {
+        "id": "ev_01",
+        "label": "E-01",
+        "filename": "lease_2026.pdf",
+        "kind": "lease",
+        "mime": "application/pdf",
+        "size_bytes": 248113,
+        "sha256": "f13c03b2f889231f6111f7409961cc4a34257991eb74434ba035916159795cbb",
+        "received_at": "2026-10-28T14:05:11-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "none",
+          "note": "PDF is an accepted format."
+        },
+        "metadata": {
+          "captured_at": null,
+          "gps_present": false,
+          "device": null,
+          "software": "Adobe Acrobat"
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_02",
+        "label": "E-02",
+        "filename": "IMG_4412.HEIC",
+        "kind": "photo",
+        "mime": "image/heic",
+        "size_bytes": 2381022,
+        "sha256": "f288e579fa1980419fdfafdfff64814b3212fb02fe5b7a35b850762f044d3636",
+        "received_at": "2026-10-28T14:05:40-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "converted",
+          "note": "HEIC isn't an accepted format. Converted to JPG."
+        },
+        "metadata": {
+          "captured_at": "2026-08-14T21:03:12-03:00",
+          "gps_present": true,
+          "device": "Apple iPhone 15",
+          "software": null
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_03",
+        "label": "E-03",
+        "filename": "IMG_4419.HEIC",
+        "kind": "photo",
+        "mime": "image/heic",
+        "size_bytes": 2190877,
+        "sha256": "2bd4dc5b50df7f6b4a5e3aa4810798d699846c5abc2cdd0043f274e457486b7d",
+        "received_at": "2026-10-28T14:05:41-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "converted",
+          "note": "HEIC isn't an accepted format. Converted to JPG."
+        },
+        "metadata": {
+          "captured_at": "2026-08-14T21:05:47-03:00",
+          "gps_present": true,
+          "device": "Apple iPhone 15",
+          "software": null
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_04",
+        "label": "E-04",
+        "filename": "messages_landlord.txt",
+        "kind": "messages",
+        "mime": "text/plain",
+        "size_bytes": 3412,
+        "sha256": "1ecaade5897724dd6bfc4389108c4ac6ce5dba70db3165a47c209f02b2ce31df",
+        "received_at": "2026-10-28T14:06:02-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "will_export_pdf",
+          "note": "Text messages must be submitted digitally or printed. Will be exported to PDF in the package."
+        },
+        "metadata": {
+          "captured_at": null,
+          "gps_present": false,
+          "device": null,
+          "software": null
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_05",
+        "label": "E-05",
+        "filename": "WhatsApp Image 2026-09-21.jpeg",
+        "kind": "photo",
+        "mime": "image/jpeg",
+        "size_bytes": 184309,
+        "sha256": "9739ffa9f3d70d469d60387702273b96816a4c874ae4bb29df7a63c50c8961b0",
+        "received_at": "2026-10-28T14:06:30-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "none",
+          "note": "JPEG is an accepted format."
+        },
+        "metadata": {
+          "captured_at": null,
+          "gps_present": false,
+          "device": null,
+          "software": null
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_06",
+        "label": "E-06",
+        "filename": "mould_closeup.jpg",
+        "kind": "photo",
+        "mime": "image/jpeg",
+        "size_bytes": 1520744,
+        "sha256": "17d957506dde906445c8e2dd76aa8bc28c15e4d3e3921258ec8c174a3e632f6c",
+        "received_at": "2026-10-28T14:06:31-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "none",
+          "note": "JPEG is an accepted format."
+        },
+        "metadata": {
+          "captured_at": "2026-09-28T17:40:05-03:00",
+          "gps_present": true,
+          "device": "Apple iPhone 15",
+          "software": "Adobe Lightroom Mobile"
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      },
+      {
+        "id": "ev_07",
+        "label": "E-07",
+        "filename": "dehumidifier_receipt.pdf",
+        "kind": "receipt",
+        "mime": "application/pdf",
+        "size_bytes": 96220,
+        "sha256": "f3f4f88b26ecc784037d087f34b3f1937cf2af4593a9385291babffe11725e13",
+        "received_at": "2026-10-28T14:07:15-03:00",
+        "uploaded_by": "tenant",
+        "format_check": {
+          "accepted": true,
+          "action": "none",
+          "note": "PDF is an accepted format."
+        },
+        "metadata": {
+          "captured_at": null,
+          "gps_present": false,
+          "device": null,
+          "software": null
+        },
+        "metadata_stripped_for_ai": true,
+        "processing": "done",
+        "error": null
+      }
+    ],
+    "timeline": [
+      {
+        "id": "te_01",
+        "date": {
+          "value": "2026-05-01",
+          "precision": "day",
+          "basis": "document_text"
+        },
+        "title": "Tenancy starts",
+        "description": "The tenancy began under a written one-year lease.",
+        "actor": "other",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 1",
+            "excerpt": "The term of this lease begins on May 1, 2026."
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Stated in the signed lease"
+        ],
+        "flags": [],
+        "review_status": "accepted",
+        "caseworker_note": null,
+        "reviewed_by": "Sam Rivera"
+      },
+      {
+        "id": "te_02",
+        "date": {
+          "value": "2026-08-14",
+          "precision": "day",
+          "basis": "exif"
+        },
+        "title": "Leak first photographed",
+        "description": "Water was dripping from the bathroom ceiling and a stain had formed.",
+        "actor": "tenant",
+        "sources": [
+          {
+            "evidence_id": "ev_02",
+            "locator": "EXIF",
+            "excerpt": "Captured Aug 14, 2026, 9:03 PM"
+          },
+          {
+            "evidence_id": "ev_03",
+            "locator": "EXIF",
+            "excerpt": "Captured Aug 14, 2026, 9:05 PM"
+          },
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 1",
+            "excerpt": "water has been dripping from the bathroom ceiling since last night"
+          }
+        ],
+        "strength": "corroborated",
+        "strength_reasons": [
+          "2 photos with capture time",
+          "Aug 15 message says “since last night”"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_03",
+        "date": {
+          "value": "2026-08-15",
+          "precision": "day",
+          "basis": "message_timestamp"
+        },
+        "title": "Tenant reports the leak",
+        "description": "The tenant told the landlord in writing about the leak and asked for someone to inspect it.",
+        "actor": "tenant",
+        "sources": [
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 1",
+            "excerpt": "Hi, water has been dripping from the bathroom ceiling since last night. Can someone come look at it?"
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Message log timestamp"
+        ],
+        "flags": [],
+        "review_status": "accepted",
+        "caseworker_note": "Written notice to the landlord. Key date for how long the repair has been outstanding.",
+        "reviewed_by": "Sam Rivera"
+      },
+      {
+        "id": "te_04",
+        "date": {
+          "value": "2026-08-16",
+          "precision": "day",
+          "basis": "message_timestamp"
+        },
+        "title": "Landlord promises a visit",
+        "description": "The landlord replied that someone would be sent the following week.",
+        "actor": "landlord",
+        "sources": [
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 2",
+            "excerpt": "Thanks for letting us know. We'll send someone next week."
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Message log timestamp"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_05",
+        "date": {
+          "value": "2026-09-02",
+          "precision": "day",
+          "basis": "message_timestamp"
+        },
+        "title": "Tenant follows up",
+        "description": "The tenant wrote that no one had come and the stain was getting bigger.",
+        "actor": "tenant",
+        "sources": [
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 3",
+            "excerpt": "No one has come yet and the stain is getting bigger."
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Message log timestamp"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_06",
+        "date": {
+          "value": "2026-09-03",
+          "precision": "day",
+          "basis": "message_timestamp"
+        },
+        "title": "Landlord says a contractor is booked",
+        "description": "The landlord replied that a contractor was booked and asked the tenant to be patient.",
+        "actor": "landlord",
+        "sources": [
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 4",
+            "excerpt": "A contractor is booked. Please be patient."
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Message log timestamp"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_07",
+        "date": {
+          "value": "2026-09",
+          "precision": "month",
+          "basis": "filename"
+        },
+        "title": "Mould visible on the ceiling",
+        "description": "Mould appeared on the bathroom ceiling around the exhaust fan.",
+        "actor": "other",
+        "sources": [
+          {
+            "evidence_id": "ev_05",
+            "locator": "filename",
+            "excerpt": "WhatsApp Image 2026-09-21.jpeg"
+          },
+          {
+            "evidence_id": "ev_06",
+            "locator": "EXIF",
+            "excerpt": "Captured Sep 28, 2026, 5:40 PM"
+          }
+        ],
+        "strength": "needs_support",
+        "strength_reasons": [
+          "E-05 has no capture metadata",
+          "E-06 was saved by an editing app"
+        ],
+        "flags": [
+          {
+            "type": "no_metadata",
+            "message": "E-05 has no capture time. The date comes from the filename."
+          },
+          {
+            "type": "edited_software",
+            "message": "E-06 was saved by Adobe Lightroom Mobile."
+          },
+          {
+            "type": "date_inferred",
+            "message": "Photos give two different dates (Sep 21 and Sep 28). Shown as month only."
+          }
+        ],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_08",
+        "date": {
+          "value": "2026-09-25",
+          "precision": "day",
+          "basis": "document_text"
+        },
+        "title": "Tenant buys a dehumidifier",
+        "description": "The tenant bought a dehumidifier for $89.99 to limit moisture damage.",
+        "actor": "tenant",
+        "sources": [
+          {
+            "evidence_id": "ev_07",
+            "locator": "page 1",
+            "excerpt": "1 × Dehumidifier 30-pint … $89.99 · 2026-09-25"
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Dated store receipt"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      },
+      {
+        "id": "te_09",
+        "date": {
+          "value": "2026-10-01",
+          "precision": "day",
+          "basis": "message_timestamp"
+        },
+        "title": "Tenant reports mould, no reply",
+        "description": "The tenant reported mould and asked for the repair as soon as possible. The export shows no reply from the landlord.",
+        "actor": "tenant",
+        "sources": [
+          {
+            "evidence_id": "ev_04",
+            "locator": "message 5",
+            "excerpt": "There is now mould on the ceiling and around the fan. Please fix this as soon as possible."
+          }
+        ],
+        "strength": "single_source",
+        "strength_reasons": [
+          "Message log timestamp",
+          "No landlord message after this date in the export"
+        ],
+        "flags": [],
+        "review_status": "pending",
+        "caseworker_note": null,
+        "reviewed_by": null
+      }
+    ],
+    "gaps": [
+      {
+        "id": "gap_01",
+        "severity": "blocking",
+        "title": "Landlord's address for service",
+        "why": "The application asks for the landlord's address. The lease names the landlord but gives no mailing address.",
+        "how_to_fix": "Ask the tenant, or check rent receipts and emails from the landlord.",
+        "source_id": "src_03",
+        "input": {
+          "type": "text",
+          "field_key": "landlord_address",
+          "placeholder": "Street, city, postal code"
+        },
+        "tenant_request": {
+          "language": "zh",
+          "message": "Jordan 你好，可以把房东的邮寄地址发给我们吗？房租收据或房东发来的邮件里可能会有。",
+          "message_en": "Hi Jordan, could you send us your landlord's mailing address? You might find it on a rent receipt or an email from them."
+        },
+        "status": "open",
+        "resolution_note": null
+      },
+      {
+        "id": "gap_02",
+        "severity": "blocking",
+        "title": "Confirm what the tenant is asking for",
+        "why": "The application needs the outcome the tenant wants. TenantProof doesn't choose this.",
+        "how_to_fix": "Discuss the options with the tenant and record their choice.",
+        "source_id": "src_03",
+        "input": {
+          "type": "choice",
+          "field_key": "remedy",
+          "options": [
+            "Order the landlord to complete the repair",
+            "Reduce rent for the affected period",
+            "Pay back the tenant's costs (dehumidifier receipt, E-07)"
+          ]
+        },
+        "tenant_request": null,
+        "status": "open",
+        "resolution_note": null
+      },
+      {
+        "id": "gap_03",
+        "severity": "recommended",
+        "title": "Original photo for E-05",
+        "why": "E-05 is a WhatsApp copy with no capture time, so it carries less weight. The officer weighs how reliable each piece of evidence is.",
+        "how_to_fix": "Ask the tenant to upload the original from their phone's camera roll.",
+        "source_id": "src_02",
+        "input": null,
+        "tenant_request": {
+          "language": "zh",
+          "message": "能否上传你通过 WhatsApp 发送的那张霉菌照片的原图？请使用手机相册里的那张。",
+          "message_en": "Could you upload the original of the mould photo you sent through WhatsApp? Please use the one in your phone's photo gallery."
+        },
+        "status": "open",
+        "resolution_note": null
+      },
+      {
+        "id": "gap_04",
+        "severity": "recommended",
+        "title": "Unedited version of E-06",
+        "why": "E-06 was saved by an editing app. An unedited original is easier to trust.",
+        "how_to_fix": "Ask for the original file, or record what was changed (for example, cropping only).",
+        "source_id": "src_02",
+        "input": null,
+        "tenant_request": {
+          "language": "zh",
+          "message": "能否上传 mould_closeup.jpg 未经编辑的原图？或者告诉我们改动了什么（比如只是裁剪）？",
+          "message_en": "Could you upload the unedited version of mould_closeup.jpg, or tell us what was changed (for example, cropping only)?"
+        },
+        "status": "open",
+        "resolution_note": null
+      },
+      {
+        "id": "gap_05",
+        "severity": "recommended",
+        "title": "A recent photo of the current condition",
+        "why": "The newest evidence is from Oct 1. A current photo shows the problem is still there.",
+        "how_to_fix": "Ask the tenant for a new photo taken with the phone's camera app.",
+        "source_id": null,
+        "input": null,
+        "tenant_request": {
+          "language": "zh",
+          "message": "能否用手机相机重新拍一张浴室天花板的照片并上传？",
+          "message_en": "Could you take a new photo of the bathroom ceiling with your phone's camera app and upload it?"
+        },
+        "status": "open",
+        "resolution_note": null
+      }
+    ],
+    "sources": [
+      {
+        "id": "src_01",
+        "title": "Residential Tenancies Act (Nova Scotia), statutory conditions",
+        "kind": "statute",
+        "url": "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf",
+        "last_verified_at": null,
+        "verify_status": "unverified",
+        "used_for": "Landlord's duty to keep the premises in good repair. Exact section still to be verified."
+      },
+      {
+        "id": "src_02",
+        "title": "Residential Tenancies Program, Evidence Policy #42",
+        "kind": "policy",
+        "url": "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf",
+        "last_verified_at": null,
+        "verify_status": "unverified",
+        "used_for": "Accepted file formats, how evidence is weighed, 5-day submission deadline."
+      },
+      {
+        "id": "src_03",
+        "title": "Application to Director (Form J)",
+        "kind": "form",
+        "url": null,
+        "last_verified_at": null,
+        "verify_status": "unverified",
+        "used_for": "The partial draft is based on this form (seven tenant-applicant fields). The caseworker completes the rest."
+      },
+      {
+        "id": "src_04",
+        "title": "Hearings Procedures and Conduct, Policy #28",
+        "kind": "policy",
+        "url": "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf",
+        "last_verified_at": null,
+        "verify_status": "unverified",
+        "used_for": "What happens at the hearing."
+      }
+    ],
+    "fields": [
+      {
+        "key": "tenant_name",
+        "label": "Tenant name",
+        "value": "Jordan Lee",
+        "required": true,
+        "status": "auto_filled",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 1",
+            "excerpt": "Tenant: Jordan Lee"
+          }
+        ]
+      },
+      {
+        "key": "landlord_name",
+        "label": "Landlord name",
+        "value": "Sample Property Management Ltd.",
+        "required": true,
+        "status": "auto_filled",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 1",
+            "excerpt": "Landlord: Sample Property Management Ltd."
+          }
+        ]
+      },
+      {
+        "key": "landlord_address",
+        "label": "Landlord address",
+        "value": null,
+        "required": true,
+        "status": "missing",
+        "sources": []
+      },
+      {
+        "key": "rental_address",
+        "label": "Rental unit address",
+        "value": "Unit 4B, 100 Example Street, Halifax, NS",
+        "required": true,
+        "status": "auto_filled",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 1",
+            "excerpt": "Premises: Unit 4B, 100 Example Street, Halifax"
+          }
+        ]
+      },
+      {
+        "key": "tenancy_start",
+        "label": "Tenancy start date",
+        "value": "2026-05-01",
+        "required": true,
+        "status": "auto_filled",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 1",
+            "excerpt": "The term of this lease begins on May 1, 2026."
+          }
+        ]
+      },
+      {
+        "key": "monthly_rent",
+        "label": "Monthly rent",
+        "value": "$1,650",
+        "required": true,
+        "status": "needs_confirmation",
+        "note": "The lease shows two amounts ($1,650 on page 2, $1,700 in the addendum). Confirm which applies.",
+        "sources": [
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 2",
+            "excerpt": "Rent: $1,650 per month, utilities extra"
+          },
+          {
+            "evidence_id": "ev_01",
+            "locator": "page 6 (addendum)",
+            "excerpt": "Rent adjusted to $1,700 effective Sept 1"
+          }
+        ]
+      },
+      {
+        "key": "remedy",
+        "label": "What the tenant is asking for",
+        "value": null,
+        "required": true,
+        "status": "missing",
+        "sources": []
+      }
+    ],
+    "activity": [
+      {
+        "at": "2026-10-29T09:31:00-03:00",
+        "actor": "caseworker",
+        "actor_name": "Sam Rivera",
+        "action": "Accepted event “Tenant reports the leak” and added a note"
+      },
+      {
+        "at": "2026-10-29T09:30:00-03:00",
+        "actor": "caseworker",
+        "actor_name": "Sam Rivera",
+        "action": "Accepted event “Tenancy starts”"
+      },
+      {
+        "at": "2026-10-28T14:09:31-03:00",
+        "actor": "agent",
+        "actor_name": "TenantProof agent",
+        "action": "Finished run_001: 9 events, 2 required items, 4 tenant requests drafted"
+      },
+      {
+        "at": "2026-10-28T14:07:40-03:00",
+        "actor": "tenant",
+        "actor_name": "Jordan Lee",
+        "action": "Uploaded 7 files and confirmed they are genuine (中文)"
+      },
+      {
+        "at": "2026-10-27T10:14:00-03:00",
+        "actor": "caseworker",
+        "actor_name": "Sam Rivera",
+        "action": "Created the case and sent the intake link in Chinese (中文)"
+      }
+    ]
+  },
+  "ORG": {
+    "id": "org_demo",
+    "name": "Example Community Legal Clinic"
+  },
+  "ME": {
+    "id": "usr_sam",
+    "name": "Sam Rivera",
+    "role": "caseworker",
+    "org": {
+      "id": "org_demo",
+      "name": "Example Community Legal Clinic"
+    }
+  },
+  "dumped_on": "2026-11-06"
+}

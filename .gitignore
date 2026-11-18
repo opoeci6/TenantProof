@@ -218,3 +218,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- TenantProof ---
+.DS_Store
+.venv/
+node_modules/
+*.pyc
+backend/storage/
+.playwright-mcp/
+.env.*
+!.env.example
+!backend/.env.example
+.claude/settings.local.json
+.claude/*.local.*
+.claude/worktrees/
+playwright-report/
+test-results/
+data/
+tenantproof-*.zip
+.tools/
+backend/data/
+
+# Demo photo (stock image, kept out of the repo for licensing reasons; see demo/README.md)
+demo/local/

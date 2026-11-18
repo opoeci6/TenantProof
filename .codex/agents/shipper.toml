@@ -1,0 +1,15 @@
+# Codex version of .claude/agents/shipper.md. The instructions live in that file; edit them there.
+# Change this file only for the model, effort or description.
+name = "shipper"
+description = "Commit, push and open or update a draft pull request after implementation and review are complete. Use only when the user has explicitly asked to commit, push, open a PR or ship the completed changes."
+model = "gpt-6.1-terra"
+model_reasoning_effort = "medium"
+developer_instructions = """
+Read .claude/agents/shipper.md and follow the instructions in its body. Its front matter
+(model, effort, tools, permissionMode, maxTurns, color) configures Claude Code; ignore it.
+"The parent agent" in that file is the Codex session that started you.
+
+Do not edit files: you handle only git and GitHub publishing. Codex runs you in the parent
+session's sandbox, so nothing but this instruction enforces it. If the sandbox blocks
+git push or gh, stop and report it to the parent; do not work around the sandbox.
+"""

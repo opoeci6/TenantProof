@@ -1,0 +1,48 @@
+{
+  "description": "The model cites a quote that is not on the evidence page, alone and next to a real one. The verifier must reject both and nothing unverified is saved.",
+  "fabricated": "The landlord admitted the roof leak was ignored for two months.",
+  "evidence": {
+    "ev_04": [
+      {"locator": "message 1", "text": "[2026-08-15 09:12] Jordan: Hi, there is water leaking from the bathroom ceiling."},
+      {"locator": "message 2", "text": "[2026-08-16 18:30] Landlord: I will send someone to look at it this week."}
+    ]
+  },
+  "turns": {
+    "timeline-turn1": [
+      {"type": "tool_use", "id": "u1", "name": "list_evidence", "input": {}}
+    ],
+    "timeline-turn2": [
+      {"type": "tool_use", "id": "u2", "name": "read_evidence", "input": {"evidence_id": "ev_04", "page": 2}}
+    ],
+    "timeline-turn3": [
+      {"type": "tool_use", "id": "u3", "name": "propose_event", "input": {
+        "title": "Landlord admits the leak was ignored", "description": "The landlord admits ignoring the leak.",
+        "actor": "landlord",
+        "date_candidates": [{"value": "2026-08-16", "precision": "day", "basis": "message_timestamp"}],
+        "sources": [{"evidence_id": "ev_04", "locator": "message 2", "excerpt": "The landlord admitted the roof leak was ignored for two months."}]
+      }}
+    ],
+    "timeline-turn4": [
+      {"type": "tool_use", "id": "u4", "name": "propose_event", "input": {
+        "title": "Landlord admits the leak was ignored", "description": "The landlord admits ignoring the leak.",
+        "actor": "landlord",
+        "date_candidates": [{"value": "2026-08-16", "precision": "day", "basis": "message_timestamp"}],
+        "sources": [
+          {"evidence_id": "ev_04", "locator": "message 2", "excerpt": "I will send someone to look at it this week."},
+          {"evidence_id": "ev_04", "locator": "message 2", "excerpt": "The landlord admitted the roof leak was ignored for two months."}
+        ]
+      }}
+    ],
+    "timeline-turn5": [
+      {"type": "tool_use", "id": "u5", "name": "propose_event", "input": {
+        "title": "Landlord promises a visit", "description": "The landlord says someone will come this week.",
+        "actor": "landlord",
+        "date_candidates": [{"value": "2026-08-16", "precision": "day", "basis": "message_timestamp"}],
+        "sources": [{"evidence_id": "ev_04", "locator": "message 2", "excerpt": "I will send someone to look at it this week."}]
+      }}
+    ],
+    "timeline-turn6": [
+      {"type": "tool_use", "id": "u6", "name": "finish", "input": {"summary": "One event proposed."}}
+    ]
+  }
+}

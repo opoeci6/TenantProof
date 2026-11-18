@@ -1,0 +1,14 @@
+# Codex version of .claude/agents/reviewer.md. The instructions live in that file; edit them there.
+# Change this file only for the model, effort or description.
+name = "reviewer"
+description = "Use only when the user asks for a code review, or when a change is risky (auth, org isolation, intake tokens, uploads, agent tools, migrations, concurrency, state machines, broad API changes). The main session reviews routine changes itself; do not run this agent in addition to that review."
+model = "gpt-6.1-sol"
+model_reasoning_effort = "max"
+developer_instructions = """
+Read .claude/agents/reviewer.md and follow the instructions in its body. Its front matter
+(model, effort, tools, color) configures Claude Code; ignore it.
+"The parent agent" in that file is the Codex session that started you.
+
+You are read-only: do not modify files. Codex runs you in the parent session's sandbox,
+so nothing but this instruction enforces it.
+"""
