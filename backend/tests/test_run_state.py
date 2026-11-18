@@ -1,4 +1,4 @@
-"""What the run page's rail and pill say (`runState` in web/index.html, a pure function).
+"""What the run page's rail and pill say (`runState` in web/index.js, a pure function).
 "Needs your input" and "Waiting for you" are only for a run paused on a question the runner can
 resume; a finished run that still has events to review says "Needs review". The function runs
 under node."""
@@ -12,7 +12,7 @@ import pytest
 
 from tests.node_support import node_json
 
-INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+INDEX = Path(__file__).resolve().parents[2] / "web" / "index.js"
 BLOCK = re.compile(r"/\* runState:start.*?\*/(.*?)/\* runState:end \*/", re.S)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
@@ -36,7 +36,7 @@ def run(status: str, *steps: dict) -> dict:
 
 def states(runs: list[dict | None]) -> list[dict]:
     match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
-    assert match, "runState block not found in web/index.html"
+    assert match, "runState block not found in web/index.js"
     script = (
         'const RESUMABLE = ["extract", "timeline", "gaps"];\n'
         + match.group(1)
@@ -98,7 +98,7 @@ def test_only_a_run_that_needs_review_asks_for_attention() -> None:
 
 
 def test_the_page_knows_which_steps_the_runner_builds_and_can_resume() -> None:
-    """`BUILT` and `RESUMABLE` in web/index.html follow runner.IMPLEMENTED_STEPS. A step that can
+    """`BUILT` and `RESUMABLE` in web/index.js follow runner.IMPLEMENTED_STEPS. A step that can
     pause on a question (the gaps agent can call ask_caseworker) must have an answer control; the
     deterministic `rules` step cannot pause, so it is built but not resumable."""
     from app.services.agent import prompts, runner

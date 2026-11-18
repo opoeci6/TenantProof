@@ -1,4 +1,4 @@
-"""Which intake link the caseworker pages show (`sessionLink` in web/index.html, a pure function
+"""Which intake link the caseworker pages show (`sessionLink` in web/index.js, a pure function
 run under node). The raw link is returned only once, by `POST /cases/{id}/intake-link`, so the page
 keeps it in memory with the case it was made for. Issue #38: the Tenant view shows it right after
 "Send intake link", for that case only; another case, or a page with no link sent, shows none."""
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+INDEX = Path(__file__).resolve().parents[2] / "web" / "index.js"
 BLOCK = re.compile(r"/\* Fix #38: intakeLink:start.*?\*/(.*?)/\* intakeLink:end \*/", re.S)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
@@ -22,7 +22,7 @@ LINK = "https://tenantproof.example/i/not-a-real-token"
 
 def shown(*calls: tuple[object, object], fn: str = "sessionLink") -> list[object]:
     match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
-    assert match, "intakeLink block not found in web/index.html"
+    assert match, "intakeLink block not found in web/index.js"
     args = ", ".join(f"[{json.dumps(last)}, {json.dumps(case_id)}]" for last, case_id in calls)
     call = f"[{args}].map(a => {fn}(...a))"
     script = match.group(1) + f"\nconsole.log(JSON.stringify({call}));"

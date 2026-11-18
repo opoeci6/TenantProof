@@ -1,5 +1,5 @@
 """The Package page's result panel and Build button (#90). `latestPackage` and `buildButton` are
-pure functions in web/index.html, run under node; the server's audit line is what they read after
+pure functions in web/index.js, run under node; the server's audit line is what they read after
 a page reload, so one test feeds them the real line."""
 
 import hashlib

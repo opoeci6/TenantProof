@@ -1,5 +1,5 @@
 """The timeline's "Accept all" (#87). `acceptAllPlan` and `acceptAllToast` are pure functions in
-web/index.html, run under node. An event the agent flagged as a conflict keeps the strength the
+web/index.js, run under node. An event the agent flagged as a conflict keeps the strength the
 rules gave it (often single-source), so Accept all has to look at the flags too."""
 
 import json

@@ -1,5 +1,5 @@
 """Counts and empty states on the case pages (`railMeta`, `packageChecks` and `plural` in
-web/index.html, pure functions run under node). With no gaps, no form fields or no events there is
+web/index.js, pure functions run under node). With no gaps, no form fields or no events there is
 nothing to be "done", so the check is neutral grey "Nothing yet", not a green tick; and counts say
 "1 file", not "1 files"."""
 
@@ -12,7 +12,7 @@ import pytest
 
 from tests.node_support import node_json
 
-INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
+INDEX = Path(__file__).resolve().parents[2] / "web" / "index.js"
 BLOCK = re.compile(r"/\* pure:start.*?\*/(.*?)/\* pure:end \*/", re.S)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
@@ -27,7 +27,7 @@ def stats(**kw: int) -> dict:
 
 def js(expr: str) -> object:
     match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
-    assert match, "pure block not found in web/index.html"
+    assert match, "pure block not found in web/index.js"
     script = match.group(1) + f"\nconsole.log(JSON.stringify({expr}));"
     return node_json(script)
 

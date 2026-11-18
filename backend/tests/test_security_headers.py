@@ -50,6 +50,10 @@ def test_the_ui_loads_nothing_from_a_font_host():
     would look different offline. The UI uses the system font stack."""
     from pathlib import Path
 
-    page = (Path(__file__).resolve().parents[2] / "web" / "index.html").read_text(encoding="utf-8")
+    web = Path(__file__).resolve().parents[2] / "web"
+    page = "".join(
+        (web / name).read_text(encoding="utf-8")
+        for name in ("index.html", "index.css", "index.js")
+    )
     assert "fonts.googleapis.com" not in page and "fonts.gstatic.com" not in page
     assert "system-ui" in page
