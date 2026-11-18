@@ -18,6 +18,9 @@ EVIDENCE_POLICY = "ns-evidence-policy-42-deadline"
 
 Severity = Literal["blocking", "recommended"]
 
+# The gap the intake page closes: services/review.py keeps it in step with the case's flag.
+UNATTESTED_TITLE = "The tenant must confirm their files"
+
 
 @dataclass(frozen=True)
 class FieldFact:
@@ -102,7 +105,7 @@ def _unattested(facts: CaseFacts) -> list[GapSpec]:
     return [
         GapSpec(
             severity="blocking",
-            title="The tenant must confirm their files",
+            title=UNATTESTED_TITLE,
             why=(
                 "The package can only be filed once the tenant confirms the files are theirs and "
                 "agrees to share them with the landlord and the program."

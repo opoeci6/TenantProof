@@ -4,10 +4,11 @@ tenant. Fixture providers only, so nothing reaches the network."""
 import pytest
 from sqlmodel import Session, col, select
 
-from app.models import CaseRow, EvidencePageRow, GapRow, LegalSourceRow
+from app.models import ActivityRow, CaseRow, EvidencePageRow, GapRow, LegalSourceRow
 from app.services.agent import llm, loop, runner
 from app.services.agent import tools as t
 from app.services.legal import gaps
+from app.services.legal.gap_checks import UNATTESTED_TITLE
 from tests.agent_support import (
     CASE,
     RecordingProvider,
@@ -107,6 +108,46 @@ def test_preparing_twice_adds_nothing_the_second_time(fresh_db, session):
     prepare(session, LIVE)
     prepared = prepare(session, LIVE)
     assert prepared.created == 0 and prepared.fields_added == 0
+
+
+def confirm_gap(session: Session, case_id: str = LIVE) -> GapRow:
+    return next(g for g in gaps_of(session, case_id) if g.title == UNATTESTED_TITLE)
+
+
+def set_attested(session: Session, attested: bool, case_id: str = LIVE) -> None:
+    case = session.get(CaseRow, case_id)
+    assert case is not None
+    case.tenant_attested_genuine = attested
+    session.add(case)
+    session.commit()
+
+
+def test_a_rerun_closes_the_confirm_item_once_the_tenant_has_confirmed(fresh_db, session):
+    prepare(session, LIVE)
+    assert confirm_gap(session).status == "open"
+    set_attested(session, True)  # e.g. confirmed before this fix shipped, item left open
+
+    prepare(session, LIVE)
+    assert confirm_gap(session).status == "resolved"
+    lines = session.exec(select(ActivityRow.action).where(ActivityRow.case_id == LIVE)).all()
+    assert any(UNATTESTED_TITLE in line and "done" in line for line in lines)
+
+    set_attested(session, False)
+    prepare(session, LIVE)
+    assert confirm_gap(session).status == "open"
+
+
+def test_a_dismissed_confirm_item_stays_dismissed(fresh_db, session):
+    prepare(session, LIVE)
+    gap = confirm_gap(session)
+    gap.status = "dismissed"
+    session.add(gap)
+    session.commit()
+    set_attested(session, True)
+    prepare(session, LIVE)
+    set_attested(session, False)
+    prepare(session, LIVE)
+    assert confirm_gap(session).status == "dismissed"
 
 
 def test_the_photo_gaps_name_the_file_they_are_about(fresh_db, session):

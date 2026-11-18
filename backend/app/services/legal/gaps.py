@@ -28,7 +28,7 @@ from app.services import activity
 from app.services.agent.tools import clean_text
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
-from app.services.review import request_sent_line
+from app.services.review import request_sent_line, sync_attestation_gap
 from app.services.strength import SourceFacts
 
 ACTOR_NAME = "TenantProof gaps"
@@ -211,6 +211,13 @@ def prepare(session: Session, case: CaseRow) -> Prepared:
     rules.ensure_case_sources(session, case)
     fields_added = ensure_form_fields(session, case)
     added = write_gaps(session, case, gap_checks.specs(case_facts(session, case)))
+    if sync_attestation_gap(session, case):
+        # A case analysed before the tenant confirmed: the confirmation item was never closed.
+        state = "done" if case.tenant_attested_genuine else "open again"
+        activity.log(
+            session, case.id, "agent", ACTOR_NAME,
+            f"{gap_checks.UNATTESTED_TITLE}: marked {state} to match the tenant's confirmation",
+        )  # fmt: skip
     return Prepared(
         created=len(added), fields_added=fields_added,
         open_gaps=open_gap_lines(session, case), language=case.tenant_language,
