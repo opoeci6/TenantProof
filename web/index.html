@@ -1451,7 +1451,8 @@ function pollRun() {
       clearInterval(poller);
       const asked = askStep(S.run) !== null;
       toast(asked ? "The agent has a question for you." : "Analysis finished. Required items need your input.");
-      await refresh(["timeline", "gaps", "form", "evidence"]); if (asked && route() === "run") focusAsk(); return;
+      // Everything a run writes: the rules step adds the case's sources and deadline, the others the rest.
+      await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]); if (asked && route() === "run") focusAsk(); return;
     }
     if (route() === "run") $("#view").innerHTML = viewRun();
     renderChrome();
