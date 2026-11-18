@@ -38,6 +38,15 @@ DATA = Path(__file__).parent / "seed_data.json"
 CASEWORKER_EMAIL = "sam@example-clinic.test"
 OTHER_ORG = {"id": "org_harbourside", "name": "Harbourside Tenant Legal Clinic"}
 OTHER_USER = {"id": "usr_harbourside", "name": "Jo Park", "email": "jo@harbourside-clinic.test"}
+# The account for showing the app in the Cognizant BrAInstorm Challenge 2026 (the video, the
+# judges, the final pitch) and for nothing else; the email says so on the sign-in page. It is in
+# Sam's clinic, so it sees the same cases, and uses the same SEED_PASSWORD.
+DEMO_ORG_ID = "org_demo"
+DEMO_USER = {
+    "id": "usr_brainstorm2026_demo",
+    "name": "BrAInstorm 2026 demo",
+    "email": "brainstorm2026-demo-only@example-clinic.test",
+}
 CHILD_TABLES = (
     LoginSessionRow, PackageRow, IntakeTokenRow, ActivityRow, FormFieldRow, LegalSourceRow,
     GapRow, TimelineEventRow, ExcerptTranslationRow,
@@ -112,6 +121,7 @@ def seed(session: Session) -> None:
     session.add(OrgRow(**OTHER_ORG))
     session.add(UserRow(org_id=OTHER_ORG["id"], password_hash=password_hash, **OTHER_USER))
     session.flush()
+    ensure_demo_account(session, password_hash)
 
     def add_case(c: dict, *, demo: bool) -> CaseRow:
         deadline = c.get("next_deadline")
@@ -217,13 +227,30 @@ def is_empty(session: Session) -> bool:
     return session.exec(select(OrgRow)).first() is None
 
 
+def ensure_demo_account(session: Session, password_hash: str) -> bool:
+    """Add the BrAInstorm 2026 demo account when it is missing and its clinic exists. Returns
+    whether it was added. Never changes an account that is already there. Caller commits."""
+    if session.get(UserRow, DEMO_USER["id"]) is not None:
+        return False
+    if session.get(OrgRow, DEMO_ORG_ID) is None:
+        return False
+    session.add(UserRow(org_id=DEMO_ORG_ID, password_hash=password_hash, **DEMO_USER))
+    session.flush()
+    return True
+
+
 def main(argv: list[str]) -> None:
-    """Default: seed only an empty database, so restarting never wipes work.
+    """Default: seed only an empty database, so restarting never wipes work. A database that is
+    already seeded only gets the demo account if it lacks it.
     --force wipes and reloads (make seed / make reset)."""
     force = "--force" in argv
     with Session(get_engine()) as db_session:
         if not force and not is_empty(db_session):
             print("database already has data: not seeding (use --force or `make reset` to wipe)")
+            password = get_settings().seed_password
+            if password and ensure_demo_account(db_session, hash_password(password)):
+                db_session.commit()
+                print(f"added the demo account {DEMO_USER['email']}")
             return
         seed(db_session)
     print("seeded")

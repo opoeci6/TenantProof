@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 from app import seed as seed_module
 from app.config import get_settings
 from app.db import get_engine
-from app.models import OrgRow
+from app.models import OrgRow, UserRow
 from tests.conftest import CASEWORKER, _client
 
 CASE = "case_demo_001"
@@ -52,6 +52,58 @@ def test_seed_needs_a_password_only_when_it_will_seed(fresh_db, monkeypatch):
     seed_module.main([])  # database has data: skipped, no password needed
     with pytest.raises(SystemExit):
         seed_module.main(["--force"])
+
+
+# --- the BrAInstorm 2026 demo account -------------------------------------------------------------
+
+DEMO_EMAIL = seed_module.DEMO_USER["email"]
+
+
+def test_the_demo_account_is_in_the_demo_clinic_and_says_what_it_is_for(fresh_db, session):
+    user = session.exec(select(UserRow).where(UserRow.email == DEMO_EMAIL)).one()
+    assert user.org_id == "org_demo"
+    assert "brainstorm2026" in user.email and "demo-only" in user.email
+
+
+def test_the_demo_account_signs_in_with_the_seed_password_and_sees_the_demo_cases(fresh_db):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    c = TestClient(app, base_url="https://testserver")
+    r = c.post("/api/auth/login",
+               json={"email": DEMO_EMAIL, "password": get_settings().seed_password})
+    assert r.status_code == 200
+    ids = {case["id"] for case in c.get("/api/cases").json()}
+    assert CASE in ids and LIVE in ids
+
+
+def test_an_already_seeded_database_gets_the_demo_account_without_losing_work(
+    fresh_db, client, session, capsys
+):
+    with Session(get_engine()) as s:
+        s.exec(delete(UserRow).where(UserRow.email == DEMO_EMAIL))  # type: ignore[call-overload]
+        s.commit()
+    _accept(client)
+
+    seed_module.main([])
+
+    out = capsys.readouterr().out
+    assert "not seeding" in out and f"added the demo account {DEMO_EMAIL}" in out
+    assert session.exec(select(UserRow).where(UserRow.email == DEMO_EMAIL)).one()
+    assert _status(client) == "accepted"
+    seed_module.main([])  # a second start adds nothing and changes nothing
+    assert "added the demo account" not in capsys.readouterr().out
+
+
+def test_the_demo_account_is_not_added_without_a_password(fresh_db, session, monkeypatch):
+    with Session(get_engine()) as s:
+        s.exec(delete(UserRow).where(UserRow.email == DEMO_EMAIL))  # type: ignore[call-overload]
+        s.commit()
+    monkeypatch.setattr(get_settings(), "seed_password", None)
+    seed_module.main([])
+    session.expire_all()
+    assert session.exec(select(UserRow).where(UserRow.email == DEMO_EMAIL)).first() is None
 
 
 # --- case_live_001: the synthetic, empty case for the live demo run ----------------------------
