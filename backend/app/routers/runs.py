@@ -15,9 +15,15 @@ from app.schemas import Run
 from app.services import activity
 from app.services.agent import llm, runner
 from app.services.agent.evidence_text import SqlTextStore
-from app.services.dates import evidence_deadline, hearing_has_passed, parse_hearing_date
+from app.services.dates import (
+    evidence_deadline,
+    hearing_has_passed,
+    is_no_hearing_answer,
+    parse_hearing_date,
+)
 from app.services.legal.corpus import EVIDENCE_DAYS_BEFORE_HEARING
 from app.services.mappers import to_run
+from app.services.stage import refresh_stage
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -25,6 +31,7 @@ log = logging.getLogger(__name__)
 MAX_ANSWER_CHARS = 500
 DATE_HINT = "Enter the date like 2026-11-21 or Nov 21, 2026"
 DATE_PASSED = "That date has passed. Enter the upcoming hearing date."
+NO_HEARING_TEXT = "No hearing is scheduled yet. Do not ask for a hearing date again."
 # A run still "running" after its whole budget (plus slack for a slow start) was cut off by a
 # restart or a crash, so it no longer blocks a new one.
 STALE_SLACK = timedelta(seconds=30)
@@ -129,6 +136,19 @@ def start_run(
     return to_run(row)
 
 
+def _clear_hearing(session: Session, case: CaseRow) -> None:
+    """"No hearing scheduled yet": no date and no evidence deadline, and the case leaves
+    `hearing_scheduled` if an earlier date had put it there. The flag stops the runner asking
+    again on the next run."""
+    case.hearing_date = None
+    case.next_deadline = None
+    case.no_hearing_yet = True
+    if case.stage == "hearing_scheduled":
+        case.stage = "needs_review"
+        refresh_stage(session, case)  # from the case's own counts, like any other change
+    session.add(case)
+
+
 @router.post("/runs/{run_id}/answer", response_model=Run)
 def answer_run(
     run_id: str, body: AnswerIn, session: SessionDep, user: UserDep,
@@ -148,13 +168,18 @@ def answer_run(
         raise _reasons(status.HTTP_409_CONFLICT, "This run is not waiting for an answer")
     text = answer
     hearing = None
+    no_hearing = False
     if pending.get("field") == "hearing_date":
-        hearing = parse_hearing_date(answer)
-        if hearing is None:  # the run stays paused: nothing has been changed yet
-            raise _reasons(status.HTTP_422_UNPROCESSABLE_CONTENT, DATE_HINT)
-        if hearing_has_passed(hearing, _today()):  # the run stays paused, nothing is changed
-            raise _reasons(status.HTTP_422_UNPROCESSABLE_CONTENT, DATE_PASSED)
-        text = hearing.isoformat()  # the agent is told the date in its stored form
+        no_hearing = is_no_hearing_answer(answer)
+        if no_hearing:
+            text = NO_HEARING_TEXT  # the agent is told there is no date, and not to ask again
+        else:
+            hearing = parse_hearing_date(answer)
+            if hearing is None:  # the run stays paused: nothing has been changed yet
+                raise _reasons(status.HTTP_422_UNPROCESSABLE_CONTENT, DATE_HINT)
+            if hearing_has_passed(hearing, _today()):  # the run stays paused, nothing changes
+                raise _reasons(status.HTTP_422_UNPROCESSABLE_CONTENT, DATE_PASSED)
+            text = hearing.isoformat()  # the agent is told the date in its stored form
     case = session.get(CaseRow, row.case_id)
     assert case is not None  # load_owned checked it
     if hearing is not None:
@@ -162,10 +187,15 @@ def answer_run(
         case.hearing_date = hearing.isoformat()
         case.stage = "hearing_scheduled"  # compute_stage keeps it from here on
         case.next_deadline = deadline  # what the caseload priority reads
+        case.no_hearing_yet = False
         session.add(case)
         activity.log(session, case.id, "caseworker", user.name,
                      f"Set the hearing date to {hearing.isoformat()} "
                      f"(must be received by {deadline['date']})")
+    if no_hearing:
+        _clear_hearing(session, case)
+        activity.log(session, case.id, "caseworker", user.name,
+                     "Set the hearing as not scheduled yet (no evidence deadline)")
     activity.log(session, case.id, "caseworker", user.name,
                  f"Answered the agent's question on {row.id}")
     try:

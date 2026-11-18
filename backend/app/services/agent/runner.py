@@ -521,6 +521,8 @@ def _needs_hearing_ask(case: CaseRow, state: StepState, result: LoopResult) -> b
     did not ask anything itself (one question per step, not two)."""
     if result.status not in ("finished", "budget") or case.hearing_date is not None:
         return False
+    if case.no_hearing_yet:  # a caseworker already said there is none (#124)
+        return False
     return not any(c.tool == "ask_caseworker" for c in state.tool_calls)
 
 
