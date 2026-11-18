@@ -1256,8 +1256,8 @@ function viewGaps() {
     <section class="gap-group"><h2 class="section-h">Required</h2>${S.gaps.filter(g => g.severity === "blocking").map(gapCard).join("")}</section>
     <section class="gap-group"><h2 class="section-h">Suggestions to strengthen evidence</h2>${S.gaps.filter(g => g.severity === "recommended").map(gapCard).join("")}</section>
     <section class="gap-group"><h2 class="section-h">Official sources the agent used</h2>
-      <ul class="panel sources">${S.sources.map(s => `<li><span class="s-title">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</span>${vs[s.verify_status]}<span class="s-sub">${esc(s.used_for)}${s.last_verified_at ? ` · last checked ${fmtTime(s.last_verified_at)}` : ""}</span></li>`).join("")}</ul>
-      <div class="note"><span class="note-ico">i</span><span>These are saved copies of official sources. This prototype does not open the original links or check them for changes, so confirm each source on its official page before you rely on it.</span></div></section>
+      <ul class="panel sources">${S.sources.map(s => `<li><span class="s-title">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</span>${vs[s.verify_status]}<span class="s-sub">${esc(s.used_for)}${s.last_verified_at ? ` · source last checked ${fmtTime(s.last_verified_at)}` : ""}</span></li>`).join("")}</ul>
+      <div class="note"><span class="note-ico">i</span><span>These are saved, word-for-word copies of official sources. A source check re-reads each official document and marks a source "Changed since saved" if its wording no longer matches; "Not verified yet" means no check has covered it yet. In this prototype the check is started by hand, not on every case, so confirm each source on its official page before you rely on it.</span></div></section>
     ${contract("gaps", { gaps: S.gaps, sources: S.sources })}`;
 }
 
