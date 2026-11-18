@@ -1164,6 +1164,19 @@ def test_an_image_whose_location_cannot_be_removed_is_left_out(
     assert "Not filed: the location data in this image could not be removed" in flat
 
 
+def test_a_corrupt_photo_is_left_out_with_the_reason_it_could_not_be_read(fresh_db, client):
+    """Demo test bug 11: the manifest said the location data could not be removed, when the
+    file could not be read at all."""
+    upload(client, ("broken.jpg", b"\xff\xd8\xff" + b"garbage that is no jpeg" * 4, "image/jpeg"))
+
+    entries = package_entries(client)
+
+    assert "evidence/E-08.jpg" not in entries
+    assert json.loads(entries["manifest.json"])["evidence"][-1]["in_zip"] is None
+    flat = " ".join(manifest_text(entries).split())
+    assert "Not filed: this image could not be read" in flat
+
+
 # --- request limits -----------------------------------------------------------------------
 
 

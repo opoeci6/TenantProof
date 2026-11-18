@@ -356,6 +356,21 @@ def build_form_draft(session: Session, case: CaseRow) -> FormDraft:
     )
 
 
+def answered_since_sent(gap: GapRow) -> bool:
+    """The tenant answered this request after it was last sent (demo test bug 8). A request sent
+    again after an answer counts as open; one sent before `sent_at` was stored counts as answered
+    once it has an answer."""
+    if not gap.answer:
+        return False
+    sent_at = (gap.tenant_request or {}).get("sent_at")
+    if not sent_at:
+        return True
+    try:
+        return datetime.fromisoformat(gap.answer["received_at"]) >= datetime.fromisoformat(sent_at)
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
 def to_intake_view(session: Session, case: CaseRow, org_name: str) -> IntakeView:
     gaps = session.exec(
         select(GapRow).where(GapRow.case_id == case.id, GapRow.status == "waiting_tenant")
@@ -371,6 +386,7 @@ def to_intake_view(session: Session, case: CaseRow, org_name: str) -> IntakeView
                 message_en=g.tenant_request.get("message_en") or g.tenant_request["message"],
             )
             for g in gaps
-            if g.tenant_request
+            # An answered request leaves the tenant's page; the caseworker still sees the answer.
+            if g.tenant_request and not answered_since_sent(g)
         ],
     )

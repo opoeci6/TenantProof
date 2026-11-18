@@ -138,6 +138,9 @@ def request_from_tenant(session: Session, case: CaseRow, gap: GapRow, user: User
     if gap.status not in OPEN:
         raise HTTPException(status.HTTP_409_CONFLICT, "This item is already closed")
     gap.status = "waiting_tenant"
+    # When it was sent: an answer from before this answers an earlier request
+    # (mappers.answered_since_sent).
+    gap.tenant_request = {**gap.tenant_request, "sent_at": datetime.now(UTC).isoformat()}
     session.add(gap)
     activity.log(session, case.id, "caseworker", user.name, request_sent_line(gap.title))
     refresh_stage(session, case, waiting_on_tenant=True)
