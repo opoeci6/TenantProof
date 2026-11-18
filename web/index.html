@@ -170,6 +170,14 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .ev-name{display:flex;flex-direction:column;gap:4px;min-width:0}
 .ev-name .fn{font-weight:600;overflow-wrap:anywhere}
 .ev-name .sub{font-size:12.5px;color:var(--ink-3)}
+/* #97: photo previews (the copy without GPS) */
+.ev-thumb,.src-thumb{display:block;width:max-content;padding:0;border:1px solid var(--line);border-radius:4px;background:var(--surface-2);cursor:zoom-in;overflow:hidden}
+.ev-thumb img{display:block;max-width:120px;max-height:90px}
+.src-thumb{margin:6px 0 2px}
+.src-thumb img{display:block;max-width:160px;max-height:120px}
+.modal-card.photo-card{height:auto;max-height:90vh}
+.photo-wrap{flex:1;min-height:0;display:grid;place-items:center;padding:12px;overflow:auto;background:var(--surface-2)}
+.photo-wrap img{max-width:100%;max-height:calc(90vh - 80px);object-fit:contain}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;font-size:12.5px;min-width:0;margin:0}
 .kv dt{color:var(--ink-3)} .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .ev-checks{display:flex;flex-direction:column;gap:6px;align-items:flex-start;font-size:12.5px}
@@ -776,6 +784,10 @@ function packageChecks(st) {
 // The Type shown for an evidence file. The server says "other" for a PDF it cannot place; show
 // "document" for that, and keep any better type (lease, receipt, letter) as it is.
 const kindLabel = e => e.kind === "other" && e.mime === "application/pdf" ? "document" : e.kind;
+// #97: where a file's photo preview is (under API_BASE), or null when it has none. The server
+// serves only the copy it made at upload without EXIF or GPS; mock items have no preview.
+const previewPath = (caseId, e) => e && e.has_preview && caseId
+  ? `/cases/${encodeURIComponent(caseId)}/evidence/${encodeURIComponent(e.id)}/preview` : null;
 // The run's cost line. `est_cost_usd` is null when the server has no list price for the model used
 // (or the prompts were too long for the price it has): say so, never show a made-up number.
 const costLabel = u => u.est_cost_usd == null ? "Est. cost unknown" : `Est. cost ${u.est_cost_usd < 0.01 ? "under $0.01" : "$" + u.est_cost_usd.toFixed(2)}`;
@@ -904,7 +916,11 @@ async function translateExcerpt(btn) {
 function srcChips(sources) {
   if (!sources.length) return `<span class="flag">No source. Not shown as fact.</span>`;
   const tenantLang = S.case && S.case.tenant ? S.case.tenant.preferred_language : "";
-  return sources.map(s => `<details class="src"><summary><span class="exhibit">${esc(evLabel(s.evidence_id))}</span><span class="loc">${esc(s.locator)}</span></summary>${s.excerpt ? `<blockquote>${esc(s.excerpt)}</blockquote>${englishToggle(s.excerpt, tenantLang)}` : ""}</details>`).join("");
+  const thumb = id => {  /* #97 */
+    const preview = previewPath(CASE_ID, S.evidence.find(e => e.id === id));
+    return preview ? `<button class="src-thumb" type="button" data-action="photo" data-id="${esc(id)}" title="Show the photo larger"><img src="${API_BASE}${preview}" alt="Photo ${esc(evLabel(id))}" loading="lazy"></button>` : "";
+  };
+  return sources.map(s => `<details class="src"><summary><span class="exhibit">${esc(evLabel(s.evidence_id))}</span><span class="loc">${esc(s.locator)}</span></summary>${thumb(s.evidence_id)}${s.excerpt ? `<blockquote>${esc(s.excerpt)}</blockquote>${englishToggle(s.excerpt, tenantLang)}` : ""}</details>`).join("");
 }
 function stats() {
   const reviewed = S.timeline.filter(e => e.review_status !== "pending").length;
@@ -1050,8 +1066,10 @@ function viewEvidence() {
     const mdRows = e.kind === "photo"
       ? `<dt>Captured</dt><dd>${md.captured_at ? fmtTime(md.captured_at) : e._new ? "Read on server" : '<span style="color:var(--warn)">No capture time</span>'}</dd><dt>Device</dt><dd>${esc(md.device || "—")}</dd><dt>Edited with</dt><dd>${md.software ? `<span style="color:var(--warn)">${esc(md.software)}</span>` : "—"}</dd><dt>GPS</dt><dd>${md.gps_present ? "Present · removed before AI" : "—"}</dd>`
       : `<dt>Type</dt><dd>${esc(kindLabel(e))}</dd><dt>Size</dt><dd>${fmtSize(e.size_bytes)}</dd>`;
+    const preview = previewPath(CASE_ID, e);  /* #97 */
+    const thumb = preview ? `<button class="ev-thumb" type="button" data-action="photo" data-id="${esc(e.id)}" title="Show the photo larger"><img src="${API_BASE}${preview}" alt="Photo ${esc(e.label)}" loading="lazy"></button>` : "";
     return `<div class="ev${e._new ? " is-new" : ""}">
-      <div class="ev-name"><div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received ${fmtTime(e.received_at)} (server time)</span>
+      <div class="ev-name">${thumb}<div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received ${fmtTime(e.received_at)} (server time)</span>
         <span class="hash mono" title="${esc(e.sha256)}">SHA-256 ${esc(e.sha256.slice(0, 12))}…<button class="copy" type="button" data-action="copy" data-text="${esc(e.sha256)}">Copy</button></span></div>
       <dl class="kv">${mdRows}</dl>
       <div class="ev-checks">${fcPill}${proc}<span style="color:var(--ink-3)">${esc(fc.note)}</span></div></div>`;
@@ -1464,7 +1482,20 @@ function showBrief(url) {
   d.querySelector("button").focus();
 }
 function closeBrief() { const d = $("#briefModal"); if (d) { URL.revokeObjectURL(d.dataset.url); d.remove(); } }
-document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeBrief(); });
+/* #97: a photo, larger, in the page. Same copy without GPS as the thumbnail. */
+function showPhoto(id) {
+  const e = S.evidence.find(x => x.id === id), preview = previewPath(CASE_ID, e);
+  if (!preview) return;
+  closePhoto();
+  const d = document.createElement("div");
+  d.id = "photoModal"; d.className = "modal";
+  d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-label", `Photo ${e.label}`);
+  d.innerHTML = `<div class="modal-card photo-card"><div class="modal-bar"><strong>${esc(e.label)} · ${esc(e.filename)}</strong><span class="btn-row"><span class="muted">Copy without location data</span><button class="btn small" type="button" data-action="close-photo">Close</button></span></div><div class="photo-wrap"><img src="${API_BASE}${preview}" alt="Photo ${esc(e.label)}"></div></div>`;
+  document.body.appendChild(d);
+  d.querySelector("button").focus();
+}
+function closePhoto() { const d = $("#photoModal"); if (d) d.remove(); }
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") { closeBrief(); closePhoto(); } });
 
 // Fix #38: when the clipboard is blocked (some embedded browsers), select the link so Ctrl+C copies it.
 function copyFallback(b) {
@@ -1481,6 +1512,8 @@ document.addEventListener("click", async ev => {
   if (a === "logout") return logout();
   if (a === "brief") return openBrief();
   if (a === "close-brief") return closeBrief();
+  if (a === "photo") return showPhoto(id);  /* #97 */
+  if (a === "close-photo") return closePhoto();
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { copyFallback(b); } }
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = "timeline"; } }
   if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=tenant_name]"); if (first) first.focus(); return; }  /* #41 */

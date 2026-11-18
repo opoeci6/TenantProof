@@ -221,6 +221,8 @@ def to_evidence(row: EvidenceRow) -> EvidenceItem:
             "metadata_stripped_for_ai": row.metadata_stripped_for_ai,
             "processing": row.processing,
             "error": row.error,
+            # #97: GET /cases/{id}/evidence/{evidence_id}/preview serves this copy
+            "has_preview": row.stripped_sha256 is not None,
         }
     )
 
