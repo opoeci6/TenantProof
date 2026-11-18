@@ -15,9 +15,11 @@ from pypdf import PdfReader
 from sqlmodel import Session, col, select
 
 from app.config import get_settings
-from app.models import CaseRow, EvidencePageRow, EvidenceRow, IntakeTokenRow, RunRow
+from app.models import CaseRow, EvidencePageRow, EvidenceRow, GapRow, IntakeTokenRow, RunRow
 from app.services import storage
 from app.services.intake_token import hash_token
+from app.services.legal import gaps
+from app.services.legal.gap_checks import UNATTESTED_TITLE
 
 CASE = "case_demo_001"
 EVIDENCE = f"/api/cases/{CASE}/evidence"
@@ -855,6 +857,42 @@ def test_new_tenant_files_clear_an_earlier_confirmation_until_it_is_given_again(
 
     tenant_confirms(anon_client, token)
     assert intake(client)["tenant_attested_genuine"] is True
+    assert client.post(BUILD, json=ATTESTATIONS).status_code == 200
+
+
+def confirm_gap(session: Session) -> GapRow:
+    session.expire_all()
+    return session.exec(
+        select(GapRow).where(GapRow.case_id == CASE, GapRow.title == UNATTESTED_TITLE)
+    ).one()
+
+
+def test_the_tenant_confirming_closes_the_confirm_item_an_earlier_run_opened(
+    fresh_db, token, anon_client, client, session
+):
+    """Demo test bug 1: a case analysed before the tenant confirmed kept its blocking
+    "The tenant must confirm their files" item open, so the package could never be built."""
+    make_ready(client)
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    case.tenant_attested_genuine, case.tenant_attested_at = False, None
+    gaps.prepare(session, case)  # what a run does: the check opens the item
+    session.commit()
+    assert confirm_gap(session).status == "open"
+    assert client.post(BUILD, json=ATTESTATIONS).status_code == 409
+
+    tenant_confirms(anon_client, token)
+    gap = confirm_gap(session)
+    assert gap.status == "resolved" and gap.resolution_note
+    assert client.post(BUILD, json=ATTESTATIONS).status_code == 200
+
+    # New tenant files clear the confirmation, and the item with it, until it is given again.
+    assert anon_client.post(files_url(token), files=files(
+        ("later.txt", b"Tenant: it leaked again\n", "text/plain"))).status_code == 200
+    assert confirm_gap(session).status == "open"
+    assert client.post(BUILD, json=ATTESTATIONS).status_code == 409
+    tenant_confirms(anon_client, token)
+    assert confirm_gap(session).status == "resolved"
     assert client.post(BUILD, json=ATTESTATIONS).status_code == 200
 
 

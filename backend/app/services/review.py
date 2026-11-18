@@ -10,6 +10,7 @@ from app.models import CaseRow, FormFieldRow, GapRow, TimelineEventRow, UserRow
 from app.schemas import FieldPatch, GapPatch, TimelineEventPatch
 from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
+from app.services.legal.gap_checks import UNATTESTED_TITLE
 from app.services.stage import refresh_stage
 from app.services.verifier import normalize
 
@@ -172,4 +173,26 @@ def record_tenant_submit(session: Session, case: CaseRow) -> None:
     case.tenant_attested_at = datetime.now(UTC)
     activity.log(session, case.id, "tenant", case.tenant_name,
                  "Confirmed the files are genuine and agreed to share them")
+    sync_attestation_gap(session, case)
     refresh_stage(session, case, waiting_on_tenant=False)
+
+
+def sync_attestation_gap(session: Session, case: CaseRow) -> int:
+    """Keep "The tenant must confirm their files" in step with `case.tenant_attested_genuine`:
+    resolved when the tenant confirms, open again when new tenant files clear the confirmation.
+    A rerun cannot do either, since the gaps step skips a title the case already has. A dismissed
+    gap stays dismissed. Returns how many gaps changed. Caller commits."""
+    attested = case.tenant_attested_genuine
+    changed = 0
+    for gap in session.exec(select(GapRow).where(GapRow.case_id == case.id)).all():
+        if gap.title.casefold() != UNATTESTED_TITLE.casefold():
+            continue
+        if attested and gap.status in OPEN:
+            gap.status, gap.resolution_note = "resolved", "The tenant confirmed on the intake page"
+        elif not attested and gap.status == "resolved":
+            gap.status, gap.resolution_note = "open", None
+        else:
+            continue
+        session.add(gap)
+        changed += 1
+    return changed

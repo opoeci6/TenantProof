@@ -25,7 +25,7 @@ from sqlmodel import Session, col, func, select
 
 from app.config import get_settings
 from app.models import CaseRow, EvidencePageRow, EvidenceRow, RunRow
-from app.services import activity, storage
+from app.services import activity, review, storage
 from app.services.evidence import exif, ocr, sniff, strip, text
 
 log = logging.getLogger(__name__)
@@ -346,5 +346,6 @@ def _after_new_evidence(
             case.tenant_attested_at = None
             activity.log(session, case.id, "tenant", case.tenant_name,
                          "New files arrived after the confirmation, so it must be given again")
+            review.sync_attestation_gap(session, case)
     case.updated_at = now
     session.add(case)
