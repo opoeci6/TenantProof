@@ -144,7 +144,7 @@ class ToolCall(BaseModel):
 class RunStep(BaseModel):
     key: Literal["ingest", "extract", "timeline", "rules", "gaps", "draft"]
     label: str
-    status: Literal["pending", "running", "done", "failed", "needs_input"]
+    status: Literal["pending", "running", "done", "incomplete", "failed", "needs_input"]
     summary: str | None
     tool_calls: list[ToolCall]
 
