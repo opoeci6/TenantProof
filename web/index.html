@@ -197,7 +197,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .rs-ico{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;border:1.5px solid var(--line);color:var(--ink-3)}
 .rs-done .rs-ico{background:var(--ok);border-color:var(--ok);color:var(--surface)}
 .rs-running .rs-ico{border-color:var(--accent);color:var(--accent);animation:pulse 1s ease-in-out infinite}
-.rs-needs_input .rs-ico{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+.rs-needs_input .rs-ico,.rs-incomplete .rs-ico{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
 .rs-failed .rs-ico{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
 @keyframes pulse{50%{box-shadow:0 0 0 5px var(--accent-soft)}}
 @media (prefers-reduced-motion: reduce){.rs-running .rs-ico{animation:none}}
@@ -836,19 +836,35 @@ function acceptAllToast(plan) {
 /* pure:end */
 /* runState:start (pure; tests/test_run_state.py runs it under node) */
 // What the rail and the run pill say. "Needs your input" is only for a run paused on a question the
-// runner can resume; a finished run that still has events to review says "Needs review".
+// runner can resume; a step that stopped early says "Incomplete"; a finished run with something
+// left to review says "Needs review", and with nothing left "Done".
 // The step a run is paused on, or null. A step the runner can resume that has asked a question (a
 // seeded run's "needs_input" has no ask_caseworker call, and the server cannot resume it).
 const askStep = run => run.steps.find(s => s.status === "needs_input" && RESUMABLE.includes(s.key) && s.tool_calls.some(c => c.tool === "ask_caseworker")) || null;
-function runState(run) {
+// #119: the steps that stopped early (a limit or the run deadline), and what the Run and Package
+// pages say about them. The same words as the server (services/package.py).
+const incompleteSteps = run => run ? run.steps.filter(s => s.status === "incomplete") : [];
+function analysisWarning(run) {
+  const stopped = incompleteSteps(run);
+  if (!stopped.length) return null;
+  return {
+    lead: stopped.some(s => s.key === "timeline")
+      ? "The analysis stopped early: the timeline may be missing events. Run the analysis again before relying on this."
+      : "The analysis stopped early: some results may be missing. Run the analysis again before relying on this.",
+    steps: `Stopped early: ${stopped.map(s => s.label).join(", ")}`,
+  };
+}
+// `open` is what is left for the caseworker: { pending, blocking }. Run.status is only written when
+// the run ends, so this is what turns "Needs review" into "Done" once the review is finished.
+const openItems = st => ({ pending: st.total - st.reviewed, blocking: st.blocking });
+function runState(run, open) {
   if (!run) return { rail: "Not run yet", pill: ["", "Not run"], asking: false, done: false, attn: false };
   const asking = askStep(run) !== null;
   if (run.status === "running") return { rail: "Running…", pill: ["info", "Running"], asking, done: false, attn: false };
   if (run.status === "failed") return { rail: "Failed", pill: ["bad", "Failed"], asking, done: false, attn: false };
-  if (run.status === "needs_review") {
-    return asking ? { rail: "Needs your input", pill: ["warn", "Waiting for you"], asking, done: false, attn: true }
-                  : { rail: "Needs review", pill: ["warn", "Needs review"], asking, done: false, attn: true };
-  }
+  if (run.status === "needs_review" && asking) return { rail: "Needs your input", pill: ["warn", "Waiting for you"], asking, done: false, attn: true };
+  if (incompleteSteps(run).length) return { rail: "Incomplete", pill: ["warn", "Incomplete"], asking, done: false, attn: true };
+  if (run.status === "needs_review" && !(open && !open.pending && !open.blocking)) return { rail: "Needs review", pill: ["warn", "Needs review"], asking, done: false, attn: true };
   return { rail: "Done", pill: ["ok", "Done"], asking, done: true, attn: false };
 }
 /* runState:end */
@@ -985,7 +1001,7 @@ function renderChrome() {
     : `<strong>${esc(S.me ? S.me.org.name : "")}</strong><span>${S.me ? `Signed in as ${esc(S.me.name)}, caseworker` : ""}</span>`;
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
-  const rs = runState(run), runMeta = rs.rail, rm = railMeta(st, S.evidence.length);
+  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length);
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
@@ -1116,12 +1132,19 @@ function viewEvidence() {
     ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
 }
 
+// #119: the warning on the Run and Package pages when a step of the latest run stopped early.
+function analysisNote(run) {
+  const w = analysisWarning(run);
+  return w ? `<div class="note warn"><span class="note-ico">!</span><span>${esc(w.lead)}<br>${esc(w.steps)}</span></div>` : "";
+}
+
 function viewRun() {
   const run = S.run;
   if (!run) return `<div class="view-head"><div><h1>Agent run</h1><p>No analysis yet.</p></div><button class="btn primary" data-action="run">Run analysis</button></div>`;
-  const ico = { pending: "", running: "…", done: "✓", needs_input: "!", failed: "×" };
-  const pill = { pending: `<span class="pill">Waiting</span>`, running: `<span class="pill info">Running</span>`, done: `<span class="pill ok">Done</span>`, needs_input: `<span class="pill warn">Needs your input</span>`, failed: `<span class="pill bad">Failed</span>` };
-  const runPill = `<span class="pill ${runState(run).pill[0]}">${runState(run).pill[1]}</span>`;
+  const ico = { pending: "", running: "…", done: "✓", incomplete: "!", needs_input: "!", failed: "×" };
+  const pill = { pending: `<span class="pill">Waiting</span>`, running: `<span class="pill info">Running</span>`, done: `<span class="pill ok">Done</span>`, incomplete: `<span class="pill warn">Incomplete</span>`, needs_input: `<span class="pill warn">Needs your input</span>`, failed: `<span class="pill bad">Failed</span>` };
+  const rs = runState(run, openItems(stats()));
+  const runPill = `<span class="pill ${rs.pill[0]}">${rs.pill[1]}</span>`;
   // The runner builds `extract` and `timeline`; the other four steps are not built in this prototype,
   // whatever a seeded or real run says about them. (The mock run is a scripted demo and keeps its steps.)
   const unbuilt = s => !USE_MOCK && !BUILT.includes(s.key);
@@ -1139,10 +1162,11 @@ function viewRun() {
       <p class="muted" id="ask-help">Plain words are fine. If it asks for a date, write it like 2026-11-21 or Nov 21, 2026.</p>
       <p class="ask-err" id="ask-err" role="alert">${esc(S.askError)}</p>
     </form>` : "";
-  const waiting = run.status === "needs_review" && !asking && !USE_MOCK ? `<div class="note"><span class="note-ico">i</span><span>The run has finished. Check the events on <a href="#timeline">Review timeline</a>. Steps marked "Not in this prototype" are not built yet.</span></div>` : run.status === "needs_review" && !asking ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
+  const reviewLeft = rs.rail === "Needs review";
+  const waiting = reviewLeft && !USE_MOCK ? `<div class="note"><span class="note-ico">i</span><span>The run has finished. Check the events on <a href="#timeline">Review timeline</a>. Steps marked "Not in this prototype" are not built yet.</span></div>` : reviewLeft ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
   return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><div class="btn-row">${run.status === "running" ? "" : briefButton()}<button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div></div>
     <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="${esc(costNote(run.usage))}">${esc(costLabel(run.usage))}</span>` : ""}</div></div>
-    ${ask}${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
+    ${ask}${analysisNote(run)}${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
 }
 
 function viewTimeline() {
@@ -1334,6 +1358,7 @@ function viewPackage() {
       <label><input type="checkbox" id="at-remedy" name="remedy_confirmed_with_tenant" ${S.attest.remedy_confirmed_with_tenant ? "checked" : ""}>The tenant confirmed what they are asking for.</label>
       <label><input type="checkbox" id="at-legal" name="explained_not_legal_advice" ${S.attest.explained_not_legal_advice ? "checked" : ""}>I told the tenant this package is prepared information, not a decision about their case.</label></form>
     ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
+    ${analysisNote(S.run)}
     ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
     <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
     ${latest ? packageResult(latest) : ""}

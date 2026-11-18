@@ -162,6 +162,7 @@ def test_a_rerun_past_the_deadline_keeps_the_old_events(fresh_db: None, session:
     slow = partial_then(fail_at="timeline-turn2", exc=llm.LLMCallError("late"), delay=5)
     row = execute(session, new_run(session), slow, deadline_s=0.2)
     assert timeline_step(row)["summary"].startswith("Stopped early")
+    assert timeline_step(row)["status"] == "incomplete"
     assert titles(session) == ["Old"]
 
 
@@ -172,7 +173,7 @@ def test_a_rerun_cut_by_a_budget_keeps_the_old_events(fresh_db: None, session: S
         "timeline-turn2": turn(stop="max_tokens"),
     })  # fmt: skip
     row = execute(session, new_run(session), cut)
-    assert timeline_step(row)["status"] == "done" and titles(session) == ["Old"]
+    assert timeline_step(row)["status"] == "incomplete" and titles(session) == ["Old"]
 
 
 def test_with_no_earlier_events_a_partial_run_keeps_what_it_has(
