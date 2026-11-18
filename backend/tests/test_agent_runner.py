@@ -260,22 +260,27 @@ def test_a_tool_that_raises_becomes_unavailable_and_the_run_goes_on(
 # --- budgets
 
 
-def test_the_step_ends_at_25_tool_calls_with_what_it_has(fresh_db: None, session: Session) -> None:
-    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 40)}
+def test_the_step_ends_at_40_tool_calls_with_what_it_has(fresh_db: None, session: Session) -> None:
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 60)}
     provider = RecordingProvider(script)
     row = execute(session, new_run(session), provider)
     step = next(s for s in row.steps if s["key"] == "timeline")
-    assert len(step["tool_calls"]) == loop.MAX_TOOL_CALLS == 25
+    assert len(step["tool_calls"]) == loop.MAX_TOOL_CALLS == 40
     assert step["status"] == "done" and step["summary"].startswith("Stopped early")
-    assert "25 tool calls" in step["summary"] and len(provider.requests) == 25
+    assert "40 tool calls" in step["summary"] and len(provider.requests) == 40
+
+
+def test_the_turn_limit_stays_above_the_call_limit() -> None:
+    # One call per turn must reach the call limit before the turn limit stops the step.
+    assert loop.MAX_TURNS > loop.MAX_TOOL_CALLS
 
 
 def test_the_calls_of_one_turn_are_cut_at_the_limit(fresh_db: None, session: Session) -> None:
-    uses = [tool_use("list_evidence", f"u{i}") for i in range(30)]
+    uses = [tool_use("list_evidence", f"u{i}") for i in range(45)]
     provider = RecordingProvider({"timeline-turn1": turn(*uses)})
     row = execute(session, new_run(session), provider)
     step = next(s for s in row.steps if s["key"] == "timeline")
-    assert len(step["tool_calls"]) == 25 and "25 tool calls" in step["summary"]
+    assert len(step["tool_calls"]) == 40 and "40 tool calls" in step["summary"]
 
 
 def test_the_token_budget_ends_the_step(fresh_db: None, session: Session) -> None:
