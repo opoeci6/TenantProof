@@ -108,6 +108,14 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .btn.small{padding:4px 9px;font-size:12.5px}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+/* #90: the built package, right under the Build button */
+.btn.big{padding:11px 20px;font-size:15px}
+.pkg-result{display:grid;gap:12px;justify-items:start;border-color:var(--ok)}
+.pkg-result h2{margin:0;font-size:16px}
+.pkg-result p{margin:0}
+.pkg-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:0;width:100%;font-size:13.5px}
+.pkg-meta dt{color:var(--ink-3)}
+.pkg-meta dd{margin:0;overflow-wrap:anywhere}
 
 /* pills */
 .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap;background:var(--surface-2);color:var(--ink-2)}
@@ -659,7 +667,8 @@ function mockRoute(method, path, body) {
     const files = db.evidence.filter(e => e.format_check.accepted).map(e => ({ label: e.label, filename: e.format_check.action === "converted" ? e.filename.replace(/\.(heic|heif)$/i, ".jpg") : e.format_check.action === "will_export_pdf" ? e.filename.replace(/\.\w+$/, ".pdf") : e.filename, sha256: e.sha256, note: e.format_check.action === "converted" ? "Converted from HEIC" : e.format_check.action === "will_export_pdf" ? "Exported to PDF" : (e.kind === "photo" && e.metadata.software ? "Saved by editing app" : e.kind === "photo" && !e.metadata.captured_at ? "No capture metadata" : "") }));
     files.unshift({ label: "—", filename: "application_draft.pdf", sha256: "generated at build time", note: "Form fields + narrative" }, { label: "—", filename: "evidence_manifest.pdf", sha256: "generated at build time", note: "SHA-256, receipt time and uploader of every file" });
     log("caseworker", "Built the filing package");
-    return { version: 1, sha256: "generated at build time", built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+    db.pkgVersion = (db.pkgVersion || 0) + 1;  // #90: each build is a new version, as on the server
+    return { version: db.pkgVersion, sha256: "generated at build time", built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
   }
   if (method === "GET" && path === `/intake/${INTAKE_TOKEN}`) return clone({ org_name: ORG.name, tenant_first_name: db.case.tenant.name.split(" ")[0], unit: "Unit 4B, 100 Example Street", language: db.case.tenant.preferred_language, requests: db.intakeRequests });
   if (method === "POST" && path === `/intake/${INTAKE_TOKEN}/submit`) {
@@ -773,6 +782,20 @@ const costLabel = u => u.est_cost_usd == null ? "Est. cost unknown" : `Est. cost
 const costNote = u => u.est_cost_usd == null
   ? `No list price on file for ${u.model || "this model"}, or a prompt too long for the price on file`
   : `At ${u.model || "the default model"}'s list prices`;
+// #90: the case's newest package. No endpoint lists packages, so after a reload the audit line the
+// server writes for each build (services/package.py) is what the page knows about them.
+const PACKAGE_BUILT = /^Built filing package v(\d+) \(sha256 ([0-9a-f]{64})\)$/;
+function latestPackage(pkg, activity) {
+  let latest = pkg ? { version: pkg.version, sha256: pkg.sha256, built_by: pkg.prepared_by, built_at: pkg.built_at } : null;
+  for (const a of activity) {
+    const m = a.actor === "caseworker" && PACKAGE_BUILT.exec(a.action);
+    if (m && (!latest || Number(m[1]) > latest.version)) latest = { version: Number(m[1]), sha256: m[2], built_by: a.actor_name, built_at: a.at };
+  }
+  return latest;
+}
+const buildButton = latest => latest
+  ? { label: "Build a new version", hint: `This makes v${latest.version + 1}. v${latest.version} stays available.` }
+  : { label: "Build package", hint: "" };
 /* pure:end */
 /* runState:start (pure; tests/test_run_state.py runs it under node) */
 // What the rail and the run pill say. "Needs your input" is only for a run paused on a question the
@@ -912,7 +935,7 @@ function renderChrome() {
     { id: "timeline", name: "Review timeline", meta: rm.timeline, done: rm.doneTimeline, attn: st.reviewed < st.total },
     { id: "gaps", name: "Missing info", meta: rm.gaps, done: rm.doneGaps, attn: st.blocking > 0 },
     { id: "form", name: "Form draft", meta: rm.form, done: rm.doneForm, attn: st.reqMissing > 0 },
-    { id: "package", name: "Package", meta: S.pkg ? "Built" : "Not built", done: !!S.pkg }
+    { id: "package", name: "Package", meta: latestPackage(S.pkg, S.activity) ? "Built" : "Not built", done: !!latestPackage(S.pkg, S.activity) }
   ];
   $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
     + `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`;
@@ -1185,8 +1208,26 @@ function viewForm() {
     ${contract("form", f)}`;
 }
 
+/* #90: the result of a build, under the Build button */
+function packageResult(p) {
+  const zip = `Download the zip (v${p.version})`;
+  return `<section class="panel panel-pad pkg-result" id="pkg-result" aria-label="Built package">
+    <h2>Package v${p.version} is ready</h2>
+    ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${API_BASE}${C}/package/download?version=${p.version}" download>${zip}</a>`}
+    <dl class="pkg-meta"><dt>Version</dt><dd>v${p.version}</dd><dt>Built by</dt><dd>${esc(p.built_by)}</dd><dt>Built</dt><dd>${fmtTime(p.built_at)}</dd><dt>SHA-256</dt><dd class="mono">${esc(p.sha256)}</dd></dl>
+    <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records." : "The zip is for your records."} The Program does not accept zip files: upload the files inside one by one.</p></section>`;
+}
+function showPackageResult() {
+  const panel = $("#pkg-result");
+  if (!panel) return;  // the caseworker has moved to another page
+  panel.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  const link = $("#pkg-download");
+  if (link) link.focus({ preventScroll: true });
+}
+
 function viewPackage() {
   const st = stats(), ik = S.case.intake;
+  const latest = latestPackage(S.pkg, S.activity), build = buildButton(latest);
   const doneRun = S.run && ["done", "needs_review"].includes(S.run.status) && S.run.finished_at;
   const acceptedN = S.timeline.filter(e => ["accepted", "edited"].includes(e.review_status)).length;
   // Same two reasons, same words, as the server's 409 (services/package.py).
@@ -1199,9 +1240,8 @@ function viewPackage() {
   const pc = packageChecks(st), mark = { yes: "✓", no: "×", maybe: "!", none: "–" };
   const row = (c, label) => `<li><span class="ck ${c.state}">${mark[c.state]}</span><span>${label}: ${c.href ? `<a href="${c.href}">${esc(c.text)}</a>` : esc(c.text)}</span></li>`;
   const whoCls = { agent: "who-agent", tenant: "who-tenant", caseworker: "who-caseworker" };
-  const manifest = S.pkg ? `<h2 class="section-h">Package contents</h2>
+  const manifest = S.pkg ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${esc(r.filename)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
-    <div class="note"><span class="note-ico">i</span><span>Version ${S.pkg.version} · prepared by ${esc(S.pkg.prepared_by)} · ${fmtTime(S.pkg.built_at)}. ${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records. The Program does not accept zip files: upload the files inside one by one." : `<a href="${API_BASE}${C}/package/download?version=${S.pkg.version}" download>Download the zip (v${S.pkg.version})</a> <span class="muted">for your records; the Program does not accept zip files, so upload the files inside one by one</span> · SHA-256 <span class="mono">${esc(S.pkg.sha256.slice(0, 16))}…</span>`}</span></div>
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
   return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>
     <div class="panel panel-pad"><ul class="checklist">
@@ -1217,7 +1257,8 @@ function viewPackage() {
       <label><input type="checkbox" id="at-legal" name="explained_not_legal_advice" ${S.attest.explained_not_legal_advice ? "checked" : ""}>I told the tenant this package is prepared information, not a decision about their case.</label></form>
     ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
     ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
-    <div class="btn-row"><button class="btn primary" data-action="build" ${ready && allAttest ? "" : "disabled"}>Build package</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : ""}</div>
+    <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
+    ${latest ? packageResult(latest) : ""}
     ${manifest}
     <h2 class="section-h">Audit log</h2>
     <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(a.action)}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
@@ -1444,9 +1485,11 @@ document.addEventListener("click", async ev => {
   if (a === "send-request") return sendDraft(id);
   if (a === "gap") { const st = b.dataset.status; await request("PATCH", `/gaps/${id}`, { status: st, resolution_note: st === "resolved" ? "Marked done" : st === "dismissed" ? "Dismissed by caseworker" : null }); await refresh(["gaps", "form", "intake"]); }
   if (a === "build") {
-    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; toast("Package built"); }
+    let built = false;
+    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; toast(`Package v${S.pkg.version} built`); }
     catch (err) { S.pkgError = err.status === 409 ? `Can't build yet: ${err.message}.` : err.message; }
     await refresh([]);
+    if (built) showPackageResult();
   }
   if (a === "intake-send") {
     try {
