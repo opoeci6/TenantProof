@@ -72,6 +72,7 @@ make up                                # builds and starts api, Postgres and Red
 | Org | Email | Has data |
 |---|---|---|
 | Example Community Legal Clinic | `sam@example-clinic.test` | six cases: full demo data on Jordan Lee's, and an empty one (Mei Chen, `case_live_001`) for a live run |
+| Example Community Legal Clinic | `brainstorm2026-demo-only@example-clinic.test` | the same cases as Sam. For showing the app in the Cognizant BrAInstorm Challenge 2026 only (the video, the judges, the final pitch); added to an existing database on the next start |
 | Harbourside Tenant Legal Clinic | `jo@harbourside-clinic.test` | none (proves organisation isolation) |
 
 ### Run the agent with a real model
@@ -114,7 +115,7 @@ Only the Makefile exports `SEED_PASSWORD`; without `make`, set `$env:SEED_PASSWO
 
 You need `LLM_MODE=live` for steps 3 to 5. Synthetic files are in [`demo/`](demo/README.md). A first run uses the empty case (Mei Chen); Jordan Lee's case is already fully analysed.
 
-1. **Caseload (20 s).** Sign in as `sam@example-clinic.test`. Cases are ordered by fixed rules, and each says why ("Must be received in 3 days"). A new case can be made with **New case**.
+1. **Caseload (20 s).** Sign in as `brainstorm2026-demo-only@example-clinic.test` (or `sam@example-clinic.test`; the two see the same cases). Cases are ordered by fixed rules, and each says why ("Must be received in 3 days"). A new case can be made with **New case**.
 2. **Tenant on a phone (40 s).** Open Mei Chen's case, **Send intake link** (the link is shown once), open it on a phone or a narrow window. It loads in 中文. Choose the demo files, tick both boxes, send. The model reads the text evidence; photos are kept for the caseworker, with location data removed from the copies in the package.
 3. **Run the analysis (30 s).** Back on the case, **Run analysis**. Facts are extracted and a timeline is built.
 4. **The pause (20 s).** The agent asks "What is the hearing date? It is not in the evidence." Type a future date. The run resumes and the case gets its received-by date, 5 days before the hearing.
