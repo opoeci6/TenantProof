@@ -131,6 +131,8 @@ class EvidenceItem(BaseModel):
     metadata_stripped_for_ai: bool
     processing: Literal["queued", "processing", "done", "failed"]
     error: str | None
+    # #97: GET /cases/{case_id}/evidence/{id}/preview serves a copy without EXIF or GPS
+    has_preview: bool = False
 
 
 class ToolCall(BaseModel):
