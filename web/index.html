@@ -796,6 +796,26 @@ function latestPackage(pkg, activity) {
 const buildButton = latest => latest
   ? { label: "Build a new version", hint: `This makes v${latest.version + 1}. v${latest.version} stays available.` }
   : { label: "Build package", hint: "" };
+// #87: what "Accept all" accepts. An event the files don't back up (needs support) or that the agent
+// flagged as a conflict (sources disagree) is left for the caseworker to review by hand: the strength
+// of a conflict event can still be single-source, because the model, not the rules, flags it.
+const hasConflict = e => (e.flags || []).some(f => f.type === "conflict");
+function acceptAllPlan(timeline) {
+  const pending = timeline.filter(e => e.review_status === "pending");
+  const conflict = pending.filter(hasConflict);
+  const needsSupport = pending.filter(e => !hasConflict(e) && e.strength === "needs_support");
+  const accept = pending.filter(e => !hasConflict(e) && e.strength !== "needs_support").map(e => e.id);
+  return { accept, conflict: conflict.length, needsSupport: needsSupport.length };
+}
+function acceptAllToast(plan) {
+  const n = plan.accept.length;
+  const head = n ? `Accepted ${n} event${n === 1 ? "" : "s"}.` : "Nothing to accept.";
+  const left = [
+    plan.conflict ? `${plan.conflict} with a conflict` : "",
+    plan.needsSupport ? `${plan.needsSupport} that need${plan.needsSupport === 1 ? "s" : ""} support` : "",
+  ].filter(Boolean);
+  return left.length ? `${head} Left for you to review: ${left.join(" and ")}.` : head;
+}
 /* pure:end */
 /* runState:start (pure; tests/test_run_state.py runs it under node) */
 // What the rail and the run pill say. "Needs your input" is only for a run paused on a question the
@@ -1104,7 +1124,7 @@ function viewTimeline() {
   return `<div class="view-head"><div><h1>Review timeline</h1><p>The agent built this from the tenant's files. Check each event and add your professional notes. Only events you accept or edit go into the form draft.</p></div></div>
     <div class="tl-bar"><div class="progress"><span class="meter"><i style="width:${pct}%"></i></span>${st.reviewed} of ${st.total} reviewed</div>
       <div class="btn-row"><button class="btn small" data-action="accept-all">Accept all corroborated and single-source</button></div></div>
-    <div class="note"><span class="note-ico">i</span><span><b>Strength is rule-based, not an AI guess.</b> Corroborated means two or more independent files agree. Needs support means the files are weak or disagree.</span></div>
+    <div class="note"><span class="note-ico">i</span><span><b>Strength is rule-based, not an AI guess.</b> Corroborated means two or more independent files agree. Needs support means the files are weak or disagree. <b>Accept all</b> leaves events that need support or have a conflict for you.</span></div>
     <ol class="tl">${items}</ol>${contract("timeline", S.timeline)}`;
 }
 
@@ -1473,9 +1493,10 @@ document.addEventListener("click", async ev => {
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
   if (a === "edit") { S.editing = id; render(); const el = document.getElementById("ed-desc-" + id); el && el.focus(); }
   if (a === "cancel-edit") { S.editing = null; render(); }
-  if (a === "accept-all") {
-    for (const e of S.timeline.filter(e => e.review_status === "pending" && e.strength !== "needs_support")) await request("PATCH", `/timeline/${e.id}`, { review_status: "accepted" });
-    toast("Accepted. Events that need support were left for you."); await refresh(["timeline", "form"]);
+  if (a === "accept-all") {  /* #87: conflict events are left too */
+    const plan = acceptAllPlan(S.timeline);
+    for (const id of plan.accept) await request("PATCH", `/timeline/${id}`, { review_status: "accepted" });
+    toast(acceptAllToast(plan)); await refresh(["timeline", "form"]);
   }
   if (a === "draft") { const g = S.gaps.find(x => x.id === id); if (g && g.tenant_request) { startDraft(g); render(); const el = document.getElementById(`draft-en-${id}`); el && el.focus(); } }  /* #48 */
   if (a === "cancel-draft") { S.drafting = null; S.draftEdit = null; S.draftError = ""; render(); }
