@@ -113,13 +113,14 @@ def start_run(
     `GET /runs/{id}`. The case comes from the path and the caseworker's org, never a body."""
     # Lock the case row so two clicks cannot both pass the "already running" check.
     session.exec(select(CaseRow).where(CaseRow.id == case.id).with_for_update()).one()
+    # Before the check: a pause answered first is "running" by then, and blocks this run. If the
+    # check fails, nothing is committed and the paused run stays as it was.
+    runner.close_paused_runs(session, case)
     cutoff = datetime.now(UTC) - stale_after()
-    active = session.exec(
-        select(RunRow).where(
-            RunRow.case_id == case.id, RunRow.status == "running", RunRow.started_at > cutoff
-        )
-    ).first()
-    if active is not None:
+    running = session.exec(
+        select(RunRow).where(RunRow.case_id == case.id, RunRow.status == "running")
+    ).all()
+    if any(runner.last_started(row) > cutoff for row in running):
         raise HTTPException(
             status.HTTP_409_CONFLICT, {"reasons": ["An analysis is already running for this case"]}
         )
