@@ -34,7 +34,8 @@ from typing import Literal
 
 import httpx
 from rapidfuzz import fuzz
-from sqlmodel import Session, select
+from sqlalchemy import func, or_
+from sqlmodel import Session, col, select
 
 from app.models import LegalSourceRow
 from app.services import activity
@@ -127,11 +128,23 @@ def update_rows(
     """Set the status on every row of every case that carries this entry's URL, and return the
     case ids touched. `last_verified_at` moves only when text was actually compared. An
     unreachable document keeps the date of its last real check; an unconfirmed entry clears it,
-    since a row that is not verified must not show when it was "last checked"."""
+    since a row that is not verified must not show when it was "last checked".
+
+    A row is the entry's by URL or, like `rules.row_for`, by title: a row made before the corpus
+    moved a document to a new address still carries the old one, and is moved to the new one
+    here, so it is checked instead of staying `unverified` for good."""
     if entry.url is None:
         return []
-    rows = session.exec(select(LegalSourceRow).where(LegalSourceRow.url == entry.url)).all()
+    rows = session.exec(
+        select(LegalSourceRow).where(
+            or_(
+                col(LegalSourceRow.url) == entry.url,
+                func.lower(LegalSourceRow.title) == entry.title.lower(),
+            )
+        )
+    ).all()
     for row in rows:
+        row.url = entry.url
         row.verify_status = status
         if status in ("unchanged", "changed"):
             row.last_verified_at = now

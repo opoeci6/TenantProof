@@ -116,10 +116,11 @@ def ensure_case_sources(session: Session, case: CaseRow) -> tuple[int, int, int]
         if row is not None:
             row.title = entry.title
             row.used_for = entry.used_for
-            if row.url is None and entry.url is not None:
-                # The seed stores Form J without its URL. Filling it in is what lets the source
-                # check reach that row and the UI show where the document is; the row keeps its
-                # id, so nothing that cites it breaks.
+            if entry.url is not None and row.url != entry.url:
+                # The seed stores Form J without its URL, and a row made before the corpus moved
+                # a document to a new address keeps the old one. The current address is what lets
+                # the source check reach that row and the UI show where the document is; the row
+                # keeps its id, so nothing that cites it breaks.
                 row.url = entry.url
             session.add(row)
             continue
