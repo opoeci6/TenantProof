@@ -59,6 +59,9 @@ EVIDENCE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/heic": ".heic"
 NOT_STORED = "Original file not in storage (seeded demo rows have none)"
 HEIC_NOT_FILED = "Not filed: HEIC is not an accepted format and no JPG copy could be made"
 GPS_NOT_FILED = "Not filed: the location data in this image could not be removed"
+UNREADABLE_NOT_FILED = (
+    "Not filed: this image could not be read, so it could not be checked for location data"
+)
 LOCATION_REMOVED = "location data removed"
 log = logging.getLogger(__name__)
 ATTESTATION_LABELS = {
@@ -310,7 +313,10 @@ def manifest_pdf(
 def _unfiled_reason(ev: EvidenceRow) -> str:
     if not storage.exists(ev.sha256):
         return NOT_STORED
-    return HEIC_NOT_FILED if ev.mime == sniff.HEIC else GPS_NOT_FILED
+    if ev.mime == sniff.HEIC:
+        return HEIC_NOT_FILED
+    # Corrupt: the GPS step can't open it either, so "couldn't be removed" would mislead.
+    return UNREADABLE_NOT_FILED if ev.processing == "failed" else GPS_NOT_FILED
 
 
 def _sha(data: bytes) -> str:

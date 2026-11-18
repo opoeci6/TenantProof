@@ -94,7 +94,9 @@ def test_without_a_body_the_agent_draft_is_sent_as_before(pages, client, session
     before = gap(session).tenant_request
     r = client.post(SEND)
     assert r.status_code == 200 and r.json()["status"] == "waiting_tenant"
-    assert gap(session).tenant_request == before
+    after = dict(gap(session).tenant_request or {})
+    assert after.pop("sent_at")  # when it was sent, so an older answer doesn't hide it
+    assert after == before
     assert not any(a.startswith("Edited the request") for a in actions(session))
 
 

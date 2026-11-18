@@ -144,7 +144,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .cl-row.p-high .cl-stripe{background:var(--bad)}
 .cl-who{display:flex;flex-direction:column;min-width:0}
 .cl-who strong{font-size:14.5px}
-.cl-who span{font-size:12.5px;color:var(--ink-3);overflow-wrap:anywhere}
+.cl-who span{font-size:12.5px;color:var(--ink-3);overflow-wrap:break-word}
 .cl-dead{font-size:13px;display:flex;flex-direction:column;gap:2px}
 .cl-dead small{color:var(--ink-3);font-size:12px}
 .cl-dead .soon{color:var(--bad);font-weight:700}
@@ -388,6 +388,11 @@ body.dev .contract{display:block}
   .log li{grid-template-columns:minmax(0,1fr)}
 }
 @media (max-width:560px){
+  /* Phone: the deadline goes under the name instead of squeezing it into a narrow column. */
+  .cl-row{grid-template-columns:6px minmax(0,1fr)}
+  .cl-stripe{grid-row:span 3}
+  .cl-row > .cl-dead{grid-column:2;text-align:left;flex-direction:row;flex-wrap:wrap;align-items:baseline;gap:2px 8px;padding-block:0 8px}
+  .cl-reason{margin-top:0}
   .topbar{position:static}
   .tl::before{left:7px}
   .tl-item{grid-template-columns:minmax(0,1fr);gap:4px;padding-left:24px}
@@ -882,6 +887,8 @@ function fmtDate(d, long) {
 const fmtDay = v => fmtDate({ value: v, precision: "day" });
 const fmtDur = ms => { const s = Math.round(ms / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`; };
 const fmtTime = s => { if (!s) return "—"; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); };
+// The same, with the viewer's time zone named: the time is shown in the viewer's zone, not the server's.
+const fmtTimeZone = s => { if (!s) return "—"; const d = new Date(s); return isNaN(d) ? s : d.toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }); };
 const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
 const evLabel = id => (S.evidence.find(e => e.id === id) || {}).label || id;
 const tpl = (s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
@@ -971,7 +978,7 @@ function renderChrome() {
   const r = route(), inCase = !TENANT_MODE && IN_CASE.includes(r);  // the tenant's own page has no case rail
   $("#layout").classList.toggle("single", !inCase);
   $("#logoutBtn").hidden = USE_MOCK || TENANT_MODE || !S.me;
-  if (TENANT_MODE) { $("#topnav").innerHTML = ""; $("#ctx").innerHTML = `<strong>${esc(S.intake.view ? S.intake.view.org_name : "")}</strong><span></span>`; $("#rail").innerHTML = ""; return; }
+  if (TENANT_MODE) { $("#topnav").innerHTML = ""; $("#ctx").innerHTML = `<strong>${esc((S.intake.view && S.intake.view.org_name) || "")}</strong><span></span>`; $("#rail").innerHTML = ""; return; }
   $("#topnav").innerHTML = `<a href="#cases" ${r === "cases" || inCase ? 'aria-current="page"' : ""}>Caseload</a>`;
   const c = S.case;
   $("#ctx").innerHTML = inCase && c ? `<strong>${esc(c.tenant.name)} · ${esc(c.title)}</strong><span>${esc(c.unit)} · Maintenance dispute</span>`
@@ -1022,7 +1029,12 @@ async function createCase(form) {
   S.newCase = { values: body, busy: true, error: null }; render();
   let made;
   try { made = await request("POST", "/cases", body); }
-  catch (err) { S.newCase = { values: body, busy: false, error: err.message }; render(); return; }
+  catch (err) {
+    S.newCase = { values: body, busy: false, error: err.message }; render();
+    // The message sits above the fields, so after clicking Create it can be scrolled out of view.
+    const note = document.querySelector("form.new-case .note.bad"); if (note) note.scrollIntoView({ block: "center" });
+    return;
+  }
   S.newCase = null;
   if (USE_MOCK) { await refresh(["cases"]); render(); toast("Case added to the caseload. Mock mode has one case view, so it shows as a demo row."); return; }
   resetCaseState(); setCase(made.id); await refresh(); location.hash = "evidence"; render();
@@ -1045,7 +1057,9 @@ function viewCases() {
   const cs = S.cases;
   if (!cs.length) return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases appear here.</p></div><button class="btn" data-action="new-case">New case</button></div>${newCaseForm()}
     <div class="panel panel-pad"><strong>No cases yet</strong><p class="muted">Cases assigned to you will show up here. Nothing is shared with you from other organizations.</p></div>`;
-  const review = cs.filter(c => c.stage === "needs_review").length;
+  // Events waiting for review count whatever the stage: a case with a hearing date stays
+  // "hearing_scheduled" (gating.compute_stage) while its events still need review.
+  const review = cs.filter(c => c.stage === "needs_review" || c.pending_review > 0).length;
   const week = cs.filter(c => c._days !== null && c._days !== undefined && c._days <= 7).length;
   const rows = cs.map(c => {
     const fresh = notAnalysed(c);  // a finished-looking stage with no analysis behind it
@@ -1075,7 +1089,8 @@ function viewEvidence() {
   const ik = S.case.intake, link = ik.url || sessionLink(S.lastLink, CASE_ID), qr = sessionQr(S.lastLink, CASE_ID);
   const rows = S.evidence.map(e => {
     const fc = e.format_check, md = e.metadata;
-    const fcPill = !fc.accepted ? `<span class="pill bad">Rejected</span>` : fc.action === "converted" ? `<span class="pill info">Converted to JPG</span>` : fc.action === "will_export_pdf" ? `<span class="pill info">Export to PDF</span>` : `<span class="pill ok">Format OK</span>`;
+    const failed = e.processing === "failed";  // accepted type, but the file couldn't be read: say why, not "Format OK"
+    const fcPill = !fc.accepted ? `<span class="pill bad">Rejected</span>` : failed ? "" : fc.action === "converted" ? `<span class="pill info">Converted to JPG</span>` : fc.action === "will_export_pdf" ? `<span class="pill info">Export to PDF</span>` : `<span class="pill ok">Format OK</span>`;
     const proc = e.processing === "done" ? "" : e.processing === "failed" ? `<span class="pill bad">Not processed</span>` : `<span class="pill">New · run analysis to include</span>`;
     const mdRows = e.kind === "photo"
       ? `<dt>Captured</dt><dd>${md.captured_at ? fmtTime(md.captured_at) : e._new ? "Read on server" : '<span style="color:var(--warn)">No capture time</span>'}</dd><dt>Device</dt><dd>${esc(md.device || "—")}</dd><dt>Edited with</dt><dd>${md.software ? `<span style="color:var(--warn)">${esc(md.software)}</span>` : "—"}</dd><dt>GPS</dt><dd>${md.gps_present ? "Present · removed before AI" : "—"}</dd>`
@@ -1083,10 +1098,10 @@ function viewEvidence() {
     const preview = previewPath(CASE_ID, e);  /* #97 */
     const thumb = preview ? `<button class="ev-thumb" type="button" data-action="photo" data-id="${esc(e.id)}" title="Show the photo larger"><img src="${API_BASE}${preview}" alt="Photo ${esc(e.label)}" loading="lazy"></button>` : "";
     return `<div class="ev${e._new ? " is-new" : ""}">
-      <div class="ev-name">${thumb}<div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received ${fmtTime(e.received_at)} (server time)</span>
+      <div class="ev-name">${thumb}<div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received <time datetime="${esc(e.received_at)}" title="Server receipt time: ${esc(e.received_at)}">${esc(fmtTimeZone(e.received_at))}</time></span>
         <span class="hash mono" title="${esc(e.sha256)}">SHA-256 ${esc(e.sha256.slice(0, 12))}…<button class="copy" type="button" data-action="copy" data-text="${esc(e.sha256)}">Copy</button></span></div>
       <dl class="kv">${mdRows}</dl>
-      <div class="ev-checks">${fcPill}${proc}<span style="color:var(--ink-3)">${esc(fc.note)}</span></div></div>`;
+      <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span></div></div>`;
   }).join("");
   return `<div class="view-head"><div><h1>Evidence</h1><p>Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model.</p></div></div>
     <div class="panel panel-pad intake-panel">
@@ -1205,7 +1220,11 @@ async function sendDraft(id) {
   d.busy = true; S.draftError = ""; render();
   try {
     await request("POST", `/gaps/${id}/tenant-request`, { message: en ? d.en : d.msg, message_en: d.en });
-    S.drafting = null; S.draftEdit = null; toast("Sent to the tenant's intake page"); await refresh(["gaps", "intake", "activity"]);
+    S.drafting = null; S.draftEdit = null;
+    // Without an intake link the tenant can't see the request yet: say what to do next.
+    if (S.case && S.case.intake.status === "not_sent") toast("Added to the tenant's intake page. Send the intake link (on Evidence) so the tenant can see it.", 6000);
+    else toast("Sent to the tenant's intake page");
+    await refresh(["gaps", "intake", "activity"]);
   } catch (err) { d.busy = false; S.draftError = err.message; render(); }
 }
 /* editRequest:end */
@@ -1218,7 +1237,7 @@ function viewGaps() {
     if (open && g.input && g.input.type === "text") input = `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="${esc(g.input.placeholder)}" required><button class="btn primary small" type="submit">Save</button></form>`;
     if (open && g.input && g.input.type === "choice") input = `<form data-action="resolve-choice" data-id="${g.id}" style="display:grid;gap:10px"><span class="muted">Record the tenant's choice:</span><div class="choices">${g.input.options.map((o, i) => `<label><input type="checkbox" id="gap-${g.id}-${i}" name="opt" value="${esc(o)}">${esc(o)}</label>`).join("")}</div><div class="btn-row"><button class="btn primary small" type="submit">Save tenant's choice</button></div></form>`;
     const draft = open && g.tenant_request && S.drafting === g.id ? draftBox(g) : "";
-    const status = g.status === "resolved" ? `<span class="pill ok">Resolved</span>` : g.status === "dismissed" ? `<span class="pill plain">Dismissed</span>` : g.status === "waiting_tenant" ? `<span class="pill info">Waiting for tenant</span>` : g.severity === "blocking" ? `<span class="pill bad">Required</span>` : `<span class="pill warn">Suggested</span>`;
+    const status = g.status === "resolved" ? `<span class="pill ok">Resolved</span>` : g.status === "dismissed" ? `<span class="pill plain">Dismissed</span>` : g.status === "waiting_tenant" ? `<span class="pill info">Waiting for tenant</span>${S.case && S.case.intake.status === "not_sent" ? ` <a class="muted" href="#evidence">Intake link not sent yet</a>` : ""}` : g.severity === "blocking" ? `<span class="pill bad">Required</span>` : `<span class="pill warn">Suggested</span>`;
     const acts = [];
     if (open && g.tenant_request && S.drafting !== g.id) acts.push(`<button class="btn small" data-action="draft" data-id="${g.id}">Ask tenant</button>`);
     if (open && g.severity === "recommended") acts.push(`<button class="btn small ok" data-action="gap" data-id="${g.id}" data-status="resolved">Mark done</button><button class="btn small" data-action="gap" data-id="${g.id}" data-status="dismissed">Dismiss</button>`);
@@ -1292,8 +1311,15 @@ function viewPackage() {
   const pc = packageChecks(st), mark = { yes: "✓", no: "×", maybe: "!", none: "–" };
   const row = (c, label) => `<li><span class="ck ${c.state}">${mark[c.state]}</span><span>${label}: ${c.href ? `<a href="${c.href}">${esc(c.text)}</a>` : esc(c.text)}</span></li>`;
   const whoCls = { agent: "who-agent", tenant: "who-tenant", caseworker: "who-caseworker" };
+  // Bug 11: an exhibit that couldn't be read and isn't in the zip, so the numbering's gap is explained.
+  const unreadableLeftOut = p => {
+    const inZip = new Set(p.files.map(f => f.label)), built = new Date(p.built_at);
+    const out = S.evidence.filter(e => e.processing === "failed" && !inZip.has(e.label) && new Date(e.received_at) <= built);
+    return out.length ? `<div class="note warn"><span class="note-ico">!</span><span>Not in the zip: ${out.map(e => `<span class="exhibit">${esc(e.label)}</span> ${esc(e.filename)}`).join(", ")}. ${out.length === 1 ? "This file" : "These files"} could not be read, so ${out.length === 1 ? "it" : "they"} could not be checked for location data. The evidence manifest says so too. Ask the tenant for a new copy if it matters.</span></div>` : "";
+  };
   const manifest = S.pkg ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${esc(r.filename)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
+    ${unreadableLeftOut(S.pkg)}
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
   return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>
     <div class="panel panel-pad"><ul class="checklist">
@@ -1343,6 +1369,9 @@ function previewBar(v, lang) {
 
 function viewIntake() {
   const v = S.intake.view; if (!v) return "<p>Loading…</p>";
+  // English only: with no working link there is no case, so no tenant language to use.
+  if (v.deadLink) return `<div class="panel panel-pad" style="max-width:560px"><h1>This link isn't working</h1><p>It may have been typed wrongly, it may have expired, or your caseworker may have sent you a newer link that replaces it.</p><p>Please contact your caseworker and ask for a new link. Nothing you sent before is lost.</p></div>`;
+  if (v.loadFailed) return `<div class="panel panel-pad" style="max-width:560px"><h1>This page couldn't load</h1><p>Check your internet connection, then reload the page.</p><div class="btn-row"><button class="btn primary" type="button" data-action="reload">Reload</button></div></div>`;
   if (v.noLink && !S.case) return `<div class="view-head"><div><h1>Tenant view</h1><p>Open a case first: this page previews one case's tenant page.</p></div></div><div class="btn-row"><a class="btn primary" href="#cases">Go to the caseload</a></div>`;
   if (v.noLink) { const ik = S.case.intake, name = S.case.tenant.name;  // a sent link is never shown again, so it can't be previewed
     return ik.status === "not_sent"
@@ -1420,7 +1449,11 @@ const LOADERS = {
   form: () => request("GET", `${C}/form-draft`).then(d => S.form = d),
   activity: () => request("GET", `${C}/activity`).then(d => S.activity = d),
   // A revoked or expired link is a 404 here; for the caseworker that means "send a new link", not "case gone".
-  intake: async () => { const tok = intakeTok(); try { S.intake.view = tok ? await request("GET", `/intake/${tok}`) : { noLink: true }; } catch (err) { if (err.status === 404 && !TENANT_MODE) S.intake.view = { noLink: true }; else throw err; } }
+  // For the tenant, a 404 is a wrong, expired or replaced link: say so on the page, not only in a toast.
+  intake: async () => { const tok = intakeTok(); try { S.intake.view = tok ? await request("GET", `/intake/${tok}`) : { noLink: true }; } catch (err) {
+    if (err.status === 404) S.intake.view = TENANT_MODE ? { deadLink: true } : { noLink: true };
+    else if (TENANT_MODE && !S.intake.view) S.intake.view = { loadFailed: true };  // first load only: keep a page that worked
+    else throw err; } }
 };
 function prioritizeClient(list) { return list.map(c => ({ ...c, _days: c.next_deadline ? Math.round((new Date(c.next_deadline.date + "T12:00:00") - new Date(plusDays(0) + "T12:00:00")) / 864e5) : null })); }
 const CASELESS_LOADERS = ["me", "cases"];
@@ -1527,6 +1560,7 @@ document.addEventListener("click", guarded(async ev => {
   if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
   const a = b.dataset.action, id = b.dataset.id;
   if (a === "logout") return logout();
+  if (a === "reload") return location.reload();
   if (a === "brief") return openBrief();
   if (a === "close-brief") return closeBrief();
   if (a === "photo") return showPhoto(id);  /* #97 */
@@ -1627,7 +1661,7 @@ document.addEventListener("change", guarded(async ev => {
   if (t.dataset.action === "field") { await request("PATCH", `${C}/form-draft/fields/${t.dataset.key}`, { value: t.value.trim() }); await refresh(["form", "gaps"]); }
   if (t.closest("form[data-action=attest]")) { S.attest[t.name] = t.checked; S.pkgError = null; render(); }
   if (t.closest("form[data-action=intake-attest]")) { S.intake[t.name] = t.checked; render(); }
-  if (t.id === "intakeLang") { S.intake.lang = t.value; render(); }
+  if (t.id === "intakeLang") { S.intake.lang = t.value; if (TENANT_MODE) try { localStorage.setItem("tp-intake-lang", t.value); } catch {} render(); }  // bug 8: kept after a reload
   if (t.id === "intakeFiles" && t.files.length) { S.intake.files = [...t.files]; render(); }
   if (t.id === "fileIn" && t.files.length) handleFiles(t.files);
 }));
@@ -1647,7 +1681,11 @@ window.addEventListener("hashchange", () => { S.editing = null; S.drafting = nul
 try { if (localStorage.getItem("tp-dev") === "1") { $("#devToggle").checked = true; document.body.classList.add("dev"); } } catch {}
 (async function boot() {
   try {
-    if (TENANT_MODE) { document.body.classList.add("tenant"); await refresh(["intake"]); return; }
+    if (TENANT_MODE) {
+      document.body.classList.add("tenant");
+      try { const kept = localStorage.getItem("tp-intake-lang"); if (kept && kept in I18N) S.intake.lang = kept; } catch {}  // bug 8
+      await refresh(["intake"]); return;
+    }
     await ensureCase();
     await refresh();
   } catch (err) { if (err.status === 401 && !TENANT_MODE) showLogin(); else toast(err.message); }

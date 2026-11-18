@@ -12,7 +12,7 @@ from app.services.evidence import sniff
 from app.services.evidence.http import read_uploads, upload_limit
 from app.services.evidence.ingest import Upload, ingest
 from app.services.intake_token import find_active
-from app.services.mappers import iso_req, to_intake_view
+from app.services.mappers import answered_since_sent, iso_req, to_intake_view
 
 router = APIRouter()
 
@@ -48,6 +48,7 @@ def _record_answers(
         if gaps.get(gap_id) is None
         or gaps[gap_id].status != "waiting_tenant"
         or gaps[gap_id].tenant_request is None
+        or answered_since_sent(gaps[gap_id])  # already answered: the page no longer shows it
     ]
     if stale:
         raise _refuse(

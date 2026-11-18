@@ -139,3 +139,38 @@ def test_another_orgs_caseworker_cannot_see_the_answer(
     _open_request(client)
     _submit(anon_client, token, answers=[_answer()])
     assert other_org_client.get(f"/api/cases/{CASE}/gaps").status_code == 404
+
+
+def _requests_on_the_page(anon_client, token: str) -> list[str]:
+    r = anon_client.get(f"/api/intake/{token}")
+    assert r.status_code == 200
+    return [req["id"] for req in r.json()["requests"]]
+
+
+def test_an_answered_request_leaves_the_tenant_page(fresh_db, anon_client, client, token):
+    """Demo test bug 8: after sending, a reload showed the answered request again, empty."""
+    _open_request(client)
+    assert "gap_01" in _requests_on_the_page(anon_client, token)
+    assert _submit(anon_client, token, answers=[_answer()]).status_code == 200
+
+    assert "gap_01" not in _requests_on_the_page(anon_client, token)
+    # The caseworker still sees it waiting, with the answer on it.
+    gap = next(g for g in client.get(f"/api/cases/{CASE}/gaps").json() if g["id"] == "gap_01")
+    assert gap["status"] == "waiting_tenant" and gap["answer"]["text"] == ANSWER
+    # A second answer (an old tab) is refused rather than stored twice.
+    again = _submit(anon_client, token, answers=[_answer(text="Again")])
+    assert again.status_code == 422
+
+
+def test_a_request_sent_again_after_an_answer_is_back_on_the_page(
+    fresh_db, anon_client, client, token
+):
+    _open_request(client)
+    assert _submit(anon_client, token, answers=[_answer()]).status_code == 200
+
+    assert client.post("/api/gaps/gap_01/tenant-request").status_code == 200
+
+    assert "gap_01" in _requests_on_the_page(anon_client, token)
+    r = _submit(anon_client, token, answers=[_answer(text="Second answer")])
+    assert r.status_code == 200
+    assert "gap_01" not in _requests_on_the_page(anon_client, token)
