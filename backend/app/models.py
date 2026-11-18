@@ -177,8 +177,23 @@ class GapRow(SQLModel, table=True):
     source_id: str | None = None
     input: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     tenant_request: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    # The tenant's own short answer (issue #95): { text, received_at, evidence_id }. It is also
+    # an evidence item, so the agent cites it like a message; this copy only drives the card.
+    answer: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     status: str = "open"
     resolution_note: str | None = None
+
+
+class ExcerptTranslationRow(SQLModel, table=True):
+    """One cached machine translation of a quoted source excerpt (issue #96). `key` is the
+    sha256 of the language and the excerpt text, so the same quote is paid for once. A
+    translation is a reading aid: it is never cited, filed or used as a quote check."""
+
+    __tablename__ = "excerpt_translation"
+    key: str = Field(primary_key=True)
+    language: str
+    text_en: str
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class LegalSourceRow(SQLModel, table=True):
