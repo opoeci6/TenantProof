@@ -1162,6 +1162,8 @@ function viewPackage() {
   // Same two reasons, same words, as the server's 409 (services/package.py).
   const noAnalysis = !doneRun ? "No analysis has been completed for this case yet. Run the analysis first." : !acceptedN ? "No timeline events have been accepted yet. Review the timeline first." : null;
   const ready = !noAnalysis && !st.blocking && !st.reqMissing && ik.tenant_attested_genuine;
+  // #93: say how many events the build will leave out, before the caseworker clicks Build.
+  const unreviewed = st.total - st.reviewed;
   const allAttest = Object.values(S.attest).every(Boolean);
   const ck = (ok, warn) => `<span class="ck ${ok ? "yes" : warn ? "maybe" : "no"}">${ok ? "✓" : warn ? "!" : "×"}</span>`;
   const pc = packageChecks(st), mark = { yes: "✓", no: "×", maybe: "!", none: "–" };
@@ -1184,6 +1186,7 @@ function viewPackage() {
       <label><input type="checkbox" id="at-remedy" name="remedy_confirmed_with_tenant" ${S.attest.remedy_confirmed_with_tenant ? "checked" : ""}>The tenant confirmed what they are asking for.</label>
       <label><input type="checkbox" id="at-legal" name="explained_not_legal_advice" ${S.attest.explained_not_legal_advice ? "checked" : ""}>I told the tenant this package is prepared information, not a decision about their case.</label></form>
     ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
+    ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
     <div class="btn-row"><button class="btn primary" data-action="build" ${ready && allAttest ? "" : "disabled"}>Build package</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : ""}</div>
     ${manifest}
     <h2 class="section-h">Audit log</h2>
