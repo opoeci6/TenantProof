@@ -38,13 +38,16 @@ Single source of truth. Update the relevant section in every PR.
 | UI fix (open case in the URL) | The open case is kept in the address (`?case=<id>`), so a refresh stays on it instead of opening the first case; an id the user can't see falls back to the caseload's first case; sign-out clears it; mock mode unchanged | PRs #84, #85 (`0aea6d9`) |
 | UI fix (review count) | The page's refreshes run one at a time, in order: fast review clicks could let an older timeline reply land last, so a reviewed event showed as not reviewed and the count was one short (the server was right) | PR #86 (`475bbac`) |
 | M3 fix (re-running the analysis, #88) | A new run no longer adds a full second copy of the timeline. When the timeline step finishes, its events replace the ones nobody worked on; if it fails or stops early, those stay and its partial events go. Accepted, edited and rejected events stay, as do pending ones with a caseworker note or date, and the agent is told not to propose them again. A new run closes a run still waiting for an answer, and a removed event's unsent "Support for" gap goes with it. Built on opoeci6's `a44143f`; checked on three live Haiku 5.5 runs | PR #98 (`83caf5f`, NineJZ356) |
-| UI fix (package result, #90) | After a build the Package page shows a result panel right under the button (large download button, version, who, when, full SHA-256), scrolls to it and says "Package vN built". Once a package exists the button reads "Build a new version"; after a reload the page finds the newest package in the audit log | `NineJZ356/fix-90-package-result` (NineJZ356) |
+| UI fix (package result, #90) | After a build the Package page shows a result panel right under the button (large download button, version, who, when, full SHA-256), scrolls to it and says "Package vN built". Once a package exists the button reads "Build a new version"; after a reload the page finds the newest package in the audit log | PRs #102, #103 (`72a16e8`, NineJZ356) |
+| UI (#93) | The Package page says how many timeline events are not reviewed and are left out of the application draft, with a link to the timeline; it does not block the build | PR #100 (`9fcd2e4`, YCL0609) |
+| M3 (#95, #96) | The tenant can type a short answer to an open request (stored as a tenant text evidence item and shown on the request); the caseworker can show a quoted source in English (one model call per quote, cached, labelled as a machine translation, never cited or filed). New migration `3c9f1a7be204` | PR #99 (`1996dbb`, YCL0609) |
+| UI fix (Accept all, #87) | **Accept all** on the timeline also leaves events the agent flagged as a conflict (their strength can still be single-source), and the toast says how many it accepted and how many it left, with and without a conflict | `opoeci6/fix-87-accept-all` |
 
 Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to #40).
 
 ## In progress
 
-Open PRs (2026-11-18), all into `dev`: only this one (`NineJZ356/fix-90-package-result`).
+Open PRs (2026-11-18), all into `dev`: this one (`opoeci6/fix-87-accept-all`) and #101 (YCL0609: splitting `web/index.html` into `index.html`, `index.css` and `index.js`; not for the submission).
 
 Open issues:
 - **#54 (closed, PR #66):** Lameda12 confirmed Form J (the full title line, edition 2024-01) and Regulations s. 25A(2) on 2026-11-17, so all five sources are confirmed. The Form J confirmation covers the title and URL only: the draft is partial (seven tenant-applicant fields; the caseworker completes the rest; F4 is out of scope). Full coverage is a post-submission issue. leozhang5867 also checked 25A(3B) and (3C): the app's "mail" and "after 4 p.m." wording is fixed in #73.
