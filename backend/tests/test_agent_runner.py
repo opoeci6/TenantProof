@@ -261,7 +261,10 @@ def test_a_tool_that_raises_becomes_unavailable_and_the_run_goes_on(
 
 
 def test_the_step_ends_at_40_tool_calls_with_what_it_has(fresh_db: None, session: Session) -> None:
-    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 60)}
+    # A call that records a result, not a read: the last few calls are kept for these.
+    script = {
+        f"timeline-turn{i}": turn(propose(f"u{i}", title=f"Event {i}")) for i in range(1, 60)
+    }
     provider = RecordingProvider(script)
     row = execute(session, new_run(session), provider)
     step = next(s for s in row.steps if s["key"] == "timeline")
@@ -270,13 +273,33 @@ def test_the_step_ends_at_40_tool_calls_with_what_it_has(fresh_db: None, session
     assert "40 tool calls" in step["summary"] and len(provider.requests) == 40
 
 
+def test_the_last_calls_of_a_step_are_kept_for_recording_the_result(
+    fresh_db: None, session: Session
+) -> None:
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 38)}
+    script["timeline-turn38"] = turn(
+        tool_use("read_evidence", "u38", evidence_id="ev_01", pages="all")
+    )
+    script["timeline-turn39"] = turn(tool_use("finish", "u39", summary="done with what I read"))
+    provider = RecordingProvider(script)
+    row = execute(session, new_run(session), provider)
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    kept = loop.MAX_TOOL_CALLS - loop.RESERVED_READ_CALLS
+    assert len(step["tool_calls"]) == kept + 1  # the reads, then finish
+    assert step["tool_calls"][-1]["tool"] == "finish"
+    assert [c["tool"] for c in step["tool_calls"]].count("read_evidence") == 0
+    refused = json.dumps(provider.requests[-1].messages[-1].content)
+    assert "kept for what records your result" in refused
+    assert step["status"] == "done"
+
+
 def test_the_turn_limit_stays_above_the_call_limit() -> None:
     # One call per turn must reach the call limit before the turn limit stops the step.
     assert loop.MAX_TURNS > loop.MAX_TOOL_CALLS
 
 
 def test_the_calls_of_one_turn_are_cut_at_the_limit(fresh_db: None, session: Session) -> None:
-    uses = [tool_use("list_evidence", f"u{i}") for i in range(45)]
+    uses = [propose(f"u{i}", title=f"Event {i}") for i in range(45)]
     provider = RecordingProvider({"timeline-turn1": turn(*uses)})
     row = execute(session, new_run(session), provider)
     step = next(s for s in row.steps if s["key"] == "timeline")
@@ -561,7 +584,7 @@ def test_two_questions_in_one_turn_still_pair_every_tool_use_with_one_result(
 
 def test_a_budget_cut_keeps_a_pending_question(fresh_db: None, session: Session) -> None:
     # The question is the last call within the limit; the two after it are cut.
-    uses = [tool_use("list_evidence", f"u{i}") for i in range(loop.MAX_TOOL_CALLS - 1)]
+    uses = [propose(f"u{i}", title=f"Event {i}") for i in range(loop.MAX_TOOL_CALLS - 1)]
     uses += [tool_use("ask_caseworker", "ask", question="Hearing date?"),
              tool_use("list_evidence", "late1"), tool_use("list_evidence", "late2")]  # fmt: skip
     row = execute(session, new_run(session), RecordingProvider({"timeline-turn1": turn(*uses)}))

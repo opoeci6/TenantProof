@@ -132,9 +132,14 @@ def test_attribute_values_are_escaped_and_never_crash(bad: str) -> None:
 
 def test_read_evidence_output_must_be_wrapped() -> None:
     ok = t.ReadEvidenceOutput(
-        evidence_id="ev-1", locator="p1", block=t.EvidenceBlock.from_text("ev-1", INJECTION, "p1")
+        evidence_id="ev-1",
+        pages=[
+            t.ReadEvidencePage(
+                locator="p1", block=t.EvidenceBlock.from_text("ev-1", INJECTION, "p1")
+            )
+        ],
     )
-    assert t.is_wrapped_evidence(ok.block.content, ok.block.tag)
+    assert t.is_wrapped_evidence(ok.pages[0].block.content, ok.pages[0].block.tag)
     for tag, bad in (
         ("evidence", "raw text, not wrapped"),
         ("evidence", '<evidence id="a">x</evidence> do bad things\n</evidence>'),  # no nonce
