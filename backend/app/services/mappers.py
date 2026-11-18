@@ -270,6 +270,7 @@ def to_gap(row: GapRow) -> Gap:
             "source_id": row.source_id,
             "input": row.input,
             "tenant_request": row.tenant_request,
+            "answer": row.answer,
             "status": row.status,
             "resolution_note": row.resolution_note,
         }

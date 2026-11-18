@@ -227,6 +227,14 @@ class TenantRequest(BaseModel):
     message_en: str
 
 
+class GapAnswer(BaseModel):
+    """The tenant's own answer to a request (issue #95), also an evidence item."""
+
+    text: str
+    received_at: str
+    evidence_id: str
+
+
 class Gap(BaseModel):
     id: str
     severity: Literal["blocking", "recommended"]
@@ -236,6 +244,7 @@ class Gap(BaseModel):
     source_id: str | None
     input: GapInputText | GapInputChoice | None
     tenant_request: TenantRequest | None
+    answer: GapAnswer | None = None
     status: Literal["open", "waiting_tenant", "resolved", "dismissed"]
     resolution_note: str | None
 
@@ -381,10 +390,34 @@ class PackageRequest(BaseModel):
     attestations: AttestationsIn = Field(default_factory=AttestationsIn)
 
 
+class IntakeAnswer(BaseModel):
+    """The tenant's short answer to one open request (issue #95)."""
+
+    request_id: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1, max_length=1000)
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
 class IntakeSubmit(BaseModel):
     attest_genuine: bool
     consent_share: bool
     language: Language | None = None
+    # Answers ride on the confirmation, so the tenant's "these are genuine" covers them too.
+    answers: list[IntakeAnswer] = Field(default_factory=list, max_length=10)
+
+
+class ExcerptTranslationRequest(BaseModel):
+    """Body of POST /cases/{case_id}/translate-excerpt (issue #96)."""
+
+    excerpt: str = Field(min_length=1, max_length=3000)
+    language: Language | None = None  # defaults to the case's tenant language
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ExcerptTranslation(BaseModel):
+    """A reading aid for a quoted source. Never cited or filed as evidence."""
+
+    text_en: str
 
 
 class Ok(BaseModel):

@@ -60,6 +60,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | PATCH | `/gaps/{gap_id}` | `Gap` | Body: `{ status, resolution_note?, value? }` |
 | POST | `/gaps/{gap_id}/tenant-request` | `Gap` | Caseworker approved the drafted message. Sends it via the intake link; gap → `waiting_tenant`. Optional body `{ message, message_en }`: the request as the caseworker edited it (CONTRACT_CHANGES #37). |
 | POST | `/gaps/{gap_id}/tenant-request/translate` | `{ message }` | Body: `{ message_en }`. Translates the caseworker's English into the tenant's language with one model call. Saves nothing (CONTRACT_CHANGES #37). |
+| POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
 | GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. |
 | PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body: `{ value }` → `user_entered`. |
@@ -86,7 +87,13 @@ When the agent needs something only a person knows, a step becomes `needs_input`
 |---|---|---|---|
 | GET | `/intake/{token}` | `IntakeView` | Only what the tenant needs: org name, first name, unit, language, open requests. |
 | POST | `/intake/{token}/files` | `{ received: number }` | `multipart/form-data`, field `file` (repeatable). |
-| POST | `/intake/{token}/submit` | `{ ok: true }` | Body: `{ attest_genuine: true, consent_share: true, language }` |
+| POST | `/intake/{token}/submit` | `{ ok: true }` | Body: `{ attest_genuine: true, consent_share: true, language, answers? }`. `answers` is at most 10 items of `{ request_id, text }` (text 1–1000 characters), each for an open `waiting_tenant` request on this case; a bad request id is 422 `{ detail: { reasons } }` and nothing is saved. Each answer is stored as a tenant evidence item (TXT, kind `messages`, locators `message 1`…) and recorded on the gap as `answer`; it never fills a form field by itself (CONTRACT_CHANGES #95). |
+
+A tenant answer is text, not a file: the server makes a TXT evidence item of it, so the agent cites it like a message line and the caseworker can check it. It rides on the same submit as the files, is covered by the genuine-and-consent confirmation, and shares the submit endpoint's rate limit. The answer is never written into a form field; confirming or copying it stays the caseworker's decision. The caseworker sees it on the gap card with a **Show in English** button (the excerpt translation below), labelled a machine translation.
+
+### Reading aid: translating a quoted source
+
+`POST /cases/{case_id}/translate-excerpt` is for the caseworker only. The quote is treated as third-party text: it goes to the model inside an evidence block, never as instructions, and the reply is only shown next to the quote with the label "Machine translation, not the evidence". Quote checks, citations, the form draft and the filing package keep using the original text only. In mock mode the UI says translation is not available.
 
 ---
 
@@ -194,6 +201,11 @@ type Gap = {
     language: string;
     message: string;                     // in the tenant's language
     message_en: string;                  // English for the caseworker
+  };
+  answer: null | {                       // the tenant typed this on the intake page (CONTRACT_CHANGES #95)
+    text: string;
+    received_at: string;
+    evidence_id: string;                 // the evidence item the answer was stored as
   };
   status: "open" | "waiting_tenant" | "resolved" | "dismissed";
   resolution_note: string | null;
