@@ -155,6 +155,28 @@ def test_the_command_updates_every_case_with_that_url_and_nothing_else(
     assert session.get(LegalSourceRow, "src_unknown").verify_status == "unverified"
 
 
+def test_a_row_on_an_old_address_is_moved_and_checked(fresh_db, session, monkeypatch):
+    """A case made before the corpus moved a document keeps the old URL. Matching by URL alone
+    never reached it, so a confirmed source stayed "Not verified yet" for good."""
+    entries = _confirmed(monkeypatch)
+    rta = next(e for e in entries if e.id == "ns-rta-statutory-conditions")
+    session.add(LegalSourceRow(
+        id="src_old", case_id="case_002", position=0, title=rta.title.upper(), kind="statute",
+        url="https://old.example.test/rta.pdf", verify_status="unverified", used_for="old",
+    ))  # fmt: skip
+    session.commit()
+
+    verify.run(serving(f"<p>{rta.excerpt}</p>"), session)
+    session.commit()
+    session.expire_all()
+
+    row = session.get(LegalSourceRow, "src_old")
+    assert row is not None
+    assert row.url == rta.url
+    assert row.verify_status == "unchanged"
+    assert row.last_verified_at is not None
+
+
 def test_the_command_logs_one_line_per_affected_case(fresh_db, session, monkeypatch):
     entries = _confirmed(monkeypatch)
     rta = next(e for e in entries if e.id == "ns-rta-statutory-conditions")

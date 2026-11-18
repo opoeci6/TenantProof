@@ -138,6 +138,32 @@ def test_the_titles_and_used_for_are_refreshed_from_the_corpus(fresh_db, session
     assert refreshed.id == "src_01"
 
 
+OLD_FORM_J_URL = "https://beta.novascotia.ca/sites/default/files/documents/2-419/form-j.pdf"
+
+
+def test_a_row_on_an_old_address_moves_to_the_corpus_address(fresh_db, session):
+    """A case made before the corpus moved Form J kept the old URL, which the source check never
+    reached: the row stayed "Not verified yet" for a confirmed source."""
+    case = session.get(CaseRow, DEMO)
+    form_j = session.get(LegalSourceRow, "src_03")
+    assert form_j is not None
+    form_j.url = OLD_FORM_J_URL
+    session.add(form_j)
+    session.commit()
+
+    added, _, _ = rules.ensure_case_sources(session, case)
+    session.commit()
+    session.expire_all()
+
+    entry = corpus.by_id("ns-form-j")
+    assert entry is not None
+    moved = session.get(LegalSourceRow, "src_03")
+    assert moved is not None
+    assert moved.url == entry.url
+    assert not any(r.title == entry.title and r.id != "src_03" for r in rows(session, DEMO))
+    assert added == 2  # the same two a fresh seed gets: no second Form J row
+
+
 def test_the_deadline_comes_from_the_hearing_date(fresh_db, session):
     case = session.get(CaseRow, LIVE)
     case.hearing_date = "2026-11-21"
