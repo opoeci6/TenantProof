@@ -286,7 +286,7 @@ def test_the_step_ends_at_the_tool_budget(fresh_db, session):
 
     step = next(s for s in done.steps if s["key"] == "gaps")
     assert len(step["tool_calls"]) == loop.MAX_TOOL_CALLS == 40
-    assert step["status"] == "done" and step["summary"].startswith("Stopped early")
+    assert step["status"] == "incomplete" and step["summary"].startswith("Stopped early")
 
 
 def test_open_blocking_gaps_make_the_run_needs_review(fresh_db, session):
