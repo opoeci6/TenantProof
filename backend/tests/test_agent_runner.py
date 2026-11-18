@@ -560,7 +560,8 @@ def test_two_questions_in_one_turn_still_pair_every_tool_use_with_one_result(
 
 
 def test_a_budget_cut_keeps_a_pending_question(fresh_db: None, session: Session) -> None:
-    uses = [tool_use("list_evidence", f"u{i}") for i in range(24)]
+    # The question is the last call within the limit; the two after it are cut.
+    uses = [tool_use("list_evidence", f"u{i}") for i in range(loop.MAX_TOOL_CALLS - 1)]
     uses += [tool_use("ask_caseworker", "ask", question="Hearing date?"),
              tool_use("list_evidence", "late1"), tool_use("list_evidence", "late2")]  # fmt: skip
     row = execute(session, new_run(session), RecordingProvider({"timeline-turn1": turn(*uses)}))
@@ -568,7 +569,7 @@ def test_a_budget_cut_keeps_a_pending_question(fresh_db: None, session: Session)
     assert step["status"] == "needs_input" and step["summary"] == "Hearing date?"
     pending = step["checkpoint"]["pending"]
     skipped = {b["tool_use_id"] for b in pending["results"] if b["is_error"]}
-    assert skipped == {"late1", "late2"} and len(pending["results"]) == 26
+    assert skipped == {"late1", "late2"} and len(pending["results"]) == loop.MAX_TOOL_CALLS + 1
 
 
 class Boom(RecordingProvider):
