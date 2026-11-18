@@ -85,6 +85,29 @@ def test_mixed_text_extracts_back_out_of_rendered_pdf():
     assert "房东" in text and "哈利法克斯" in text
 
 
+@pytest.mark.parametrize(("prefix", "word"), [
+    ("Unit 2", "since"),
+    ("texts attached", "separately"),
+    ("房东 notified", "Harbour"),
+])
+def test_pdf_wraps_at_a_space_before_an_english_word(prefix, word):
+    pdf = new_pdf()
+    line_width = pdf.get_string_width(f"{prefix} {word[0]}") + 2 * pdf.c_margin
+    pdf.set_right_margin(pdf.w - pdf.l_margin - line_width)
+    _write(pdf, f"{prefix} {word}")
+    lines = pdf_text(bytes(pdf.output())).splitlines()
+    assert [" ".join(line.split()) for line in lines] == [prefix, word]
+
+
+@pytest.mark.parametrize("token", ["漏水通知" * 25, "a" * 200])
+def test_pdf_can_wrap_an_unspaced_sequence(token):
+    pdf = new_pdf()
+    _write(pdf, token)
+    lines = pdf_text(bytes(pdf.output())).splitlines()
+    assert len(lines) > 1
+    assert "".join(lines) == token
+
+
 @pytest.mark.parametrize(
     "name", ["NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "NotoSansSC-Regular.ttf"]
 )

@@ -10,6 +10,7 @@ from app.models import CaseRow, FormFieldRow, GapRow, TimelineEventRow, UserRow
 from app.schemas import FieldPatch, GapPatch, TimelineEventPatch
 from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
+from app.services.form_values import is_iso_calendar_date, monthly_rent_amount
 from app.services.legal.gap_checks import UNATTESTED_TITLE
 from app.services.stage import refresh_stage
 from app.services.verifier import normalize
@@ -78,6 +79,12 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
     caseworker saves; clearing a drafted field marks it so the agent does not draft it again.
     Caller adds and commits."""
     if value != (field.value or ""):
+        # Existing verbatim drafts can still be confirmed, and an empty value clears the field.
+        if value:
+            if field.key == "monthly_rent" and monthly_rent_amount(value) is None:
+                raise _bad("Enter monthly rent as a positive CAD amount with up to two decimals")
+            if field.key == "tenancy_start" and not is_iso_calendar_date(value):
+                raise _bad("Enter a valid tenancy start date in YYYY-MM-DD format")
         wanted = normalize(value)
         field.sources = [
             s for s in field.sources

@@ -25,7 +25,6 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from fpdf import FPDF
-from fpdf.enums import WrapMode
 from PIL import Image
 from sqlmodel import Session, col, select
 
@@ -33,6 +32,7 @@ from app.models import CaseRow, EvidenceRow, FormFieldRow, GapRow, PackageRow, U
 from app.schemas import Attestations, Package, PackageFile
 from app.services import activity, storage
 from app.services.evidence import gps, sniff  # also registers the HEIC opener
+from app.services.form_values import monthly_rent_amount
 from app.services.gating import MissingField, OpenGap, package_blockers
 from app.services.mappers import (
     OPEN_GAP,
@@ -150,10 +150,10 @@ def new_pdf(language: str = "en") -> FPDF:
 
 def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: float = 1.5) -> None:
     pdf.set_font("NotoSans", "B" if bold else "", size)
-    # CHAR wrapping: Chinese text has no spaces to break on.
+    # Word wrapping still breaks long runs without spaces, including Chinese text.
     pdf.multi_cell(
         0, size * 0.5 + 1.5, pdf_text(pdf, text),
-        new_x="LMARGIN", new_y="NEXT", wrapmode=WrapMode.CHAR,
+        new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(gap)
 
@@ -167,7 +167,10 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
     _write(pdf, f"Prepared by {prepared_by} on {built_at:%Y-%m-%d %H:%M} UTC", gap=4)
     for field in draft.fields:
         _write(pdf, field.label, bold=True, gap=0)
-        _write(pdf, field.value or "(not filled in)")
+        value = field.value or "(not filled in)"
+        if field.key == "monthly_rent" and (amount := monthly_rent_amount(value)) is not None:
+            value = f"CAD {amount:,.2f}"
+        _write(pdf, value)
     _write(pdf, "Summary of events", bold=True, size=12, gap=2)
     _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())

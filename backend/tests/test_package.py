@@ -72,6 +72,15 @@ def pdf_text(data: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages)
 
 
+def test_application_pdf_labels_rent_with_currency(fresh_db, client):
+    make_ready(client)
+    r = client.patch(f"/api/cases/{CASE}/form-draft/fields/monthly_rent", json={"value": "1200"})
+    assert r.status_code == 200, r.text
+    build(client)
+    entries = unzip(download(client).content)
+    assert "CAD 1,200.00" in pdf_text(entries["application_draft.pdf"])
+
+
 def package_rows(session) -> list[PackageRow]:
     session.expire_all()
     return list(session.exec(
