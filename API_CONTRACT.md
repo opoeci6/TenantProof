@@ -50,6 +50,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | POST | `/cases/{case_id}/intake-link` | `Intake` | Creates or re-sends the tenant link. |
 | GET | `/cases/{case_id}/evidence` | `EvidenceItem[]` | |
 | POST | `/cases/{case_id}/evidence` | `EvidenceItem` | Caseworker upload, `multipart/form-data`, field `file`. |
+| GET | `/cases/{case_id}/evidence/{evidence_id}/preview` | image (`image/jpeg` or `image/png`) | The photo as the caseworker sees it: the copy made at upload without EXIF or GPS, never the original (a HEIC's copy is a JPEG). `Cache-Control: private, no-cache` with `ETag: "<sha256 of the copy>"`, so the browser checks the session on every view and an unchanged copy answers 304 without its bytes. 404 for another org's case, an item in another case, or an item with `has_preview: false`; 401 when not signed in (CONTRACT_CHANGES #97). |
 | POST | `/cases/{case_id}/runs` | `Run` | Starts analysis, returns immediately with `status: "running"`. |
 | GET | `/cases/{case_id}/runs/latest` | `Run` | 404 if none. |
 | GET | `/runs/{run_id}` | `Run` | UI polls every ~1 s until `status` is not `running`. |
@@ -162,6 +163,7 @@ type EvidenceItem = {
   metadata_stripped_for_ai: boolean;
   processing: "queued" | "processing" | "done" | "failed";
   error: string | null;
+  has_preview: boolean;                  // a copy without EXIF/GPS is at .../evidence/{id}/preview (#97)
 };
 
 type RunStep = {
