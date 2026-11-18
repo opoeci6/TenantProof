@@ -16,14 +16,22 @@ RUN RES_OPTIONS=no-aaaa pip install --no-cache-dir "uv>=0.11,<0.12"
 # than uv's default of 3, with a longer wait per request, instead of failing the whole build.
 ENV UV_HTTP_RETRIES=10 UV_HTTP_TIMEOUT=60
 
-WORKDIR /app/backend
-COPY backend/pyproject.toml backend/uv.lock ./
-RUN RES_OPTIONS=no-aaaa uv sync --frozen --no-dev --no-install-project
-
-COPY backend/ ./
-COPY web/ /app/web/
-
-RUN useradd --create-home app && mkdir -p /data/storage && chown -R app:app /app /data
+# The app runs as `app`. Its folders are made and owned up front and everything is copied in
+# with that owner, so no `chown -R /app` at the end stores a second copy of the app in another
+# layer (about 530 MB on every build).
+RUN useradd --create-home app \
+    && mkdir -p /app/backend /app/web /data/storage \
+    && chown app:app /app /app/backend /app/web /data /data/storage
 USER app
+
+WORKDIR /app/backend
+COPY --chown=app:app backend/pyproject.toml backend/uv.lock ./
+# --no-cache: uv's download cache would otherwise stay in the image (about 430 MB) and is
+# never used again.
+RUN RES_OPTIONS=no-aaaa uv sync --frozen --no-dev --no-install-project --no-cache
+
+COPY --chown=app:app backend/ ./
+COPY --chown=app:app web/ /app/web/
+
 EXPOSE 8000
 CMD ["uv", "run", "--no-dev", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
