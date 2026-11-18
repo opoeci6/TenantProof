@@ -19,6 +19,7 @@ from app.models import (
     ActivityRow,
     CaseRow,
     EvidenceRow,
+    ExcerptTranslationRow,
     FormFieldRow,
     GapRow,
     IntakeTokenRow,
@@ -39,7 +40,7 @@ OTHER_ORG = {"id": "org_harbourside", "name": "Harbourside Tenant Legal Clinic"}
 OTHER_USER = {"id": "usr_harbourside", "name": "Jo Park", "email": "jo@harbourside-clinic.test"}
 CHILD_TABLES = (
     LoginSessionRow, PackageRow, IntakeTokenRow, ActivityRow, FormFieldRow, LegalSourceRow,
-    GapRow, TimelineEventRow,
+    GapRow, TimelineEventRow, ExcerptTranslationRow,
     RunRow, EvidenceRow, CaseRow, UserRow, OrgRow,
 )
 RUN_STEPS = [

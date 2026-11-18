@@ -71,7 +71,7 @@ def test_the_answer_is_logged_and_the_case_is_attested(
     assert gap is not None and gap.answer is not None
     evidence = session.get(EvidenceRow, gap.answer["evidence_id"])
     assert evidence is not None
-    actions = [a.action for a in client.get(f"/api/cases/{CASE}/activity").json()]
+    actions = [a["action"] for a in client.get(f"/api/cases/{CASE}/activity").json()]
     assert f"Uploaded {evidence.label} (answer.txt)" in actions
     assert "Confirmed the files are genuine and agreed to share them" in actions
 
