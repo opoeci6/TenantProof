@@ -385,6 +385,11 @@ def test_the_deadline_defaults_to_the_run_budget_setting(
 
 
 def test_a_deadline_keeps_events_proposed_before_it(fresh_db: None, session: Session) -> None:
+    # A first analysis: with earlier unreviewed events those would stay instead (#88).
+    for event in session.exec(select(TimelineEventRow).where(TimelineEventRow.case_id == CASE)):
+        if event.review_status == "pending":
+            session.delete(event)
+    session.commit()
     script = {"timeline-turn1": turn(propose("u1")),
               "timeline-turn2": turn(tool_use("finish", "u2", summary="s"))}  # fmt: skip
     provider = SlowProvider(script, delay=0.25)
