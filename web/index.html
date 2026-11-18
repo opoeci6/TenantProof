@@ -885,7 +885,21 @@ const fmtTime = s => { if (!s) return "—"; const d = new Date(s); return isNaN
 const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1e3)) + " KB";
 const evLabel = id => (S.evidence.find(e => e.id === id) || {}).label || id;
 const tpl = (s, v) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 2600); }
+function toast(msg, ms = 2600) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, ms); }
+/* uiErrors: a click, form or field change whose request fails says so (demo test bug 2). An
+   expired sign-in goes back to the sign-in page; no reply at all is a connection problem. */
+function uiFailed(err) {
+  if (err && err.status === 401 && !TENANT_MODE) return showLogin("Your sign-in has expired. Sign in again.");
+  // fetch itself failed: Chrome says "Failed to fetch", Firefox "NetworkError…", Safari "Load failed".
+  const offline = err instanceof TypeError && /fetch|network|load failed/i.test(err.message);
+  if (!(err && err.status) && !offline) console.error(err);  // a bug in this page, not a server reply
+  const why = err && err.status ? String(err.message || "Request failed")
+    : offline ? "Couldn't reach the server. Check your connection and try again."
+    : "Something went wrong. Reload the page and try again.";
+  toast(why.charAt(0).toUpperCase() + why.slice(1), 6000);
+}
+const guarded = handler => ev => { handler(ev).catch(uiFailed); };  // called synchronously: preventDefault still works
+/* uiErrors:end */
 const route = () => { if (TENANT_MODE) return "intake"; const h = location.hash.slice(1); return ROUTES.includes(h) ? h : "cases"; };
 
 function contract(key, data) {
@@ -1446,7 +1460,9 @@ let poller = null;
 function pollRun() {
   clearInterval(poller);
   poller = setInterval(async () => {
-    S.run = await request("GET", `/runs/${S.run.id}`);
+    if (!S.run) { clearInterval(poller); return; }  // the case was closed meanwhile
+    try { S.run = await request("GET", `/runs/${S.run.id}`); }
+    catch (err) { if (err.status === 401 || err.status === 404) { clearInterval(poller); uiFailed(err); } return; }  // otherwise try again next tick
     if (S.run.status !== "running") {
       clearInterval(poller);
       const asked = askStep(S.run) !== null;
@@ -1506,7 +1522,7 @@ function copyFallback(b) {
   range.selectNodeContents(code); sel.removeAllRanges(); sel.addRange(range);
   toast("Couldn't copy automatically. The link is selected: press Ctrl+C (⌘C on a Mac).");
 }
-document.addEventListener("click", async ev => {
+document.addEventListener("click", guarded(async ev => {
   const b = ev.target.closest("[data-action]");
   if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
   const a = b.dataset.action, id = b.dataset.id;
@@ -1529,8 +1545,9 @@ document.addEventListener("click", async ev => {
   if (a === "cancel-edit") { S.editing = null; render(); }
   if (a === "accept-all") {  /* #87: conflict events are left too */
     const plan = acceptAllPlan(S.timeline);
-    for (const id of plan.accept) await request("PATCH", `/timeline/${id}`, { review_status: "accepted" });
-    toast(acceptAllToast(plan)); await refresh(["timeline", "form"]);
+    // If one fails, the page still shows the ones that were accepted before the error toast.
+    try { for (const id of plan.accept) await request("PATCH", `/timeline/${id}`, { review_status: "accepted" }); toast(acceptAllToast(plan)); }
+    finally { await refresh(["timeline", "form"]); }
   }
   if (a === "draft") { const g = S.gaps.find(x => x.id === id); if (g && g.tenant_request) { startDraft(g); render(); const el = document.getElementById(`draft-en-${id}`); el && el.focus(); } }  /* #48 */
   if (a === "cancel-draft") { S.drafting = null; S.draftEdit = null; S.draftError = ""; render(); }
@@ -1556,8 +1573,8 @@ document.addEventListener("click", async ev => {
     } catch (err) { toast(err.message); }
   }
   if (a === "intake-reset") { S.intake = { ...S.intake, files: [], answers: {}, attest: false, consent: false, sent: false }; render(); }
-});
-document.addEventListener("submit", async ev => {
+}));
+document.addEventListener("submit", guarded(async ev => {
   const f = ev.target; if (!f.dataset.action) return; ev.preventDefault();
   const id = f.dataset.id, a = f.dataset.action;
   if (a === "create-case") return createCase(f);  /* #41 */
@@ -1592,7 +1609,7 @@ document.addEventListener("submit", async ev => {
   }
   if (a === "resolve-text") { const v = new FormData(f).get("value").trim(); if (!v) return; await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v, resolution_note: `Saved: ${v}` }); toast("Saved to the form draft"); await refresh(["gaps", "form", "intake"]); }
   if (a === "resolve-choice") { const v = new FormData(f).getAll("opt"); if (!v.length) { toast("Pick at least one option"); return; } await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v.join("; "), resolution_note: `Tenant's choice: ${v.join("; ")}` }); toast("Saved to the form draft"); await refresh(["gaps", "form"]); }
-});
+}));
 document.addEventListener("input", ev => {
   const t = ev.target;
   if (!t.dataset || t.dataset.action !== "intake-answer") return;
@@ -1604,7 +1621,7 @@ document.addEventListener("input", ev => {
     btn.disabled = !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
   }
 });
-document.addEventListener("change", async ev => {
+document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
   if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
   if (t.dataset.action === "field") { await request("PATCH", `${C}/form-draft/fields/${t.dataset.key}`, { value: t.value.trim() }); await refresh(["form", "gaps"]); }
@@ -1613,7 +1630,7 @@ document.addEventListener("change", async ev => {
   if (t.id === "intakeLang") { S.intake.lang = t.value; render(); }
   if (t.id === "intakeFiles" && t.files.length) { S.intake.files = [...t.files]; render(); }
   if (t.id === "fileIn" && t.files.length) handleFiles(t.files);
-});
+}));
 async function handleFiles(files) {
   try { await uploadFiles(`${C}/evidence`, [...files]); } catch (err) { toast(err.message); return; } /* WS1: an error toast is not overwritten */
   toast(`${plural(files.length, "file")} added. Run the analysis again to include them.`);
