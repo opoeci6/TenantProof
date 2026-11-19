@@ -325,16 +325,12 @@ def index_section(text: str) -> str:
     return text[text.index("3. Evidence index") : text.index("4. Gaps and items")]
 
 
-def test_the_evidence_index_is_sorted_by_type_then_date(fresh_db: None, client) -> None:
-    section = Text(index_section(brief(client)))
-    names = ["lease_2026.pdf", "messages_landlord.txt", "dehumidifier_receipt.pdf", "IMG_4412.HEIC"]
-    positions = [section.index(name) for name in names]  # lease, messages, receipt, photo
-    assert positions == sorted(positions)
-
-
-def test_photos_in_the_index_are_ordered_by_capture_time(fresh_db: None, client) -> None:
-    section = Text(index_section(brief(client)))
-    assert section.index("IMG_4412.HEIC") < section.index("IMG_4419.HEIC")  # 21:03 before 21:05
+def test_the_evidence_index_is_in_exhibit_order(fresh_db: None, client) -> None:
+    # #127: E-01, E-02, ... rather than grouped by file type, so the index matches the labels.
+    section = index_section(brief(client))
+    labels = re.findall(r"\bE-\d+\b", section)
+    assert labels == sorted(labels, key=lambda label: int(label.split("-")[1]))
+    assert len(labels) == len(set(labels))
 
 
 def test_each_file_shows_its_fingerprint_and_how_often_it_is_cited(

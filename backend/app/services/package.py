@@ -308,7 +308,10 @@ def manifest_pdf(
 ) -> bytes:
     pdf = new_pdf(case.tenant_language)
     _write(pdf, "Evidence manifest", bold=True, size=16, gap=3)
-    _write(pdf, f"Case: {case.title}", gap=4 if case.tenant_language != "hi" else 1)
+    _write(pdf, f"Case: {case.title}", gap=2 if case.tenant_language != "hi" else 1)
+    # #127: the receipt time is the time the whole upload arrived, so four files sent together
+    # share it. Say so rather than leave it looking like a mistake.
+    _write(pdf, "Files uploaded together share one receipt time.", size=8, gap=4)
     if case.tenant_language == "hi":
         _write(pdf, HINDI_NOTE, size=9, gap=4)
     for line in warning:
@@ -317,8 +320,14 @@ def manifest_pdf(
         _write(pdf, "No evidence files are listed.")
     for ev in evidence:
         _write(pdf, f"{ev.label}  {ev.filename}", bold=True, gap=0)
-        _write(pdf, f"Received {iso_req(ev.received_at)} from {ev.uploaded_by}", gap=0)
+        received = ev.received_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        _write(pdf, f"Received {received} from {ev.uploaded_by}", gap=0)
         filed = ev_files[ev.id]
+        removed = any(item.location_removed for item in filed)
+        gps = bool((ev.metadata_ or {}).get("gps_present"))
+        location = ("removed before filing" if removed else
+                    "none in the file" if not gps else "could not be removed; see below")
+        _write(pdf, f"Location data: {location}", size=8, gap=0)
         heic = ev.mime == sniff.HEIC
         # A HEIC is received as HEIC but filed only as its JPG: "Filed as", not "Also as".
         copies = filed if heic else filed[1:]
@@ -365,6 +374,7 @@ def build_zip(
     manifest: dict[str, Any] = {
         "case_id": case.id, "version": version, "built_at": iso_req(built_at),
         "prepared_by": prepared_by,
+        "received_note": "Files uploaded together share one receipt time.",
         "tenant_attested_genuine_at": iso_req(case.tenant_attested_at)
         if case.tenant_attested_at else None,
         "caseworker_attestations": att.model_dump(),
@@ -378,7 +388,10 @@ def build_zip(
             {"label": e.label, "filename": e.filename, "sha256": e.sha256,
              "received_at": iso_req(e.received_at), "uploaded_by": e.uploaded_by,
              "in_zip": ev_files[e.id][0].name if ev_files[e.id] else None,
-             "location_data_removed": any(f.location_removed for f in ev_files[e.id]),
+             # #127: say both whether the file had location data and whether the filed copy had
+             # it removed; the old single boolean was false and ambiguous when there was none.
+             "location": {"present": bool((e.metadata_ or {}).get("gps_present")),
+                          "removed": any(f.location_removed for f in ev_files[e.id])},
              "rendition": {"path": ev_files[e.id][1].name, "sha256": ev_files[e.id][1].sha256}
              if len(ev_files[e.id]) > 1 and e.mime != sniff.HEIC else None}
             for e in evidence

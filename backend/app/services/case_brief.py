@@ -8,6 +8,7 @@ only called supported when its words are found in an upload. Facts the clinic or
 entered are labelled as such. `caseworker_note` is never read here, so the brief can be shared
 without leaking an internal note. Nothing is stored and nothing is changed."""
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,9 +38,33 @@ from app.services.package import (
 from app.services.verifier import normalize, verify_citation
 
 NEEDS = "NEEDS CASEWORKER VERIFICATION"
-KIND_ORDER = ["lease", "letter", "messages", "receipt", "photo", "document", "other"]
 PENDING_NOTE = "Not yet reviewed by a caseworker"
 REVIEW = {"accepted": "Accepted", "edited": "Edited", "pending": PENDING_NOTE}
+# Readable words for the values stored on the case and its events (#127). The brief is read by a
+# person, not a program: `single_source` and `en` mean nothing to a caseworker on paper.
+STRENGTH = {
+    "corroborated": "corroborated (two or more independent files agree)",
+    "single_source": "single source (one file supports it)",
+    "needs_support": "needs support (the files are weak or disagree)",
+}
+BASIS = {
+    "exif": "photo metadata",
+    "message_timestamp": "message time",
+    "document_text": "document text",
+    "filename": "filename, inferred",
+    "user": "entered by the caseworker",
+}
+LANGUAGE = {
+    "en": "English", "zh": "Simplified Chinese", "fr": "French", "es": "Spanish",
+    "ru": "Russian", "hi": "Hindi", "ar": "Arabic",
+}
+
+
+def _label_no(ev: EvidenceRow) -> int:
+    """The exhibit number (E-04 -> 4), so the index reads E-01, E-02, ... rather than grouping by
+    file type. Rows without a number sort last."""
+    match = re.search(r"(\d+)$", ev.label)
+    return int(match.group(1)) if match else 10**9
 
 
 def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: float = 1.5) -> None:
@@ -113,7 +138,8 @@ def _summary(doc: Doc, case: CaseRow, evidence, pages, events, gaps) -> None:
     fact("Tenant", case.tenant_name, _find_in_uploads(case.tenant_name, evidence, pages))
     fact("Rental unit", case.unit, _find_in_uploads(case.unit, evidence, pages))
     doc.add(f"Case: {case.title}  [case record, entered by the clinic]")
-    doc.add(f"Tenant's language: {case.tenant_language}  [case record]")
+    language = LANGUAGE.get(case.tenant_language, case.tenant_language)
+    doc.add(f"Tenant's language: {language}  [case record]")
     if case.hearing_date:
         doc.add(f"Hearing date: {case.hearing_date}  [entered by a caseworker, not from an upload]")
     elif case.no_hearing_yet:
@@ -165,7 +191,8 @@ def _timeline(doc: Doc, events, by_id, pages) -> None:
         doc.add(f"{shown}  {event.title}", "b")
         doc.add(
             f"{REVIEW.get(event.review_status, event.review_status)}. Strength: "
-            f"{event.strength}. Date taken from: {basis or 'not stated'}.",
+            f"{STRENGTH.get(event.strength, event.strength)}. Date taken from: "
+            f"{BASIS.get(basis, basis) if basis else 'not stated'}.",
             "small",
         )
         doc.add(event.description)
@@ -183,15 +210,9 @@ def _evidence(doc: Doc, evidence, events) -> None:
         for src in event.sources:
             cited[src.get("evidence_id")] += 1
 
-    def order(ev: EvidenceRow) -> tuple[int, str]:
-        kind = _kind(ev)
-        meta = (ev.metadata_ or {}).get("captured_at") or ""
-        return (KIND_ORDER.index(kind) if kind in KIND_ORDER else len(KIND_ORDER),
-                meta or ev.received_at.isoformat())
-
     if not evidence:
         doc.add("No files uploaded.")
-    for ev in sorted(evidence, key=order):
+    for ev in sorted(evidence, key=lambda row: (_label_no(row), row.position)):
         meta = ev.metadata_ or {}
         captured = f", captured {meta['captured_at']}" if meta.get("captured_at") else ""
         used = cited.get(ev.id, 0)
