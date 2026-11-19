@@ -1,7 +1,7 @@
 """Caseworker mutations: timeline events, gaps, form fields, tenant requests, tenant submit.
 Every function logs activity and refreshes the stage; the router commits."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import HTTPException, status
 from sqlmodel import Session, select
@@ -10,7 +10,7 @@ from app.models import CaseRow, FormFieldRow, GapRow, TimelineEventRow, UserRow
 from app.schemas import FieldPatch, GapPatch, TimelineEventPatch
 from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
-from app.services.form_values import is_iso_calendar_date, monthly_rent_amount
+from app.services.form_values import MIN_TENANCY_YEAR, is_tenancy_start_date, monthly_rent_amount
 from app.services.legal.gap_checks import UNATTESTED_TITLE
 from app.services.stage import refresh_stage
 from app.services.verifier import normalize
@@ -83,8 +83,13 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
         if value:
             if field.key == "monthly_rent" and monthly_rent_amount(value) is None:
                 raise _bad("Enter monthly rent as a positive CAD amount with up to two decimals")
-            if field.key == "tenancy_start" and not is_iso_calendar_date(value):
-                raise _bad("Enter a valid tenancy start date in YYYY-MM-DD format")
+            if field.key == "tenancy_start":
+                current_year = date.today().year
+                if not is_tenancy_start_date(value, current_year):
+                    raise _bad(
+                        f"Enter a valid tenancy start date in YYYY-MM-DD format "
+                        f"with a year from {MIN_TENANCY_YEAR} to {current_year}"
+                    )
         wanted = normalize(value)
         field.sources = [
             s for s in field.sources

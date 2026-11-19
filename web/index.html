@@ -1230,8 +1230,10 @@ async function sendDraft(id) {
 /* editRequest:end */
 
 /* #122: input controls for the form draft and its missing-info fields. */
+const minTenancyDate = "1900-01-01";
+const maxTenancyDate = `${new Date().getFullYear()}-12-31`;
 function caseFieldAttrs(key) {
-  if (key === "tenancy_start") return 'type="date" min="0001-01-01" max="9999-12-31"';
+  if (key === "tenancy_start") return `type="date" min="${minTenancyDate}" max="${maxTenancyDate}"`;
   if (key === "monthly_rent") return 'inputmode="decimal"';
   return "";
 }
@@ -1284,11 +1286,13 @@ function viewForm() {
     const saved = x.value || "";
     const day = x.key === "tenancy_start" ? new Date(saved + "T00:00:00Z") : null;
     const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
-      || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved);
+      || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
+      || saved < minTenancyDate || saved > maxTenancyDate);
+    const confirm = x.status === "needs_confirmation" && saved && !day;
     return `<div class="frow"><label class="fl" for="fld-${x.key}">${esc(x.label)}${x.key === "monthly_rent" ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
-      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="field" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
+      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="${day ? "date-field" : "field"}" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
-      <div class="fs">${stPill[x.status]}${x.status === "needs_confirmation" && x.value ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}${legacyDate ? `<button class="btn small" type="button" data-action="clear-date">Clear date</button>` : ""}</div></div>`;
+      <div class="fs">${stPill[x.status]}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
   }).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
@@ -1599,15 +1603,10 @@ document.addEventListener("click", guarded(async ev => {
     const input = document.getElementById(`fld-${key}`);
     if (!input.reportValidity()) return;
     const saved = S.form.fields.find(field => field.key === key)?.value;
-    const value = input.value.trim() || (input.type === "date" ? saved : "");
+    const value = input.value.trim();
     if (!value) return;
     if (!validCaseField(key, value, saved)) return;
     await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
-    await refresh(["form", "gaps"]);
-    return;
-  }
-  if (a === "clear-date") {
-    await request("PATCH", `${C}/form-draft/fields/tenancy_start`, { value: "" });
     await refresh(["form", "gaps"]);
     return;
   }
@@ -1693,6 +1692,14 @@ document.addEventListener("input", ev => {
     btn.disabled = !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
   }
 });
+/* A native date emits change while the user is still editing its individual segments. */
+document.addEventListener("focusout", guarded(async ev => {
+  const input = ev.target;
+  if (input.dataset.action !== "date-field" || input.contains(ev.relatedTarget)) return;
+  if (!input.reportValidity() || input.value === input.defaultValue) return;
+  await request("PATCH", `${C}/form-draft/fields/${input.dataset.key}`, { value: input.value });
+  await refresh(["form", "gaps"]);
+}));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
   if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }

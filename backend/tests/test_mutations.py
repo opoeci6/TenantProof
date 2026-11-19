@@ -3,6 +3,7 @@ form fields. Every success logs exactly one caseworker activity entry; every by-
 org-scoped; rejected and pending events never reach the form narrative.
 Stage and caseload behaviour lives in test_stage_transitions.py."""
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -411,6 +412,8 @@ def test_setting_field_trims_value_and_resolves_open_gap(fresh_db, client):
     ("tenancy_start", "tomorrow"),
     ("tenancy_start", "2026-02-29"),
     ("tenancy_start", "20260501"),
+    ("tenancy_start", "1899-12-31"),
+    ("tenancy_start", f"{date.today().year + 1}-01-01"),
 ])
 def test_invalid_structured_field_is_422_and_changes_nothing(fresh_db, client, key, value):
     before = _snapshot(client)
@@ -422,7 +425,9 @@ def test_invalid_structured_field_is_422_and_changes_nothing(fresh_db, client, k
 
 @pytest.mark.parametrize(("key", "value"), [
     ("monthly_rent", "CAD $1,200.5"),
-    ("tenancy_start", "2028-02-29"),
+    ("tenancy_start", "2024-02-29"),
+    ("tenancy_start", "1900-01-01"),
+    ("tenancy_start", f"{date.today().year}-12-31"),
 ])
 def test_valid_structured_field_can_be_saved_and_cleared(fresh_db, client, key, value):
     url = f"{FORM}/fields/{key}"
@@ -437,15 +442,21 @@ def test_valid_structured_field_can_be_saved_and_cleared(fresh_db, client, key, 
     assert r.json()["status"] == "missing"
 
 
-def test_invalid_rent_cannot_resolve_a_linked_gap(fresh_db, client, session):
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "banana"),
+    ("tenancy_start", "2026-02-29"),
+])
+def test_invalid_structured_field_cannot_resolve_a_linked_gap(
+    fresh_db, client, session, key, value
+):
     gap = session.get(GapRow, "gap_01")
     assert gap is not None
-    gap.input = {**(gap.input or {}), "field_key": "monthly_rent"}
+    gap.input = {**(gap.input or {}), "field_key": key}
     session.add(gap)
     session.commit()
     before = _snapshot(client)
 
-    r = client.patch("/api/gaps/gap_01", json={"status": "resolved", "value": "banana"})
+    r = client.patch("/api/gaps/gap_01", json={"status": "resolved", "value": value})
     assert r.status_code == 422, r.text
     assert _snapshot(client) == before
 
