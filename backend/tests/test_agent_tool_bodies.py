@@ -111,21 +111,52 @@ def test_list_evidence_of_a_case_without_evidence_is_empty(session: Session) -> 
 def test_read_evidence_wraps_text_in_this_runs_tag(session: Session) -> None:
     res = call("read_evidence", make_ctx(session), {"evidence_id": "ev_01", "page": 1})
     assert isinstance(res, t.ReadEvidenceOutput)
-    assert res.block.tag == TAG and res.locator == "page 1"
-    assert res.block.content.startswith(f'<{TAG} id="ev_01" locator="page 1">\n{LEASE}')
-    assert t.is_wrapped_evidence(res.block.content, TAG)
+    page = res.pages[0]
+    assert page.block.tag == TAG and page.locator == "page 1"
+    assert page.block.content.startswith(f'<{TAG} id="ev_01" locator="page 1">\n{LEASE}')
+    assert t.is_wrapped_evidence(page.block.content, TAG)
+    assert res.truncated is False
 
 
 def test_read_evidence_picks_pages_and_regions(session: Session) -> None:
     ctx = make_ctx(session)
     second = call("read_evidence", ctx, {"evidence_id": "ev_01", "page": 2})
-    assert second.locator == "page 2"
+    assert second.pages[0].locator == "page 2"
     default = call("read_evidence", ctx, {"evidence_id": "ev_01"})
-    assert default.locator == "page 1"  # neither given: the first page
+    assert default.pages[0].locator == "page 1"  # neither given: the first page
     region = call("read_evidence", ctx, {"evidence_id": "ev_04", "region": "Message 2"})
-    assert region.locator == "message 2" and MSG2 in region.block.content
+    assert region.pages[0].locator == "message 2" and MSG2 in region.pages[0].block.content
     by_number = call("read_evidence", ctx, {"evidence_id": "ev_04", "page": 2})
-    assert by_number.locator == "message 2"  # "page N" falls back to the Nth item
+    assert by_number.pages[0].locator == "message 2"  # "page N" falls back to the Nth item
+
+
+def test_read_evidence_reads_a_whole_item_in_one_call(session: Session) -> None:
+    res = call("read_evidence", make_ctx(session), {"evidence_id": "ev_04", "pages": "all"})
+    assert isinstance(res, t.ReadEvidenceOutput)
+    assert [page.locator for page in res.pages] == ["message 1", "message 2"]
+    assert MSG1 in res.pages[0].block.content and MSG2 in res.pages[1].block.content
+    assert res.truncated is False
+
+
+def test_read_evidence_reads_a_page_range(session: Session) -> None:
+    ctx = make_ctx(session)
+    single = call("read_evidence", ctx, {"evidence_id": "ev_01", "pages": "2"})
+    assert [page.locator for page in single.pages] == ["page 2"]
+    whole = call("read_evidence", ctx, {"evidence_id": "ev_01", "pages": "1-2"})
+    assert [page.locator for page in whole.pages] == ["page 1", "page 2"]
+
+
+def test_read_evidence_marks_a_whole_file_cut_at_the_total_limit(session: Session) -> None:
+    store = demo_store()
+    store.add_pages(CASE, "ev_01", [
+        t.Page("page 1", "a" * (t.MAX_READ_CHARS - 100)),
+        t.Page("page 2", "b" * 500),
+    ])  # fmt: skip
+    res = call("read_evidence", make_ctx(session, store), {"evidence_id": "ev_01", "pages": "all"})
+    assert isinstance(res, t.ReadEvidenceOutput) and res.truncated is True
+    content = res.pages[-1].block.content
+    body = content.split(">", 1)[1].rsplit("</", 1)[0]  # the block's text, not its tag
+    assert body.count("b") <= 100
 
 
 @pytest.mark.parametrize(
@@ -134,6 +165,11 @@ def test_read_evidence_picks_pages_and_regions(session: Session) -> None:
         ({"evidence_id": "ev_01", "page": 9}, "invalid_input"),
         ({"evidence_id": "ev_01", "region": "nowhere"}, "invalid_input"),
         ({"evidence_id": "ev_01", "page": 1, "region": "page 1"}, "invalid_input"),
+        ({"evidence_id": "ev_01", "page": 1, "pages": "all"}, "invalid_input"),
+        ({"evidence_id": "ev_01", "pages": "0-2"}, "invalid_input"),
+        ({"evidence_id": "ev_01", "pages": "2-1"}, "invalid_input"),
+        ({"evidence_id": "ev_01", "pages": "1-9"}, "invalid_input"),
+        ({"evidence_id": "ev_01", "pages": "all of it"}, "invalid_input"),
         ({"evidence_id": "ev_02"}, "unavailable"),  # a photo with no text
         ({"evidence_id": "ev_nope"}, "not_found"),
     ],
@@ -161,16 +197,18 @@ def test_a_document_cannot_close_the_block_or_guess_the_nonce(session: Session) 
     store.add_pages(CASE, "ev_01", [t.Page("page 1", evil)])
     res = call("read_evidence", make_ctx(session, store), {"evidence_id": "ev_01"})
     assert isinstance(res, t.ReadEvidenceOutput)
-    assert res.block.tag != TAG  # the leaked nonce is replaced
-    assert t.is_wrapped_evidence(res.block.content, res.block.tag)
-    assert res.block.content.count("<") == 2
+    block = res.pages[0].block
+    assert block.tag != TAG  # the leaked nonce is replaced
+    assert t.is_wrapped_evidence(block.content, block.tag)
+    assert block.content.count("<") == 2
 
 
 def test_a_long_page_is_cut(session: Session) -> None:
     store = demo_store()
     store.add_pages(CASE, "ev_01", [t.Page("page 1", "x" * (t.MAX_READ_CHARS + 500))])
     res = call("read_evidence", make_ctx(session, store), {"evidence_id": "ev_01"})
-    assert res.block.content.endswith("\n[truncated]\n</" + res.block.tag + ">")
+    block = res.pages[0].block
+    assert block.content.endswith("\n[truncated]\n</" + block.tag + ">")
 
 
 def test_get_metadata_returns_facts_only(session: Session) -> None:

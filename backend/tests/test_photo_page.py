@@ -157,7 +157,7 @@ def test_the_agent_sees_the_photo_page_in_its_tools(fresh_db, client, session) -
     listing = call("list_evidence", ctx, {})
     assert next(i for i in listing.items if i.id == photo.id).page_count == 1
     read = call("read_evidence", ctx, {"evidence_id": photo.id})
-    assert read.locator == "photo 1" and WITH_TIME in read.block.content
+    assert read.pages[0].locator == "photo 1" and WITH_TIME in read.pages[0].block.content
 
 
 def test_the_timeline_prompt_says_a_photo_page_can_be_cited_for_its_date() -> None:

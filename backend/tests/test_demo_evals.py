@@ -86,10 +86,12 @@ def test_an_instruction_in_the_evidence_cannot_change_strength(
             for block in message.content:
                 if phrase not in str(block.get("content", "")):
                     continue
-                payload = json.loads(block["content"])["block"]
-                assert t.is_wrapped_evidence(payload["content"], payload["tag"])
-                assert payload["tag"].startswith(f"evidence-{NONCE}")
-                seen += 1
+                data = json.loads(block["content"])
+                for page in data.get("pages", [data]):
+                    payload = page["block"]
+                    assert t.is_wrapped_evidence(payload["content"], payload["tag"])
+                    assert payload["tag"].startswith(f"evidence-{NONCE}")
+                    seen += 1
     assert seen >= 1 or mode == "live", "the model never read the injected message"
 
     if mode == "fixture":

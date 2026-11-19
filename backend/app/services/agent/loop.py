@@ -38,6 +38,13 @@ MAX_TOOL_CALLS = 40
 MAX_TOTAL_TOKENS = 200_000  # input plus output, summed over the turns of one step
 MAX_TURNS = 50  # model calls, so a model that never calls a tool still stops; above the call cap
 SUMMARY_CHARS = 1000
+# The last few calls of a step are kept for what records its result (propose_event, create_gap,
+# fill_form_field, finish). Reading is cheap to postpone to the next step; a step that runs out
+# of calls before it can write anything is not (#118).
+RESERVED_READ_CALLS = 3
+# A model that keeps asking to read after the reserve must not spin: after this many skipped
+# reads in one step, the step stops incomplete instead of waiting for it to record a result.
+MAX_SKIPPED_READS = RESERVED_READ_CALLS + 1
 
 # Called at the end of every turn that ran tools, just before the commit: (state, pending). The
 # runner saves the step (tool calls, usage, a checkpoint) there, so the turn's rows and the
@@ -52,6 +59,7 @@ class LoopBudget:
     max_tool_calls: int = MAX_TOOL_CALLS
     max_tokens: int = MAX_TOTAL_TOKENS
     max_turns: int = MAX_TURNS
+    reserved_read_calls: int = RESERVED_READ_CALLS
 
 
 @dataclass
@@ -62,6 +70,7 @@ class StepState:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     turns: int = 0
+    skipped_reads: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,6 +191,8 @@ async def run_agent_loop(
         asked: tuple[ToolUse, str] | None = None
         finished: str | None = None
         cut = False
+        read_cut = False
+        wrote = False
         for use in response.tool_uses:
             if use.name == "ask_caseworker" and asked is not None:
                 results.append(_error_block(use, "Only one question per turn: one is pending."))
@@ -190,8 +201,21 @@ async def run_agent_loop(
                 results.append(_error_block(use, "Skipped: the step reached its tool-call limit."))
                 cut = True
                 continue
+            tool = TOOLS.get(use.name) if use.name in allowed else None
+            left = budget.max_tool_calls - len(state.tool_calls)
+            if tool is not None and tool.effect == "read" and left <= budget.reserved_read_calls:
+                state.skipped_reads += 1
+                if state.skipped_reads >= MAX_SKIPPED_READS:
+                    read_cut = True
+                results.append(_error_block(
+                    use,
+                    f"Skipped: only {left} tool calls are left in this step, and they are kept "
+                    "for what records your result. Work with what you have read.",
+                ))
+                continue
             result = await _dispatch(ctx, use, allowed)
             state.tool_calls.append(to_tool_call(use.name, use.input, result))
+            wrote = wrote or (tool is not None and tool.effect != "read")
             failed = isinstance(result, ToolError)
             if use.name == "ask_caseworker" and not failed:
                 asked = (use, _short(str(use.input.get("question", ""))))
@@ -206,13 +230,20 @@ async def run_agent_loop(
             }
             _end_turn(ctx, state, on_turn, pending)
             return LoopResult("needs_input", question, pending=pending)
-        if finished is not None or cut:
+        if finished is not None or cut or (read_cut and not wrote):
             _end_turn(ctx, state, on_turn, None)
             if finished is not None:
                 return LoopResult("finished", finished)
+            if cut:
+                return LoopResult(
+                    "budget",
+                    f"Stopped early: the step reached its limit of {budget.max_tool_calls} "
+                    "tool calls.",
+                )
             return LoopResult(
                 "budget",
-                f"Stopped early: the step reached its limit of {budget.max_tool_calls} tool calls.",
+                f"Stopped early: the step reached its read limit; the last "
+                f"{budget.reserved_read_calls} calls are kept for what records the result.",
             )
         state.messages.append(Message(role="user", content=results))
         _end_turn(ctx, state, on_turn, None)

@@ -281,7 +281,12 @@ def test_an_instruction_inside_the_evidence_changes_no_gap(fresh_db, session):
 
 
 def test_the_step_ends_at_the_tool_budget(fresh_db, session):
-    script = {f"gaps-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 60)}
+    script = {
+        f"gaps-turn{i}": turn(tool_use(
+            "create_gap", f"u{i}", severity="recommended", title=f"Gap {i}",
+            why="Because.", how_to_fix="Add it.",
+        )) for i in range(1, 60)
+    }
     done = run_gaps(session, script)
 
     step = next(s for s in done.steps if s["key"] == "gaps")
