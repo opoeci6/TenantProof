@@ -154,7 +154,9 @@ def test_read_evidence_marks_a_whole_file_cut_at_the_total_limit(session: Sessio
     ])  # fmt: skip
     res = call("read_evidence", make_ctx(session, store), {"evidence_id": "ev_01", "pages": "all"})
     assert isinstance(res, t.ReadEvidenceOutput) and res.truncated is True
-    assert res.pages[-1].block.content.count("b") <= 100
+    content = res.pages[-1].block.content
+    body = content.split(">", 1)[1].rsplit("</", 1)[0]  # the block's text, not its tag
+    assert body.count("b") <= 100
 
 
 @pytest.mark.parametrize(

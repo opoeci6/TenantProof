@@ -112,7 +112,7 @@ deterministic. Pattern: **agent proposes, rules verify, caseworker approves.**
 - `finish(summary)`
 
 **Guardrails**
-- Budget per loop: max 40 tool calls (25 until #118), max tokens, wall-clock timeout. Exceeding it ends the step with what it has, plus a summary saying so. The last 3 calls of a step are kept for what records its result: a read made there is skipped, because a step that spends every call reading writes nothing (#118).
+- Budget per loop: max 40 tool calls (25 until #118), max tokens, wall-clock timeout. Exceeding it ends the step with what it has, plus a summary saying so. The last 3 calls of a step are kept for what records its result: a read made there is skipped, because a step that spends every call reading writes nothing (#118). A model that keeps asking to read instead of recording is stopped (incomplete) after four skipped reads in the step.
 - **Citation verifier** (deterministic, after every `propose_event`): each `SourceRef.excerpt` must fuzzy-match the stored
   text of that evidence item (`rapidfuzz` ratio ≥ 90), and the locator must exist. Failures are dropped and logged as
   `tool_calls` entries ("citation rejected: excerpt not found"). This is the anti-hallucination story for the demo.
