@@ -22,7 +22,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
    **deterministic rules** (independent sources, metadata, date agreement, deadlines, blocking items).
 2. **Every AI-produced item carries `sources`.** Items without a file + location are not shown as fact.
 3. **Dates carry precision and basis** (`day` / `month` / `unknown`, from EXIF, message time, document, filename, user).
-4. **Long work is a job.** Analysis is a `Run` with six steps. The UI polls; steps can be `failed` or `needs_input`.
+4. **Long work is a job.** Analysis is a `Run` with six steps. The UI polls; steps can be `failed`, `incomplete` or `needs_input`.
 5. **The caseworker gates the output.** The form narrative uses only events with `review_status`
    `accepted` or `edited`. Rejected events never reach the form.
 6. **The agent never decides legal questions.** The remedy is the tenant's choice, recorded by the caseworker.
@@ -68,7 +68,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 if blocking gaps open or tenant hasn't attested. |
 | GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built package. Query `version` (default: the latest); 404 if none is built. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
-| GET | `/cases/{case_id}/case-brief` | PDF (`application/pdf`) | The caseworker's case brief, built on request: summary, timeline, evidence index, gaps. 404 for another org's case, 409 `{ detail: { reasons } }` until an analysis has completed. Not stored. |
+| GET | `/cases/{case_id}/case-brief` | PDF (`application/pdf`) | The caseworker's case brief, built on request: summary, timeline, evidence index, gaps. 404 for another org's case, 409 `{ detail: { reasons } }` until an analysis has completed. Starts with a warning when a step of the latest run is `incomplete`. Not stored. |
 
 ### Answering a paused run
 
@@ -78,6 +78,7 @@ When the agent needs something only a person knows, a step becomes `needs_input`
 - **One answer per pause.** The first answer moves the run to `running` and the step resumes. A second answer for the same pause, or an answer to a run that is not `needs_input`, is a 409.
 - **A question can name a field.** The agent's question may carry a field key. Only `hearing_date` is defined. The key is not a field of `Run`; the server keeps it with the paused step. It still shows in the step's `tool_calls`, as part of the `ask_caseworker` call's input, like any tool input.
   - For `hearing_date`, the server parses the answer into a date: `YYYY-MM-DD`, or an English month name with day and year (`Nov 21, 2026`, `21 November 2026`). It must be a real calendar date from 2020-01-01 to 2099-12-31. It is stored as `Case.hearing_date` (ISO date) and logged in the activity log. The agent is told the date in the stored form.
+  - `none` (also `No hearing yet` or `No hearing scheduled yet`, any case) means no hearing is scheduled yet. The server stores no date, clears `Case.hearing_date` and `Case.next_deadline`, keeps the case out of `hearing_scheduled`, logs "Set the hearing as not scheduled yet (no evidence deadline)", and remembers it (`no_hearing_yet`, not in any response), so a later run does not ask again. The agent is told no hearing is scheduled. A later date answer replaces it. The UI offers this as a **No hearing scheduled yet** button beside the date field. The case brief says "Hearing date: not scheduled yet", the caseload row shows "No hearing yet", and no "Must be received by" date exists.
   - An answer that does not parse is a 422 with a plain reason (`Enter the date like 2026-11-21 or Nov 21, 2026`). The run stays paused and the same question can be answered again.
   - For any other key, or none, the answer is kept as text and goes only to the agent. It is not written to the case.
 - **What setting the date changes.** Besides `Case.hearing_date`, the server sets `Case.stage` to `hearing_scheduled` and `Case.next_deadline` to `{ date: the hearing date minus 5 days, label: "Must be received by · hearing <hearing date>" }` (evidence must be *received* at least 5 days before the hearing, Evidence Policy #42 and Regulations s. 25A(2); the date is a receipt date, not a send-by date: registered mail, express post or courier counts as received on the 3rd day after it is sent and e-mail sent at or after 4 p.m. the next day, s. 25A(3B), (3C); the label uses the ISO date like the seeded cases; the label uses the ISO date like the seeded cases). The caseload priority then follows the existing rules. The activity entry names both dates. An answer to a question with any other key changes nothing on the case.
@@ -169,8 +170,8 @@ type EvidenceItem = {
 type RunStep = {
   key: "ingest" | "extract" | "timeline" | "rules" | "gaps" | "draft";
   label: string;
-  status: "pending" | "running" | "done" | "failed" | "needs_input";
-  summary: string | null;               // for `needs_input`: the question for the caseworker
+  status: "pending" | "running" | "done" | "incomplete" | "failed" | "needs_input";
+  summary: string | null;               // for `needs_input`: the question for the caseworker; for `incomplete`: why it stopped early
   tool_calls: { tool: string; input: string; output: string }[];
 };
 type Run = { id: string; case_id: string; status: "running" | "needs_review" | "done" | "failed";

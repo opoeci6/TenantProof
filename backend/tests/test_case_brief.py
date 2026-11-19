@@ -12,6 +12,7 @@ from sqlmodel import Session, delete, select
 
 from app.models import (
     ActivityRow,
+    CaseRow,
     EvidencePageRow,
     EvidenceRow,
     GapRow,
@@ -288,6 +289,17 @@ def test_an_entered_hearing_date_is_labelled_as_entered_by_a_caseworker(
     assert "Hearing date: 2026-11-24  [entered by a caseworker, not from an upload]" in brief(
         client
     )
+
+
+def test_no_hearing_yet_is_stated_not_flagged(fresh_db: None, client, session: Session) -> None:
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    case.no_hearing_yet = True
+    session.add(case)
+    session.commit()
+    text = brief(client)
+    assert "Hearing date: not scheduled yet  [entered by a caseworker]" in text
+    assert "no hearing date has been entered" not in text
 
 
 def test_the_count_at_the_top_matches_the_checklist(fresh_db: None, client) -> None:

@@ -39,6 +39,7 @@ from app.services.mappers import (
     build_form_draft,
     has_completed_run,
     iso_req,
+    latest_run_steps,
     reviewed_event_count,
 )
 
@@ -84,6 +85,41 @@ def attestation_reasons(att: Attestations) -> list[str]:
 
 NOT_ANALYSED = "No analysis has been completed for this case yet. Run the analysis first."
 NOTHING_REVIEWED = "No timeline events have been accepted yet. Review the timeline first."
+# #119. The same words as `analysisWarning` in web/index.html.
+STOPPED_TIMELINE = (
+    "The analysis stopped early: the timeline may be missing events. "
+    "Run the analysis again before relying on this."
+)
+STOPPED_OTHER = (
+    "The analysis stopped early: some results may be missing. "
+    "Run the analysis again before relying on this."
+)
+
+
+def incomplete_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [s for s in steps if s.get("status") == "incomplete"]
+
+
+def _step_labels(steps: list[dict[str, Any]]) -> str:
+    return ", ".join(s["label"] for s in steps)
+
+
+def analysis_warning(steps: list[dict[str, Any]]) -> list[str]:
+    """What the brief and the package say when a step of this run stopped early; empty when none
+    did. `steps` are all the run's steps, in order. The timeline sentence is for a timeline that
+    stopped or never ran. Steps still pending are "not run" only once nothing is in progress."""
+    stopped = incomplete_steps(steps)
+    if not stopped:
+        return []
+    timeline = next((s.get("status") for s in steps if s.get("key") == "timeline"), None)
+    lead = STOPPED_TIMELINE if timeline in ("incomplete", "pending") else STOPPED_OTHER
+    lines = [lead, f"Stopped early: {_step_labels(stopped)}"]
+    if not any(s.get("status") in ("running", "needs_input") for s in steps):
+        after = steps[steps.index(stopped[0]) + 1 :]
+        not_run = [s for s in after if s.get("status") == "pending"]
+        if not_run:
+            lines.append(f"Not run: {_step_labels(not_run)}")
+    return lines
 
 
 def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
@@ -281,13 +317,16 @@ def text_to_pdf(ev: EvidenceRow, text: str, language: str = "en") -> bytes:
 
 
 def manifest_pdf(
-    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]]
+    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]],
+    warning: list[str],
 ) -> bytes:
     pdf = new_pdf(case.tenant_language)
     _write(pdf, "Evidence manifest", bold=True, size=16, gap=3)
     _write(pdf, f"Case: {case.title}", gap=4 if case.tenant_language != "hi" else 1)
     if case.tenant_language == "hi":
         _write(pdf, HINDI_NOTE, size=9, gap=4)
+    for line in warning:
+        _write(pdf, line, bold=True)
     if not evidence:
         _write(pdf, "No evidence files are listed.")
     for ev in evidence:
@@ -334,13 +373,18 @@ def build_zip(
     ).all())
     app_pdf = application_pdf(session, case, prepared_by, built_at)
     ev_files = {e.id: evidence_files(e, case.tenant_language) for e in evidence}
-    man_pdf = manifest_pdf(evidence, case, ev_files)
+    run_steps = latest_run_steps(session, case.id)
+    stopped = incomplete_steps(run_steps)
+    warning = analysis_warning(run_steps)
+    man_pdf = manifest_pdf(evidence, case, ev_files, warning)
     manifest: dict[str, Any] = {
         "case_id": case.id, "version": version, "built_at": iso_req(built_at),
         "prepared_by": prepared_by,
         "tenant_attested_genuine_at": iso_req(case.tenant_attested_at)
         if case.tenant_attested_at else None,
         "caseworker_attestations": att.model_dump(),
+        "analysis_incomplete": bool(stopped),
+        "incomplete_steps": [s["label"] for s in stopped],
         "documents": {
             "application_draft.pdf": _sha(app_pdf),
             "evidence_manifest.pdf": _sha(man_pdf),
@@ -355,8 +399,9 @@ def build_zip(
             for e in evidence
         ],
     }
-    if case.tenant_language == "hi":
-        manifest["notes"] = [HINDI_NOTE]
+    notes = [*warning, *([HINDI_NOTE] if case.tenant_language == "hi" else [])]
+    if notes:
+        manifest["notes"] = notes
     man_json = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
     parts = [
         ("application_draft.pdf", app_pdf, "Application draft", "From the reviewed timeline"),

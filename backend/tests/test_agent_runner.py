@@ -269,7 +269,7 @@ def test_the_step_ends_at_40_tool_calls_with_what_it_has(fresh_db: None, session
     row = execute(session, new_run(session), provider)
     step = next(s for s in row.steps if s["key"] == "timeline")
     assert len(step["tool_calls"]) == loop.MAX_TOOL_CALLS == 40
-    assert step["status"] == "done" and step["summary"].startswith("Stopped early")
+    assert step["status"] == "incomplete" and step["summary"].startswith("Stopped early")
     assert "40 tool calls" in step["summary"] and len(provider.requests) == 40
 
 
@@ -313,7 +313,7 @@ def test_the_token_budget_ends_the_step(fresh_db: None, session: Session) -> Non
     }
     row = execute(session, new_run(session), RecordingProvider(script))
     step = next(s for s in row.steps if s["key"] == "timeline")
-    assert step["status"] == "done" and "tokens" in step["summary"]
+    assert step["status"] == "incomplete" and "tokens" in step["summary"]
     assert len(step["tool_calls"]) == 1
 
 
@@ -324,6 +324,7 @@ def test_hitting_max_tokens_ends_the_step_without_running_a_cut_off_call(
     row = execute(session, new_run(session), RecordingProvider(script))
     step = next(s for s in row.steps if s["key"] == "timeline")
     assert step["tool_calls"] == [] and "output limit" in step["summary"]
+    assert step["status"] == "incomplete"
 
 
 def test_a_model_that_ends_without_finish_still_ends_the_step(
@@ -394,7 +395,7 @@ def test_the_deadline_covers_the_whole_run_not_each_call(fresh_db: None, session
     row = execute(session, new_run(session), provider, deadline_s=0.45)
     step = next(s for s in row.steps if s["key"] == "timeline")
     # Like the other budgets (BUILD_PLAN section 5): the step ends with what it has.
-    assert step["status"] == "done" and "deadline" in step["summary"]
+    assert step["status"] == "incomplete" and "deadline" in step["summary"]
     assert "checkpoint" not in step
     assert 1 <= len(step["tool_calls"]) < 25  # what was done before the deadline is kept
     assert row.status == "needs_review" and row.finished_at is not None
@@ -408,7 +409,7 @@ def test_the_deadline_defaults_to_the_run_budget_setting(
     script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 20)}
     row = execute(session, new_run(session), SlowProvider(script, delay=0.1))  # no deadline_s
     step = next(s for s in row.steps if s["key"] == "timeline")
-    assert step["status"] == "done" and "run deadline passed" in step["summary"]
+    assert step["status"] == "incomplete" and "run deadline passed" in step["summary"]
     assert row.usage is not None and row.usage["duration_ms"] < 2000
 
 
@@ -423,7 +424,7 @@ def test_a_deadline_keeps_events_proposed_before_it(fresh_db: None, session: Ses
     provider = SlowProvider(script, delay=0.25)
     row = execute(session, new_run(session), provider, deadline_s=0.4)
     step = next(s for s in row.steps if s["key"] == "timeline")
-    assert step["status"] == "done" and "1 events proposed" in step["summary"]
+    assert step["status"] == "incomplete" and "1 events proposed" in step["summary"]
     assert [e.title for e in new_events(session)] == ["Tenancy starts"]
 
 
