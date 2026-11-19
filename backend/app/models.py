@@ -52,6 +52,7 @@ class CaseRow(SQLModel, table=True):
     tenant_language: str
     stage: str
     hearing_date: str | None = None  # ISO date; drives deadline + priority
+    no_hearing_yet: bool = False  # a caseworker said there is no hearing scheduled yet (#124)
     next_deadline: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     synthetic: bool = True
     has_demo_data: bool = False

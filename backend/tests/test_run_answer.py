@@ -392,3 +392,95 @@ def test_a_far_hearing_is_scheduled_without_a_deadline_warning(
 def test_evidence_is_due_five_days_before_the_hearing(hearing_day: date, due: str) -> None:
     assert evidence_deadline(hearing_day) == {
         "date": due, "label": f"Must be received by · hearing {hearing_day.isoformat()}"}
+
+
+# --------------------------------------------------------------------------- no hearing yet (#124)
+
+
+@pytest.mark.parametrize("typed", ["none", "None", "No hearing yet", "no hearing scheduled yet."])
+def test_no_hearing_yet_is_stored_logged_and_resumes_the_run(
+    fresh_db, client, session: Session, resume: RecordingProvider, typed: str
+) -> None:
+    run = paused_run(session)
+    assert client.post(URL.format(run.id), json={"answer": typed}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date is None and case.no_hearing_yet is True
+    assert case.next_deadline is None  # no "must be received by" date
+    assert case.stage != "hearing_scheduled"
+    assert "Set the hearing as not scheduled yet (no evidence deadline)" in activity_lines(session)
+    assert status_of(session, run.id) == ("needs_review", "done")
+    told = [
+        b for r in resume.requests for m in r.messages if isinstance(m.content, list)
+        for b in m.content
+        if b.get("type") == "tool_result" and "No hearing is scheduled" in str(b["content"])
+    ]
+    assert told  # the agent was told there is no date, not given one
+
+
+def test_no_hearing_yet_is_never_asked_again_on_the_next_run(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    assert client.post(URL.format(run.id), json={"answer": "none"}).status_code == 200
+    row = runner.create_run(session, case_row(session))
+    row = asyncio.run(runner.execute_run(
+        session, row, RecordingProvider({
+            "timeline-turn1": turn(tool_use("finish", "u9", summary="Read the evidence."))}),
+        InMemoryTextStore(), steps=("timeline",)))
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["status"] == "done" and row.finished_at is not None
+
+
+def test_a_real_date_after_no_hearing_clears_the_flag(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "none"})
+    second = paused_run(session)
+    assert client.post(URL.format(second.id), json={"answer": "2026-11-24"}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date == "2026-11-24" and case.no_hearing_yet is False
+    assert case.next_deadline is not None
+
+
+def test_no_hearing_yet_clears_an_earlier_date_and_deadline(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "2026-11-24"})
+    assert case_row(session).stage == "hearing_scheduled"
+    second = paused_run(session)
+    assert client.post(URL.format(second.id), json={"answer": "none"}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date is None and case.next_deadline is None
+    assert case.stage != "hearing_scheduled"
+
+
+def test_the_caseload_shows_no_deadline_after_no_hearing_yet(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "none"})
+    [mine] = [c for c in client.get("/api/cases").json() if c["id"] == CASE]
+    assert mine["next_deadline"] is None
+    assert "Must be received" not in (mine["priority_reason"] or "")
+
+
+def test_none_is_plain_text_when_the_question_is_not_the_hearing_date(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session, field=None)
+    assert client.post(URL.format(run.id), json={"answer": "none"}).status_code == 200
+    assert case_row(session).no_hearing_yet is False  # only the hearing question can say it
+
+
+@pytest.mark.parametrize("typed", ["maybe later", "banana", "nonexistent", "no"])
+def test_other_text_is_still_rejected_for_the_hearing_date(
+    fresh_db, client, session: Session, resume: RecordingProvider, typed: str
+) -> None:
+    run = paused_run(session)
+    r = client.post(URL.format(run.id), json={"answer": typed})
+    assert r.status_code == 422
+    assert r.json()["detail"]["reasons"] == ["Enter the date like 2026-11-21 or Nov 21, 2026"]
+    assert case_row(session).no_hearing_yet is False
+    assert status_of(session, run.id) == ("needs_review", "needs_input")

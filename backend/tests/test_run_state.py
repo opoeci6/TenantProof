@@ -199,3 +199,23 @@ def test_the_run_and_package_pages_show_the_warning() -> None:
     assert "${ask}${analysisNote(run)}" in page
     package = page[page.index("function viewPackage()") :]
     assert package.index("${analysisNote(S.run)}") < package.index('data-action="build"')
+
+
+def test_the_no_hearing_choice_is_offered_only_on_the_hearing_date_question() -> None:
+    """`asksHearing` decides whether the question shows "No hearing scheduled yet" (#124)."""
+    match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
+    assert match
+    steps = [
+        {"tool_calls": [{
+            "tool": "ask_caseworker", "input": '{"question": "q", "field": "hearing_date"}'}]},
+        {"tool_calls": [{"tool": "ask_caseworker", "input": '{"question": "Which unit?"}'}]},
+        {"tool_calls": [{"tool": "read_evidence", "input": '{"field": "hearing_date"}'}]},
+        {"tool_calls": []},
+        None,
+    ]
+    script = (
+        'const RESUMABLE = ["extract", "timeline", "gaps"];\n'
+        + match.group(1)
+        + f"\nconsole.log(JSON.stringify({json.dumps(steps)}.map(asksHearing)));"
+    )
+    assert node_json(script) == [True, False, False, False, False]

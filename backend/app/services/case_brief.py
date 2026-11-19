@@ -116,6 +116,8 @@ def _summary(doc: Doc, case: CaseRow, evidence, pages, events, gaps) -> None:
     doc.add(f"Tenant's language: {case.tenant_language}  [case record]")
     if case.hearing_date:
         doc.add(f"Hearing date: {case.hearing_date}  [entered by a caseworker, not from an upload]")
+    elif case.no_hearing_yet:
+        doc.add("Hearing date: not scheduled yet  [entered by a caseworker]")
     else:
         doc.add(f"Hearing date: {doc.flag('no hearing date has been entered')}")
     attested = (
