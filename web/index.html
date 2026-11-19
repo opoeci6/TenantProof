@@ -1288,7 +1288,7 @@ function viewForm() {
     const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
       || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
       || saved < minTenancyDate || saved > maxTenancyDate);
-    const confirm = x.status === "needs_confirmation" && saved && !day;
+    const confirm = x.status === "needs_confirmation" && saved;
     return `<div class="frow"><label class="fl" for="fld-${x.key}">${esc(x.label)}${x.key === "monthly_rent" ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
       <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="${day ? "date-field" : "field"}" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
@@ -1603,7 +1603,9 @@ document.addEventListener("click", guarded(async ev => {
     const input = document.getElementById(`fld-${key}`);
     if (!input.reportValidity()) return;
     const saved = S.form.fields.find(field => field.key === key)?.value;
-    const value = input.value.trim();
+    // A changed date is saved by focusout. Confirm accepts the evidence-backed text verbatim.
+    if (input.type === "date" && input.value !== input.defaultValue) return;
+    const value = input.type === "date" ? saved : input.value.trim();
     if (!value) return;
     if (!validCaseField(key, value, saved)) return;
     await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
