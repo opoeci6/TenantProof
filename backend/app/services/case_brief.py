@@ -30,7 +30,6 @@ from app.services.package import (
     HINDI_NOTE,
     NOT_ANALYSED,
     analysis_warning,
-    incomplete_steps,
     new_pdf,
     pdf_text,
 )
@@ -278,7 +277,7 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     pdf.set_title(f"Case brief {case.id}")
     stamp = _when(now or datetime.now(UTC))
     _write(pdf, "Case brief for caseworker review", bold=True, size=16, gap=2)
-    for line in analysis_warning(incomplete_steps(latest.steps if latest else [])):
+    for line in analysis_warning(latest.steps if latest else []):
         _write(pdf, line, bold=True)
     _write(pdf, f"{case.title} ({case.unit})  ·  case {case.id}  ·  prepared {stamp}", size=9)
     _write(

@@ -100,12 +100,26 @@ def incomplete_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [s for s in steps if s.get("status") == "incomplete"]
 
 
-def analysis_warning(stopped: list[dict[str, Any]]) -> list[str]:
-    """What the brief and the package say about steps that stopped early; empty when none did."""
+def _step_labels(steps: list[dict[str, Any]]) -> str:
+    return ", ".join(s["label"] for s in steps)
+
+
+def analysis_warning(steps: list[dict[str, Any]]) -> list[str]:
+    """What the brief and the package say when a step of this run stopped early; empty when none
+    did. `steps` are all the run's steps, in order. The timeline sentence is for a timeline that
+    stopped or never ran. Steps still pending are "not run" only once nothing is in progress."""
+    stopped = incomplete_steps(steps)
     if not stopped:
         return []
-    lead = STOPPED_TIMELINE if any(s["key"] == "timeline" for s in stopped) else STOPPED_OTHER
-    return [lead, f"Stopped early: {', '.join(s['label'] for s in stopped)}"]
+    timeline = next((s.get("status") for s in steps if s.get("key") == "timeline"), None)
+    lead = STOPPED_TIMELINE if timeline in ("incomplete", "pending") else STOPPED_OTHER
+    lines = [lead, f"Stopped early: {_step_labels(stopped)}"]
+    if not any(s.get("status") in ("running", "needs_input") for s in steps):
+        after = steps[steps.index(stopped[0]) + 1 :]
+        not_run = [s for s in after if s.get("status") == "pending"]
+        if not_run:
+            lines.append(f"Not run: {_step_labels(not_run)}")
+    return lines
 
 
 def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
@@ -359,8 +373,9 @@ def build_zip(
     ).all())
     app_pdf = application_pdf(session, case, prepared_by, built_at)
     ev_files = {e.id: evidence_files(e, case.tenant_language) for e in evidence}
-    stopped = incomplete_steps(latest_run_steps(session, case.id))
-    warning = analysis_warning(stopped)
+    run_steps = latest_run_steps(session, case.id)
+    stopped = incomplete_steps(run_steps)
+    warning = analysis_warning(run_steps)
     man_pdf = manifest_pdf(evidence, case, ev_files, warning)
     manifest: dict[str, Any] = {
         "case_id": case.id, "version": version, "built_at": iso_req(built_at),
