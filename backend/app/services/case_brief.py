@@ -8,6 +8,7 @@ only called supported when its words are found in an upload. Facts the clinic or
 entered are labelled as such. `caseworker_note` is never read here, so the brief can be shared
 without leaking an internal note. Nothing is stored and nothing is changed."""
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,13 +27,44 @@ from app.models import (
     TimelineEventRow,
 )
 from app.services.mappers import OPEN_GAP, has_completed_run
-from app.services.package import HINDI_NOTE, NOT_ANALYSED, new_pdf, pdf_text
+from app.services.package import (
+    HINDI_NOTE,
+    NOT_ANALYSED,
+    analysis_warning,
+    incomplete_steps,
+    new_pdf,
+    pdf_text,
+)
 from app.services.verifier import normalize, verify_citation
 
 NEEDS = "NEEDS CASEWORKER VERIFICATION"
-KIND_ORDER = ["lease", "letter", "messages", "receipt", "photo", "document", "other"]
 PENDING_NOTE = "Not yet reviewed by a caseworker"
 REVIEW = {"accepted": "Accepted", "edited": "Edited", "pending": PENDING_NOTE}
+# Readable words for the values stored on the case and its events (#127). The brief is read by a
+# person, not a program: `single_source` and `en` mean nothing to a caseworker on paper.
+STRENGTH = {
+    "corroborated": "corroborated (two or more independent files agree)",
+    "single_source": "single source (one file supports it)",
+    "needs_support": "needs support (the files are weak or disagree)",
+}
+BASIS = {
+    "exif": "photo metadata",
+    "message_timestamp": "message time",
+    "document_text": "document text",
+    "filename": "filename, inferred",
+    "user": "entered by the caseworker",
+}
+LANGUAGE = {
+    "en": "English", "zh": "Simplified Chinese", "fr": "French", "es": "Spanish",
+    "ru": "Russian", "hi": "Hindi", "ar": "Arabic",
+}
+
+
+def _label_no(ev: EvidenceRow) -> int:
+    """The exhibit number (E-04 -> 4), so the index reads E-01, E-02, ... rather than grouping by
+    file type. Rows without a number sort last."""
+    match = re.search(r"(\d+)$", ev.label)
+    return int(match.group(1)) if match else 10**9
 
 
 def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: float = 1.5) -> None:
@@ -106,9 +138,12 @@ def _summary(doc: Doc, case: CaseRow, evidence, pages, events, gaps) -> None:
     fact("Tenant", case.tenant_name, _find_in_uploads(case.tenant_name, evidence, pages))
     fact("Rental unit", case.unit, _find_in_uploads(case.unit, evidence, pages))
     doc.add(f"Case: {case.title}  [case record, entered by the clinic]")
-    doc.add(f"Tenant's language: {case.tenant_language}  [case record]")
+    language = LANGUAGE.get(case.tenant_language, case.tenant_language)
+    doc.add(f"Tenant's language: {language}  [case record]")
     if case.hearing_date:
         doc.add(f"Hearing date: {case.hearing_date}  [entered by a caseworker, not from an upload]")
+    elif case.no_hearing_yet:
+        doc.add("Hearing date: not scheduled yet  [entered by a caseworker]")
     else:
         doc.add(f"Hearing date: {doc.flag('no hearing date has been entered')}")
     attested = (
@@ -156,12 +191,14 @@ def _timeline(doc: Doc, events, by_id, pages) -> None:
         doc.add(f"{shown}  {event.title}", "b")
         doc.add(
             f"{REVIEW.get(event.review_status, event.review_status)}. Strength: "
-            f"{event.strength}. Date taken from: {basis or 'not stated'}.",
+            f"{STRENGTH.get(event.strength, event.strength)}. Date taken from: "
+            f"{BASIS.get(basis, basis) if basis else 'not stated'}.",
             "small",
         )
         doc.add(event.description)
         for flag in event.flags:
             doc.add(f"Flag: {flag.get('message', '')}", "small")
+            doc.flagged.append(f"timeline event “{event.title}”: {flag.get('message', '')}")
         if not _sources(doc, event, by_id, pages):
             doc.add(doc.flag(f"timeline event “{event.title}” has no supporting upload"), "b")
 
@@ -173,15 +210,9 @@ def _evidence(doc: Doc, evidence, events) -> None:
         for src in event.sources:
             cited[src.get("evidence_id")] += 1
 
-    def order(ev: EvidenceRow) -> tuple[int, str]:
-        kind = _kind(ev)
-        meta = (ev.metadata_ or {}).get("captured_at") or ""
-        return (KIND_ORDER.index(kind) if kind in KIND_ORDER else len(KIND_ORDER),
-                meta or ev.received_at.isoformat())
-
     if not evidence:
         doc.add("No files uploaded.")
-    for ev in sorted(evidence, key=order):
+    for ev in sorted(evidence, key=lambda row: (_label_no(row), row.position)):
         meta = ev.metadata_ or {}
         captured = f", captured {meta['captured_at']}" if meta.get("captured_at") else ""
         used = cited.get(ev.id, 0)
@@ -203,7 +234,10 @@ def _evidence(doc: Doc, evidence, events) -> None:
 def _gaps(doc: Doc, gaps, sources: dict[str, str], latest: RunRow | None) -> None:
     doc.add("4. Gaps and items for caseworker review", "h2")
     step = next((s for s in (latest.steps if latest else []) if s.get("key") == "gaps"), None)
-    if step is None or step.get("status") != "done":
+    if step is not None and step.get("status") == "incomplete":
+        doc.add(doc.flag("the gaps step stopped early, so some missing items may not have been "
+                         "checked"), "b")
+    elif step is None or step.get("status") != "done":
         doc.add(doc.flag("the gaps step has not completed for this case, so missing items have "
                          "not been checked"), "b")
     if not gaps:
@@ -211,6 +245,7 @@ def _gaps(doc: Doc, gaps, sources: dict[str, str], latest: RunRow | None) -> Non
     for gap in gaps:
         state = "waiting for the tenant" if gap.status == "waiting_tenant" else "open"
         doc.add(f"[{gap.severity}] {gap.title}  ({state})", "b")
+        doc.flagged.append(f"open item ({gap.severity}): {gap.title}")
         doc.add(gap.why)
         doc.add(f"What to do: {gap.how_to_fix}", "small")
         basis = sources.get(gap.source_id or "")
@@ -264,6 +299,8 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     pdf.set_title(f"Case brief {case.id}")
     stamp = _when(now or datetime.now(UTC))
     _write(pdf, "Case brief for caseworker review", bold=True, size=16, gap=2)
+    for line in analysis_warning(incomplete_steps(latest.steps if latest else [])):
+        _write(pdf, line, bold=True)
     _write(pdf, f"{case.title} ({case.unit})  ·  case {case.id}  ·  prepared {stamp}", size=9)
     _write(
         pdf,
@@ -276,7 +313,8 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     if case.tenant_language == "hi":
         _write(pdf, HINDI_NOTE, size=9, gap=3)
     count = len(body.flagged)
-    _write(pdf, f"{count} item{'s' if count != 1 else ''} need caseworker verification.", bold=True)
+    items = "1 item needs" if count == 1 else f"{count} items need"
+    _write(pdf, f"{items} caseworker verification.", bold=True)
     styles = {"h2": dict(bold=True, size=13, gap=2), "b": dict(bold=True), "small": dict(size=9),
               "p": dict()}
     for text, style in body.blocks:

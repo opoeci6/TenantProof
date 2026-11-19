@@ -26,7 +26,7 @@ from sqlmodel import Session, col, func, select
 from app.config import get_settings
 from app.models import CaseRow, EvidencePageRow, EvidenceRow, RunRow
 from app.services import activity, review, storage
-from app.services.evidence import exif, ocr, sniff, strip, text
+from app.services.evidence import exif, fingerprint, ocr, sniff, strip, text
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +78,9 @@ class _Processed:
     pages: text.Pages = field(default_factory=list)  # becomes evidence_page rows
     processing: str = "done"
     error: str | None = None
+    # #127: a perceptual hash of the image, kept in the metadata JSON; it only ever feeds the
+    # "possible duplicate" note and is never used to merge or drop a file.
+    image_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,10 +199,12 @@ def _process_unchecked(data: bytes, mime: str, budget: ocr.Budget | None) -> _Pr
         pdf = text.read_pdf_isolated(data, scans=budget is not None)
         pages, skipped = _ocr_scans(pdf, budget)
         partial = None if pdf.complete else "Only part of the text could be extracted."
+        scan = next(iter(pdf.scans.values()), None)
         return _Processed(
             metadata={**exif.NO_META.as_dict(), "software": pdf.software},
             pages=pages,
             error=partial or (OCR_SKIPPED if skipped else None),
+            image_hash=fingerprint.dhash_bytes(scan) if scan else None,
         )
     if mime == sniff.TEXT:
         return _Processed(pages=text.read_txt(data))
@@ -213,6 +218,7 @@ def _process_unchecked(data: bytes, mime: str, budget: ocr.Budget | None) -> _Pr
     return _Processed(
         metadata=meta, stripped_sha256=storage.put(clean).key, pages=pages,
         error=OCR_SKIPPED if skipped else None,
+        image_hash=fingerprint.dhash_bytes(clean),
     )
 
 
@@ -273,6 +279,12 @@ def _insert(
     position = -1 if last is None else last
     now = datetime.now(UTC)
     added = 0
+    # #127: labels and fingerprints of what the case already has, so a photo and a PDF made from
+    # it can be called out as the same picture instead of looking like two independent files.
+    known = [
+        (row.label, (row.metadata_ or {}).get("image_hash"))
+        for row in session.exec(select(EvidenceRow).where(EvidenceRow.case_id == case_id)).all()
+    ]
     for item in ready:
         if _find(session, case_id, item.sha256) is not None:
             continue  # another request added the same file meanwhile
@@ -283,6 +295,18 @@ def _insert(
         for n, page in enumerate(item.done.pages):
             session.add(EvidencePageRow(evidence_id=row.id, locator=page["locator"],
                                         case_id=case_id, position=n, text=page["text"]))
+        duplicate = next(
+            (label for label, image in known
+             if fingerprint.looks_the_same(item.done.image_hash, image)),
+            None,
+        )
+        if duplicate:
+            row.format_check = {
+                **row.format_check,
+                "note": f"{row.format_check['note']} Possible duplicate of {duplicate}: "
+                        "the image looks the same.",
+            }
+        known.append((row.label, item.done.image_hash))
         activity.log(session, case_id, uploaded_by, actor_name,
                      f"Uploaded {row.label} ({row.filename})")
         added += 1
@@ -308,7 +332,10 @@ def _new_row(
         label=f"E-{position + 1:02d}", filename=upload.filename, kind=_KIND[upload.mime],
         mime=upload.mime, size_bytes=upload.size, sha256=item.sha256, received_at=now,
         uploaded_by=uploaded_by, format_check=_format_check(upload.mime, done.processing),
-        metadata_=done.metadata, metadata_stripped_for_ai=done.processing == "done",
+        # #127: the fingerprint rides in the metadata JSON; EvidenceMetadata ignores it, the
+        # duplicate check reads it back.
+        metadata_={**done.metadata, **({"image_hash": done.image_hash} if done.image_hash else {})},
+        metadata_stripped_for_ai=done.processing == "done",
         processing=done.processing, error=done.error, stripped_sha256=done.stripped_sha256,
     )
 

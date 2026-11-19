@@ -39,6 +39,7 @@ from app.services.mappers import (
     build_form_draft,
     has_completed_run,
     iso_req,
+    latest_run_steps,
     reviewed_event_count,
 )
 
@@ -84,6 +85,27 @@ def attestation_reasons(att: Attestations) -> list[str]:
 
 NOT_ANALYSED = "No analysis has been completed for this case yet. Run the analysis first."
 NOTHING_REVIEWED = "No timeline events have been accepted yet. Review the timeline first."
+# #119. The same words as `analysisWarning` in web/index.html.
+STOPPED_TIMELINE = (
+    "The analysis stopped early: the timeline may be missing events. "
+    "Run the analysis again before relying on this."
+)
+STOPPED_OTHER = (
+    "The analysis stopped early: some results may be missing. "
+    "Run the analysis again before relying on this."
+)
+
+
+def incomplete_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [s for s in steps if s.get("status") == "incomplete"]
+
+
+def analysis_warning(stopped: list[dict[str, Any]]) -> list[str]:
+    """What the brief and the package say about steps that stopped early; empty when none did."""
+    if not stopped:
+        return []
+    lead = STOPPED_TIMELINE if any(s["key"] == "timeline" for s in stopped) else STOPPED_OTHER
+    return [lead, f"Stopped early: {', '.join(s['label'] for s in stopped)}"]
 
 
 def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
@@ -281,19 +303,31 @@ def text_to_pdf(ev: EvidenceRow, text: str, language: str = "en") -> bytes:
 
 
 def manifest_pdf(
-    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]]
+    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]],
+    warning: list[str],
 ) -> bytes:
     pdf = new_pdf(case.tenant_language)
     _write(pdf, "Evidence manifest", bold=True, size=16, gap=3)
-    _write(pdf, f"Case: {case.title}", gap=4 if case.tenant_language != "hi" else 1)
+    _write(pdf, f"Case: {case.title}", gap=2 if case.tenant_language != "hi" else 1)
+    # #127: the receipt time is the time the whole upload arrived, so four files sent together
+    # share it. Say so rather than leave it looking like a mistake.
+    _write(pdf, "Files uploaded together share one receipt time.", size=8, gap=4)
     if case.tenant_language == "hi":
         _write(pdf, HINDI_NOTE, size=9, gap=4)
+    for line in warning:
+        _write(pdf, line, bold=True)
     if not evidence:
         _write(pdf, "No evidence files are listed.")
     for ev in evidence:
         _write(pdf, f"{ev.label}  {ev.filename}", bold=True, gap=0)
-        _write(pdf, f"Received {iso_req(ev.received_at)} from {ev.uploaded_by}", gap=0)
+        received = ev.received_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        _write(pdf, f"Received {received} from {ev.uploaded_by}", gap=0)
         filed = ev_files[ev.id]
+        removed = any(item.location_removed for item in filed)
+        gps = bool((ev.metadata_ or {}).get("gps_present"))
+        location = ("removed before filing" if removed else
+                    "none in the file" if not gps else "could not be removed; see below")
+        _write(pdf, f"Location data: {location}", size=8, gap=0)
         heic = ev.mime == sniff.HEIC
         # A HEIC is received as HEIC but filed only as its JPG: "Filed as", not "Also as".
         copies = filed if heic else filed[1:]
@@ -334,13 +368,18 @@ def build_zip(
     ).all())
     app_pdf = application_pdf(session, case, prepared_by, built_at)
     ev_files = {e.id: evidence_files(e, case.tenant_language) for e in evidence}
-    man_pdf = manifest_pdf(evidence, case, ev_files)
+    stopped = incomplete_steps(latest_run_steps(session, case.id))
+    warning = analysis_warning(stopped)
+    man_pdf = manifest_pdf(evidence, case, ev_files, warning)
     manifest: dict[str, Any] = {
         "case_id": case.id, "version": version, "built_at": iso_req(built_at),
         "prepared_by": prepared_by,
+        "received_note": "Files uploaded together share one receipt time.",
         "tenant_attested_genuine_at": iso_req(case.tenant_attested_at)
         if case.tenant_attested_at else None,
         "caseworker_attestations": att.model_dump(),
+        "analysis_incomplete": bool(stopped),
+        "incomplete_steps": [s["label"] for s in stopped],
         "documents": {
             "application_draft.pdf": _sha(app_pdf),
             "evidence_manifest.pdf": _sha(man_pdf),
@@ -349,14 +388,18 @@ def build_zip(
             {"label": e.label, "filename": e.filename, "sha256": e.sha256,
              "received_at": iso_req(e.received_at), "uploaded_by": e.uploaded_by,
              "in_zip": ev_files[e.id][0].name if ev_files[e.id] else None,
-             "location_data_removed": any(f.location_removed for f in ev_files[e.id]),
+             # #127: say both whether the file had location data and whether the filed copy had
+             # it removed; the old single boolean was false and ambiguous when there was none.
+             "location": {"present": bool((e.metadata_ or {}).get("gps_present")),
+                          "removed": any(f.location_removed for f in ev_files[e.id])},
              "rendition": {"path": ev_files[e.id][1].name, "sha256": ev_files[e.id][1].sha256}
              if len(ev_files[e.id]) > 1 and e.mime != sniff.HEIC else None}
             for e in evidence
         ],
     }
-    if case.tenant_language == "hi":
-        manifest["notes"] = [HINDI_NOTE]
+    notes = [*warning, *([HINDI_NOTE] if case.tenant_language == "hi" else [])]
+    if notes:
+        manifest["notes"] = notes
     man_json = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
     parts = [
         ("application_draft.pdf", app_pdf, "Application draft", "From the reviewed timeline"),

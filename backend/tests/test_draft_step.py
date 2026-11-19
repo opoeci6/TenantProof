@@ -393,7 +393,7 @@ def test_a_deadline_in_the_draft_step_reports_its_own_counts(fresh_db, session):
     done = run(runner.execute_run(
         session, row, provider, demo_store(), steps=("draft",), deadline_s=0.4))
     step = draft_step(done)
-    assert step["status"] == "done" and "deadline" in step["summary"]
+    assert step["status"] == "incomplete" and "deadline" in step["summary"]
     assert "1 fields filled, 0 attempts rejected" in step["summary"]
     assert field(session, "landlord_name").status == "needs_confirmation"
 
