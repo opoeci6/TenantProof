@@ -3,13 +3,14 @@ form fields. Every success logs exactly one caseworker activity entry; every by-
 org-scoped; rejected and pending events never reach the form narrative.
 Stage and caseload behaviour lives in test_stage_transitions.py."""
 
+from datetime import date
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.models import TimelineEventRow
+from app.models import FormFieldRow, GapRow, TimelineEventRow
 
 CASE = "case_demo_001"
 FORM = f"/api/cases/{CASE}/form-draft"
@@ -400,6 +401,79 @@ def test_setting_field_trims_value_and_resolves_open_gap(fresh_db, client):
     gap = _gap(client, "gap_01")
     assert gap["status"] == "resolved"
     assert "5 Elm St" in (gap["resolution_note"] or "")
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "banana"),
+    ("monthly_rent", "1,20.00"),
+    ("monthly_rent", "1200.001"),
+    ("monthly_rent", "0"),
+    ("monthly_rent", "1200 USD"),
+    ("tenancy_start", "tomorrow"),
+    ("tenancy_start", "2026-02-29"),
+    ("tenancy_start", "20260501"),
+    ("tenancy_start", "1899-12-31"),
+    ("tenancy_start", f"{date.today().year + 1}-01-01"),
+])
+def test_invalid_structured_field_is_422_and_changes_nothing(fresh_db, client, key, value):
+    before = _snapshot(client)
+    r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+    assert r.status_code == 422, r.text
+    assert isinstance(r.json()["detail"], str)
+    assert _snapshot(client) == before
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "CAD $1,200.5"),
+    ("tenancy_start", "2024-02-29"),
+    ("tenancy_start", "1900-01-01"),
+    ("tenancy_start", f"{date.today().year}-12-31"),
+])
+def test_valid_structured_field_can_be_saved_and_cleared(fresh_db, client, key, value):
+    url = f"{FORM}/fields/{key}"
+    r = client.patch(url, json={"value": value})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == value
+    assert r.json()["status"] == "user_entered"
+
+    r = client.patch(url, json={"value": ""})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] is None
+    assert r.json()["status"] == "missing"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "banana"),
+    ("tenancy_start", "2026-02-29"),
+])
+def test_invalid_structured_field_cannot_resolve_a_linked_gap(
+    fresh_db, client, session, key, value
+):
+    gap = session.get(GapRow, "gap_01")
+    assert gap is not None
+    gap.input = {**(gap.input or {}), "field_key": key}
+    session.add(gap)
+    session.commit()
+    before = _snapshot(client)
+
+    r = client.patch("/api/gaps/gap_01", json={"status": "resolved", "value": value})
+    assert r.status_code == 422, r.text
+    assert _snapshot(client) == before
+
+
+def test_verbatim_tenancy_date_can_still_be_confirmed(fresh_db, client, session):
+    field = session.get(FormFieldRow, (CASE, "tenancy_start"))
+    assert field is not None
+    field.value = "May 1, 2026"
+    field.status = "needs_confirmation"
+    session.add(field)
+    session.commit()
+
+    r = client.patch(f"{FORM}/fields/tenancy_start", json={"value": "May 1, 2026"})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == "May 1, 2026"
+    assert r.json()["sources"] == field.sources
+    assert r.json()["status"] == "user_entered"
 
 
 def test_blank_field_value_sets_field_missing_and_null(fresh_db, client):

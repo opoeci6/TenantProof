@@ -1261,12 +1261,30 @@ async function sendDraft(id) {
 }
 /* editRequest:end */
 
+/* #122: input controls for the form draft and its missing-info fields. */
+const minTenancyDate = "1900-01-01";
+const maxTenancyDate = `${new Date().getFullYear()}-12-31`;
+function caseFieldAttrs(key) {
+  if (key === "tenancy_start") return `type="date" min="${minTenancyDate}" max="${maxTenancyDate}"`;
+  if (key === "monthly_rent") return 'inputmode="decimal"';
+  return "";
+}
+function validCaseField(key, value, saved) {
+  if (key !== "monthly_rent" || !value || value === saved) return true;
+  const rent = /^(?:(CAD)[ \t]+)?\$?[ \t]*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]{1,2})?(?:[ \t]+(CAD))?$/i.exec(value);
+  if (!rent || (rent[1] && rent[4]) || !/[1-9]/.test(rent[2] + (rent[3] || ""))) {
+    toast("Enter a positive monthly rent in CAD, with up to two decimal places.", 6000);
+    return false;
+  }
+  return true;
+}
+
 function viewGaps() {
   const src = id => S.sources.find(s => s.id === id);
   const gapCard = g => {
     const s = src(g.source_id), open = g.status === "open";
     let input = "";
-    if (open && g.input && g.input.type === "text") input = `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="${esc(g.input.placeholder)}" required><button class="btn primary small" type="submit">Save</button></form>`;
+    if (open && g.input && g.input.type === "text") input = `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" ${caseFieldAttrs(g.input.field_key)} placeholder="${esc(g.input.placeholder)}" required><button class="btn primary small" type="submit">Save</button></form>`;
     if (open && g.input && g.input.type === "choice") input = `<form data-action="resolve-choice" data-id="${g.id}" style="display:grid;gap:10px"><span class="muted">Record the tenant's choice:</span><div class="choices">${g.input.options.map((o, i) => `<label><input type="checkbox" id="gap-${g.id}-${i}" name="opt" value="${esc(o)}">${esc(o)}</label>`).join("")}</div><div class="btn-row"><button class="btn primary small" type="submit">Save tenant's choice</button></div></form>`;
     const draft = open && g.tenant_request && S.drafting === g.id ? draftBox(g) : "";
     const status = g.status === "resolved" ? `<span class="pill ok">Resolved</span>` : g.status === "dismissed" ? `<span class="pill plain">Dismissed</span>` : g.status === "waiting_tenant" ? `<span class="pill info">Waiting for tenant</span>${S.case && S.case.intake.status === "not_sent" ? ` <a class="muted" href="#evidence">Intake link not sent yet</a>` : ""}` : g.severity === "blocking" ? `<span class="pill bad">Required</span>` : `<span class="pill warn">Suggested</span>`;
@@ -1279,7 +1297,7 @@ function viewGaps() {
       <div class="gap-top"><span class="gap-title">${esc(g.title)}</span>${status}</div>
       ${open ? `<p>${esc(g.why)}</p><p><b>How to fix:</b> ${esc(g.how_to_fix)}</p>` : g.resolution_note ? `<span class="resolved-note">${esc(g.resolution_note)}</span>` : ""}
       ${s && open ? `<p style="font-size:12.5px;color:var(--ink-3)">Source: ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</p>` : ""}
-      ${g.status === "waiting_tenant" && g.input && g.input.type === "text" ? `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" placeholder="Enter the tenant's answer" required><button class="btn primary small" type="submit">Save answer</button></form>` : ""}
+      ${g.status === "waiting_tenant" && g.input && g.input.type === "text" ? `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" ${caseFieldAttrs(g.input.field_key)} placeholder="Enter the tenant's answer" required><button class="btn primary small" type="submit">Save answer</button></form>` : ""}
       ${g.answer ? `<div class="gap-answer"><span class="muted">Tenant's answer · ${esc(fmtTime(g.answer.received_at))}</span><blockquote>${esc(g.answer.text)}</blockquote>${englishToggle(g.answer.text, S.case.tenant.preferred_language)}</div>` : ""}
       ${input}${draft}${acts.length ? `<div class="btn-row">${acts.join("")}</div>` : ""}</div></div>`;
   };
@@ -1296,10 +1314,18 @@ function viewGaps() {
 function viewForm() {
   const f = S.form;
   const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
-  const rows = f.fields.map(x => `<div class="frow"><div class="fl">${esc(x.label)}${x.required ? "<small>Required</small>" : ""}</div>
-      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="field" data-key="${x.key}" value="${esc(x.value || "")}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
-        ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
-      <div class="fs">${stPill[x.status]}${x.status === "needs_confirmation" && x.value ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`).join("");
+  const rows = f.fields.map(x => {
+    const saved = x.value || "";
+    const day = x.key === "tenancy_start" ? new Date(saved + "T00:00:00Z") : null;
+    const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
+      || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
+      || saved < minTenancyDate || saved > maxTenancyDate);
+    const confirm = x.status === "needs_confirmation" && saved;
+    return `<div class="frow"><label class="fl" for="fld-${x.key}">${esc(x.label)}${x.key === "monthly_rent" ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
+      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="${day ? "date-field" : "field"}" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
+        ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
+      <div class="fs">${stPill[x.status]}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
+  }).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
@@ -1605,7 +1631,20 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "resend") { if (!CASE_ID) return; const ik = S.case && S.case.intake;
     if (ik && ik.status !== "not_sent" && !confirm(`Make a new intake link for ${S.case.tenant.name}? The link sent earlier stops working.`)) return;
     const r = await request("POST", `${C}/intake-link`); S.lastLink = { caseId: CASE_ID, url: r.url, qr: r.qr_svg }; S.intake.view = null; toast("Intake link created. Copy it now: it is only shown once."); await refresh(["case", "intake"]); }
-  if (a === "confirm-field") { const v = document.getElementById(`fld-${b.dataset.key}`).value.trim(); if (!v) return; await request("PATCH", `${C}/form-draft/fields/${b.dataset.key}`, { value: v }); await refresh(["form", "gaps"]); return; }  /* #40: keep the agent's drafted value */
+  if (a === "confirm-field") {
+    const { key } = b.dataset;
+    const input = document.getElementById(`fld-${key}`);
+    if (!input.reportValidity()) return;
+    const saved = S.form.fields.find(field => field.key === key)?.value;
+    // A changed date is saved by focusout. Confirm accepts the evidence-backed text verbatim.
+    if (input.type === "date" && input.value !== input.defaultValue) return;
+    const value = input.type === "date" ? saved : input.value.trim();
+    if (!value) return;
+    if (!validCaseField(key, value, saved)) return;
+    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
+    await refresh(["form", "gaps"]);
+    return;
+  }
   if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
   if (a === "edit") { S.editing = id; render(); const el = document.getElementById("ed-desc-" + id); el && el.focus(); }
@@ -1675,7 +1714,7 @@ document.addEventListener("submit", guarded(async ev => {
     await request("PATCH", `/timeline/${id}`, { review_status: "edited", title: fd.get("title"), description: fd.get("description"), caseworker_note: fd.get("caseworker_note").trim() || null, date: date ? { value: date, precision: "day", basis: "user" } : ex.date });
     S.editing = null; toast("Saved"); await refresh(["timeline", "form"]);
   }
-  if (a === "resolve-text") { const v = new FormData(f).get("value").trim(); if (!v) return; await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v, resolution_note: `Saved: ${v}` }); toast("Saved to the form draft"); await refresh(["gaps", "form", "intake"]); }
+  if (a === "resolve-text") { const v = new FormData(f).get("value").trim(); if (!v || !validCaseField(S.gaps.find(gap => gap.id === id)?.input?.field_key, v)) return; await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v, resolution_note: `Saved: ${v}` }); toast("Saved to the form draft"); await refresh(["gaps", "form", "intake"]); }
   if (a === "resolve-choice") { const v = new FormData(f).getAll("opt"); if (!v.length) { toast("Pick at least one option"); return; } await request("PATCH", `/gaps/${id}`, { status: "resolved", value: v.join("; "), resolution_note: `Tenant's choice: ${v.join("; ")}` }); toast("Saved to the form draft"); await refresh(["gaps", "form"]); }
 }));
 document.addEventListener("input", ev => {
@@ -1689,10 +1728,25 @@ document.addEventListener("input", ev => {
     btn.disabled = !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
   }
 });
+/* A native date emits change while the user is still editing its individual segments. */
+document.addEventListener("focusout", guarded(async ev => {
+  const input = ev.target;
+  if (input.dataset.action !== "date-field" || input.contains(ev.relatedTarget)) return;
+  if (!input.reportValidity() || input.value === input.defaultValue) return;
+  await request("PATCH", `${C}/form-draft/fields/${input.dataset.key}`, { value: input.value });
+  await refresh(["form", "gaps"]);
+}));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
   if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
-  if (t.dataset.action === "field") { await request("PATCH", `${C}/form-draft/fields/${t.dataset.key}`, { value: t.value.trim() }); await refresh(["form", "gaps"]); }
+  if (t.dataset.action === "field") {
+    if (!t.reportValidity()) return;
+    const { key } = t.dataset;
+    const value = t.value.trim();
+    if (!validCaseField(key, value, S.form.fields.find(field => field.key === key)?.value)) return;
+    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
+    await refresh(["form", "gaps"]);
+  }
   if (t.closest("form[data-action=attest]")) { S.attest[t.name] = t.checked; S.pkgError = null; render(); }
   if (t.closest("form[data-action=intake-attest]")) { S.intake[t.name] = t.checked; render(); }
   if (t.id === "intakeLang") { S.intake.lang = t.value; if (TENANT_MODE) try { localStorage.setItem("tp-intake-lang", t.value); } catch {} render(); }  // bug 8: kept after a reload
