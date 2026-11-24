@@ -73,7 +73,7 @@ Open issues:
 - **#54 (closed, PR #66):** Lameda12 confirmed Form J (the full title line, edition 2024-01) and Regulations s. 25A(2) on 2026-11-17, so all five sources are confirmed. The Form J confirmation covers the title and URL only. The draft remains partial; see #67 for coverage of tenant pages F1–F3. leozhang5867 also checked 25A(3B) and (3C): the app's "mail" and "after 4 p.m." wording is fixed in #73.
 - **#74:** intake tokens are written to the access logs in plain text (the API's, and a proxy's path and `Referer`).
 - **#4:** WS3 follow-ups from the PR #2 review.
-- **#68:** PDF text shaping is done (`opoeci6/feat-68-hindi-pdf`, `uharfbuzz` + fpdf2 `set_text_shaping`); only a native speaker's review of the Hindi tenant page text is left. Russian (#69) is done and closed.
+- **#68 (done on `opoeci6/feat-68-hindi-pdf`):** Hindi PDF text shaping is in (`uharfbuzz` with fpdf2 `set_text_shaping`, schema `opoeci6/schema-68-hindi-pdf`), completing #68. Russian (#69) is done and closed.
 - **#60:** remove personal details from evidence text before it goes to the model (to discuss).
 - **#61 (OCR part built, see Done):** after the MVP: let the model see photos and scanned pages, with content checks first (malware, known illegal images, graphic content).
 
