@@ -58,13 +58,13 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | GET | `/cases/{case_id}/timeline` | `TimelineEvent[]` | Sorted by date. |
 | PATCH | `/timeline/{event_id}` | `TimelineEvent` | Body: `{ review_status, title?, description?, date?, caseworker_note? }` |
 | GET | `/cases/{case_id}/gaps` | `Gap[]` | |
-| PATCH | `/gaps/{gap_id}` | `Gap` | Body: `{ status, resolution_note?, value? }`. A new `value` for `monthly_rent` or `tenancy_start` is checked as on the form draft below (CONTRACT_CHANGES, issues #121 and #122). |
+| PATCH | `/gaps/{gap_id}` | `Gap` | Body: `{ status, resolution_note?, value? }`. New field values use the form validation below. After PR #143 ships, reopening a resolved gap whose field is covered by its Form J alternative returns 422 with a plain reason. |
 | POST | `/gaps/{gap_id}/tenant-request` | `Gap` | Caseworker approved the drafted message. Sends it via the intake link; gap → `waiting_tenant`. Optional body `{ message, message_en }`: the request as the caseworker edited it (CONTRACT_CHANGES #37). |
 | POST | `/gaps/{gap_id}/tenant-request/translate` | `{ message }` | Body: `{ message_en }`. Translates the caseworker's English into the tenant's language with one model call. Saves nothing (CONTRACT_CHANGES #37). |
 | POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
-| GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. |
-| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body: `{ value }` → `user_entered`. A new value for `monthly_rent` (a positive CAD amount, up to two decimals) or `tenancy_start` (`YYYY-MM-DD`, year 1900 to now) that does not fit is a 422 with a plain reason; the stored value sent back unchanged (confirming a draft) and an empty value (clearing) are not checked (CONTRACT_CHANGES, issues #121 and #122). |
+| GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. See [Form J draft fields](#form-j-draft-fields) for the F1–F3 rollout (PR #143). |
+| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body `{ value }`. A nonempty value becomes `user_entered`. An empty value clears the field to `missing` with `value: null`. See [Form J draft fields](#form-j-draft-fields) for accepted keys and validation. |
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 if blocking gaps open or tenant hasn't attested. |
 | GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built package. Query `version` (default: the latest); 404 if none is built. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
@@ -236,6 +236,25 @@ type Package = { built_at: string; prepared_by: string;
                  files: { label: string; filename: string; sha256: string; note: string }[];
                  reminders: string[] };
 ```
+
+## Form J draft fields
+
+The F1–F3 behavior below ships with [PR #143](https://github.com/opoeci6/TenantProof/pull/143). Until then, the two existing structured fields, `monthly_rent` and `tenancy_start`, use the existing amount and date validation below.
+
+- `FormDraft` and `FormField` keep their shapes. The standard prepared tenant draft returns 74 field entries: the seven existing fields and 67 optional, caseworker-entered F1–F3 fields. A case with no stored form fields still returns an empty list. Projected fields have `value: null`, `required: false`, `status: "missing"` and no sources. Known optional keys can be PATCHed even before their rows exist. Unknown keys and another organisation's cases return 404.
+- `weekly_rent` and `move_in_date` cover the existing `monthly_rent` and `tenancy_start` requirements, respectively. While an alternative has a value, the legacy field's `required` is false in form responses. Filling the alternative resolves an open or waiting gap for the legacy field. Clearing it reopens a gap resolved by that alternative if the legacy field is still empty. A direct attempt to reopen a covered resolved gap returns 422 with `detail: "Clear the corresponding Form J field before reopening this item"`. The stage, package checks and deterministic missing-field checks follow the same requirements.
+- A new value is trimmed and checked as follows. Business rule failures return 422 with `{ detail: string }`; the case and form are left unchanged. An empty form PATCH value can clear a field. Sending back the stored value bypasses format checks so a legacy verbatim draft can still be confirmed. The rent-period conflict check still applies to any nonempty rent write.
+
+| Fields | Accepted nonempty value |
+|---|---|
+| `tenant_email`, `landlord_email` | An email address in the server's accepted syntax |
+| `monthly_rent`, `weekly_rent`, `deposit_amount` | Positive CAD amount with up to two decimal places. Grouped thousands, optional `$` and an optional `CAD` prefix or suffix are accepted. A monthly and a weekly rent cannot both be set. Clear the existing rent before saving the other period. |
+| `tenancy_start` | A calendar date in `YYYY-MM-DD`, year 1900 through the current year |
+| `move_in_date`, `move_out_date`, `notice_given_date`, `notice_effective_date`, `fixed_term_start`, `fixed_term_end`, `deposit_paid_date` | A calendar date in `YYYY-MM-DD`, year 1900 or later |
+| `applicant_email_consent`, `notice_given`, `written_lease`, `lease_copy_provided`, `act_copy_provided`, `deposit_paid`, `deposit_in_trust` | `yes` or `no` |
+| `notice_given_by` | `landlord` or `tenant` |
+| `lease_term` | `year_to_year`, `month_to_month`, `week_to_week` or `fixed_term` |
+| `request_termination`, `request_compliance`, `request_repairs`, `request_set_aside_notice`, `request_payment`, `request_rent_relief`, `request_expense_compensation`, `request_application_fee`, `request_other` | `yes` to select. Send an empty value to clear. Each key has a separate text field with the suffix `_reason`. |
 
 ---
 
