@@ -3,6 +3,7 @@ EXIF reading, metadata stripping and text extraction. Every image and PDF is bui
 
 import io
 import multiprocessing
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -404,7 +405,9 @@ def test_read_txt_caps_the_number_of_messages(monkeypatch):
 # --- #125: a TXT is a chat export or a letter ------------------------------------------------
 
 REPO = Path(__file__).resolve().parents[2]
-TEST_KIT = REPO.parent / "test-kit"  # the team's test files, next to the repo; not in CI
+# The team's test files are not in the repo: point TENANTPROOF_TEST_KIT at the folder to
+# check them too (for example ..\test-kit). Unset, as in CI, that test is skipped.
+TEST_KIT_ENV = "TENANTPROOF_TEST_KIT"
 
 WHATSAPP = """[14/08/2026, 21:10:05] Jordan Lee: There's water coming through the bathroom wall.
 It started last night and the stain is about a metre wide now.
@@ -447,24 +450,32 @@ def txt_kind(data: bytes) -> str:
     return text.read_txt_as(data)[0]
 
 
-def test_every_test_kit_and_demo_chat_stays_messages():
-    """The demo chat and every test-kit TXT the upload accepts (three in encodings it refuses
-    never get a kind) keep `messages` and `message N` locators, exactly as before #125."""
-    files = [REPO / "demo" / "chat_zh.txt"]
-    if TEST_KIT.is_dir():
-        files += sorted(TEST_KIT.rglob("*.txt"))
+def assert_chat(path: Path) -> None:
+    kind, pages = text.read_txt_as(path.read_bytes())
+    assert kind == "messages", path.name
+    assert pages[0]["locator"] == "message 1", path.name
+
+
+def test_the_demo_chat_stays_messages():
+    """The demo's chat_zh.txt keeps `messages` and `message N` locators, exactly as before #125."""
+    assert_chat(REPO / "demo" / "chat_zh.txt")
+
+
+def test_every_test_kit_chat_stays_messages():
+    """Every test-kit TXT the upload accepts keeps `messages`. Files in encodings the upload
+    refuses (cp1252, cp1251, Big5) and empty.txt never get a kind."""
+    folder = os.environ.get(TEST_KIT_ENV)
+    if not folder:
+        pytest.skip(f"{TEST_KIT_ENV} is not set")
+    kit = Path(folder)
+    assert kit.is_dir(), f"{TEST_KIT_ENV}={folder} is not a folder"
     checked = []
-    for path in files:
-        data = path.read_bytes()
-        if path.name == "expected-results.txt" or sniff.sniff(data) != sniff.TEXT:
-            continue  # the kit's notes, or a file the upload refuses (empty, cp1252, ...)
-        kind, pages = text.read_txt_as(data)
-        assert kind == "messages", path.name
-        assert pages[0]["locator"] == "message 1", path.name
+    for path in sorted(kit.rglob("*.txt")):
+        if path.name == "expected-results.txt" or sniff.sniff(path.read_bytes()) != sniff.TEXT:
+            continue  # the kit's notes, or a file the upload refuses
+        assert_chat(path)
         checked.append(path.name)
-    assert "chat_zh.txt" in checked
-    if TEST_KIT.is_dir():  # chat_zh twice, en x3, hi, ru, zh gbk
-        assert len(checked) == 8, checked
+    assert checked, f"no TXT the upload accepts in {kit}"
 
 
 def test_a_whatsapp_export_with_multi_line_messages_is_messages():
@@ -486,6 +497,44 @@ def test_a_letter_with_a_date_header_a_dated_line_and_a_re_line_stays_a_letter()
     assert kind == "letter"
     assert [p["locator"] for p in pages] == [f"line {n}" for n in range(1, 12)]
     assert pages[2]["text"] == "Date: 2026-08-20"
+
+
+def test_a_letter_with_three_dated_sentences_stays_a_letter():
+    """opoeci6's example on #145: three dates, none where a chat export puts its timestamp."""
+    letter = ("To: Harbour Properties\nRe: repairs\n"
+              "On 2026-08-14 I reported the leak by phone.\n"
+              "On 2026-09-02 I reported it again.\n"
+              "On 2026-10-01 I sent this letter.\n"
+              "Nothing has been fixed.\n")
+    assert txt_kind(letter.encode()) == "letter"
+
+
+def test_a_letter_with_three_clock_times_stays_a_letter():
+    letter = ("To: Harbour Properties\nRe: no heat\n"
+              "The heat went off at 9:30 pm on Friday.\n"
+              "It came back on Saturday at 6:00 am\n"
+              "and went off again at 11:15 pm\n"
+              "Please repair the boiler.\n")
+    assert txt_kind(letter.encode()) == "letter"
+
+
+@pytest.mark.parametrize(("line", "stamped"), [
+    ("[2026-08-14 21:10] 陈梅：浴室漏水", True),
+    ("[14/08/2026, 21:10:05] Jordan Lee: water", True),
+    ("14/08/2026, 21:10 - Jordan Lee: water", True),
+    ("2026-08-14 21:10 Tenant: water", True),
+    ("21:10 Tenant: water", True),
+    ("\ufeff2026-08-14 21:10 Tenant: water", True),  # a BOM the decoder left
+    ("陈梅 2026-08-14 21:10", True),
+    ("Jordan Lee 14/08/2026 21:10:05", True),
+    ("On 2026-08-14 I reported the leak by phone.", False),
+    ("The heat went off at 9:30 pm", False),
+    ("Date 2026-08-20 10:00", False),  # a header word, not a name
+    ("陈梅 21:10", False),  # a time alone after a name
+    ("Room 2026-08-14 21:10 was wet", False),  # more than a name and a timestamp
+])
+def test_a_timestamp_counts_only_where_chat_exports_put_it(line: str, stamped: bool):
+    assert text._is_stamped(line) is stamped
 
 
 @pytest.mark.parametrize("chat", [

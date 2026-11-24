@@ -186,15 +186,20 @@ def _read_pdf_child(data: bytes, conn: _PipeEnd, scans: bool = False) -> None:
 
 
 TxtKind = Literal["messages", "letter"]
-STAMP_WINDOW = 40  # a chat line's timestamp is within its first 40 characters
 MIN_STAMPED = 3  # this many timestamped lines make a chat, however long its messages are
-_DATE = (r"[0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}"  # 2026-08-14, 2026/8/14, 2026年8月14
+_DATE = (r"[0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}日?"  # 2026-08-14, 2026/8/14, 2026年8月14日
          r"|[0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4}")  # 14/08/2026, 8/14/26, 14.08.2026
-_STAMP = re.compile(rf"(?<![0-9])(?:{_DATE}|[0-9]{{1,2}}:[0-9]{{2}})(?![0-9])")
+_TIME = r"[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?"  # 21:10, 21:10:05
+# Where chat exports put the timestamp: at the very start of the line, after an optional "["
+# ("[2026-08-14 21:10] ...", "14/08/2026, 21:10 - ...", "21:10 Tenant: ..."), or after a name
+# on a line that holds only the name, a date and a time (WeChat PC: "陈梅 2026-08-14 21:10").
+_LEADING_STAMP = re.compile(rf"^\ufeff?\[?(?:{_DATE}|{_TIME})(?![0-9])")
+_NAME_STAMP = re.compile(rf"^\ufeff?([^\s:：][^:：]{{0,29}}?)\s+(?:{_DATE})[,\s]+{_TIME}$")
 # A short name, an optional space and a colon: an ASCII one then a space or the end ("Tenant: ",
 # not "https://"), or a full-width one, which Chinese text follows with no space ("房东：").
 _SPEAKER = re.compile(r"^([^\s:：][^:：]{0,29}?)\s?(?::(?:\s|$)|：)")
-# Letter and e-mail headers look like "Name:" but are not speakers. Matched on the first word.
+# Letter and e-mail headers look like "Name:" (or "Date 2026-08-20 10:00") but are not
+# speakers. Matched on the first word.
 _HEADERS = frozenset({"to", "from", "date", "re", "subject", "cc", "bcc", "attn", "attention",
                       "dear", "sent", "address", "tel", "phone", "email", "e-mail"})
 
@@ -224,28 +229,45 @@ def read_txt_as(data: bytes, kind: TxtKind | None = None) -> tuple[TxtKind, Page
 
 def looks_like_chat(lines: Sequence[str]) -> bool:
     """Whether a TXT's non-empty lines are a chat or message export rather than a letter or
-    other document (#125). A line counts when a timestamp (a date such as 2026-08-14 or
-    14/08/2026, or a time such as 21:10) is in its first STAMP_WINDOW characters, or when it
-    starts with a speaker prefix ("Tenant: ", "房东：", "Locataire : "; header words such as
-    "To:", "Date:" or "Re:" are not speakers). The file is a chat when more than half of its
-    lines count, or when at least MIN_STAMPED lines carry a timestamp: a WhatsApp export whose
-    long messages run on over untimed lines, or a WeChat PC export ("陈梅 2026-08-14 21:10"
-    with the message on the next line), where only half the lines count.
+    other document (#125). A line is timestamped where chat exports put the timestamp: a date
+    (2026-08-14, 14/08/2026) or a time (21:10) at the start of the line, after an optional "["
+    ("[2026-08-14 21:10] ...", "14/08/2026, 21:10 - ..."), or a line that is only a name, a
+    date and a time (WeChat PC: "陈梅 2026-08-14 21:10", the message on the next line). A date
+    or time inside a sentence ("On 2026-08-14 I reported ...", "... at 9:30 pm") does not
+    count. A line counts when it is timestamped or starts with a speaker prefix ("Tenant: ",
+    "房东：", "Locataire : "; header words such as "To:", "Date:" or "Re:" are not speakers).
+    The file is a chat when more than half of its lines count, or when at least MIN_STAMPED
+    lines are timestamped: a WhatsApp export whose long messages run on over untimed lines, or
+    a WeChat PC export, where only half the lines count.
 
-    Deterministic and simple, so it can be wrong at the edges: a letter that lists three or
-    more dates near the start of its lines reads as a chat, and a chat of one or two messages
-    with long untimed continuation lines reads as a letter. No lines: a chat (today's kind)."""
+    Deterministic and simple, so it can be wrong at the edges: a document of three or more
+    lines that each begin with a date or time (a dated log or list of incidents, "2026-08-14:
+    reported by phone") reads as a chat, and so does one whose lines are mostly "Name: text";
+    a chat of one or two messages with long untimed continuation lines, or one whose export
+    puts the timestamp elsewhere (at the end of a line, or a time alone after a name), reads
+    as a letter. No lines: a chat (today's kind)."""
     if not lines:
         return True
-    stamped = sum(1 for line in lines if _STAMP.search(line[:STAMP_WINDOW]))
-    counted = sum(1 for line in lines
-                  if _STAMP.search(line[:STAMP_WINDOW]) or _is_speaker(line))
-    return stamped >= MIN_STAMPED or counted * 2 > len(lines)
+    stamped = [_is_stamped(line) for line in lines]
+    counted = sum(1 for line, stamp in zip(lines, stamped, strict=True)
+                  if stamp or _is_speaker(line))
+    return sum(stamped) >= MIN_STAMPED or counted * 2 > len(lines)
+
+
+def _is_stamped(line: str) -> bool:
+    if _LEADING_STAMP.match(line):
+        return True
+    named = _NAME_STAMP.match(line)
+    return named is not None and not _is_header(named.group(1))
 
 
 def _is_speaker(line: str) -> bool:
     match = _SPEAKER.match(line)
-    return match is not None and match.group(1).split()[0].casefold() not in _HEADERS
+    return match is not None and not _is_header(match.group(1))
+
+
+def _is_header(name: str) -> bool:
+    return name.split()[0].casefold() in _HEADERS
 
 
 def _contents_key(raw: object) -> tuple[int, ...]:
