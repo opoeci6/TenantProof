@@ -78,10 +78,16 @@ def clean_text(value: str, limit: int) -> str:
 
 
 def clean_model_text(value: str, limit: int) -> str:
-    """Text that goes back into a model prompt: like `clean_text`, but fully HTML-escaped
+    """Text that is returned to the model as data: like `clean_text`, but fully HTML-escaped
     (`&`, `<`, `>`) so the escaping is reversible with `html.unescape`."""
     cleaned = html.escape(_strip_controls(value), quote=False).strip()
     return cleaned[:limit].rstrip()
+
+
+def strip_text(value: str, limit: int) -> str:
+    """Control characters removed and cut to `limit`, no escaping. For a line that goes into
+    `wrap_evidence`, which escapes the whole block itself (escaping here would do it twice)."""
+    return _strip_controls(value).strip()[:limit].rstrip()
 
 
 # Short untrusted text shown to the model outside an evidence block.

@@ -25,7 +25,7 @@ from app.models import (
     TimelineEventRow,
 )
 from app.services import activity
-from app.services.agent.tools import clean_model_text, clean_text
+from app.services.agent.tools import clean_text, strip_text
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
 from app.services.review import request_sent_line, sync_attestation_gap
@@ -194,7 +194,7 @@ def open_gap_lines(session: Session, case: CaseRow) -> tuple[str, ...]:
         select(GapRow).where(GapRow.case_id == case.id).order_by(col(GapRow.position))
     ).all()
     return tuple(
-        f"- {gap.id} [{gap.severity}] {clean_model_text(gap.title, 200)}"
+        f"- {gap.id} [{gap.severity}] {strip_text(gap.title, 200)}"
         + (f" (field {key})" if (key := (gap.input or {}).get("field_key")) else "")
         + (" (a draft is already written)" if gap.tenant_request else " (no draft yet)")
         for gap in gaps
