@@ -391,14 +391,129 @@ def test_read_txt_strips_the_bom_and_gives_one_message_per_line():
 
 
 def test_read_txt_skips_blank_lines_and_drops_control_characters():
-    pages = text.read_txt(b"a\tb\x00\r\n\n   \nc\x0cd\n")
-    assert pages == [{"locator": "message 1", "text": "a\tb"},
-                     {"locator": "message 2", "text": "c\x0cd"}]
+    pages = text.read_txt(b"a\tb\x00\r\n\n   \nc\x0cd\n")  # not a chat: "line N" (#125)
+    assert pages == [{"locator": "line 1", "text": "a\tb"},
+                     {"locator": "line 2", "text": "c\x0cd"}]
 
 
 def test_read_txt_caps_the_number_of_messages(monkeypatch):
     monkeypatch.setattr(text, "MAX_MESSAGES", 3)
     assert len(text.read_txt(b"1\n2\n3\n4\n5\n")) == 3
+
+
+# --- #125: a TXT is a chat export or a letter ------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+TEST_KIT = REPO.parent / "test-kit"  # the team's test files, next to the repo; not in CI
+
+WHATSAPP = """[14/08/2026, 21:10:05] Jordan Lee: There's water coming through the bathroom wall.
+It started last night and the stain is about a metre wide now.
+I put a bucket under it but it keeps dripping onto the floor.
+Can you send someone this week? My daughter has asthma.
+[15/08/2026, 09:02:11] Landlord: I'll send someone next week.
+[29/08/2026, 18:40:37] Jordan Lee: Nobody came.
+The stain is bigger and there's mould on the ceiling now.
+The smell is getting worse every day.
+Please call me back today.
+"""
+
+WECHAT_PC = """陈梅 2026-08-14 21:10
+房东您好，我家浴室的墙在漏水，墙面上已经有一大块水渍。
+房东 2026-08-15 09:12
+收到。我这周会派人去看一下。
+陈梅 2026-08-22 18:30
+这周没有人来。水渍变大了，还长了霉点。
+"""
+
+LETTER = """Jordan Lee
+Unit 4B, 100 Example Street, Halifax, NS
+Date: 2026-08-20
+
+To: Sample Property Management Ltd.
+Re: Repair request for the bathroom leak
+
+Dear Sample Property Management,
+
+On 2026-08-14 I told you that water was coming through the bathroom wall.
+Nobody has come to fix it, and there is now mould on the ceiling.
+Please repair the leak and the damaged wall within 14 days.
+
+Sincerely,
+Jordan Lee
+"""
+
+
+def txt_kind(data: bytes) -> str:
+    return text.read_txt_as(data)[0]
+
+
+def test_every_test_kit_and_demo_chat_stays_messages():
+    """The demo chat and every test-kit TXT the upload accepts (three in encodings it refuses
+    never get a kind) keep `messages` and `message N` locators, exactly as before #125."""
+    files = [REPO / "demo" / "chat_zh.txt"]
+    if TEST_KIT.is_dir():
+        files += sorted(TEST_KIT.rglob("*.txt"))
+    checked = []
+    for path in files:
+        data = path.read_bytes()
+        if path.name == "expected-results.txt" or sniff.sniff(data) != sniff.TEXT:
+            continue  # the kit's notes, or a file the upload refuses (empty, cp1252, ...)
+        kind, pages = text.read_txt_as(data)
+        assert kind == "messages", path.name
+        assert pages[0]["locator"] == "message 1", path.name
+        checked.append(path.name)
+    assert "chat_zh.txt" in checked
+    if TEST_KIT.is_dir():  # chat_zh twice, en x3, hi, ru, zh gbk
+        assert len(checked) == 8, checked
+
+
+def test_a_whatsapp_export_with_multi_line_messages_is_messages():
+    """3 of 9 lines are timestamped: under half, but at least MIN_STAMPED."""
+    kind, pages = text.read_txt_as(WHATSAPP.encode())
+    assert kind == "messages"
+    assert pages[1] == {"locator": "message 2",
+                        "text": "It started last night and the stain is about a metre wide now."}
+
+
+def test_a_wechat_pc_export_with_the_name_first_is_messages():
+    """No line starts with a timestamp or "Name:", and exactly half the lines are headers."""
+    assert not any(text._is_speaker(line) for line in WECHAT_PC.splitlines())
+    assert txt_kind(WECHAT_PC.encode()) == "messages"
+
+
+def test_a_letter_with_a_date_header_a_dated_line_and_a_re_line_stays_a_letter():
+    kind, pages = text.read_txt_as(LETTER.encode())
+    assert kind == "letter"
+    assert [p["locator"] for p in pages] == [f"line {n}" for n in range(1, 12)]
+    assert pages[2]["text"] == "Date: 2026-08-20"
+
+
+@pytest.mark.parametrize("chat", [
+    "Tenant: it leaks",  # one line with a speaker
+    "Tenant: it leaks\nLandlord: ok\nNo reply after that",  # 2 of 3 lines
+    "房东：明天来修\nTenant: OK",  # full-width colon
+    "Locataire : L'eau coule encore.\nPropriétaire : Je passe demain.",  # space before colon
+    "21:10 Tenant: it leaks\n21:12 Landlord: ok",  # a time only
+])
+def test_short_chats_are_messages(chat: str):
+    assert txt_kind(chat.encode()) == "messages"
+
+
+@pytest.mark.parametrize("letter", [
+    "Please fix the leak.",
+    "To: Landlord\nFrom: Tenant\nRe: Leak\nThe bathroom wall leaks.",  # headers aren't speakers
+    "Dear Landlord:\nThe wall leaks.\nPlease send someone.",
+    "I paid $1,650.00 on 1 August.\nThe receipt number is 4021-77.\nThank you.",
+])
+def test_documents_are_letters(letter: str):
+    assert txt_kind(letter.encode()) == "letter"
+
+
+def test_a_known_kind_is_kept_whatever_the_lines_look_like():
+    """A tenant's typed answer is a message even when it reads like a note."""
+    kind, pages = text.read_txt_as(b"My rent is $1,650 a month.", kind="messages")
+    assert kind == "messages"
+    assert pages == [{"locator": "message 1", "text": "My rent is $1,650 a month."}]
 
 
 def test_read_pdf_parses_a_content_stream_shared_by_many_pages_once(monkeypatch):

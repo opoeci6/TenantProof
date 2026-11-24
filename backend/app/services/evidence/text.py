@@ -1,5 +1,5 @@
-"""Text from PDF and TXT evidence, with locators the timeline can cite ("page 3", "message 2").
-Ingest stores each one as an `evidence_page` row.
+"""Text from PDF and TXT evidence, with locators the timeline can cite ("page 3", "message 2",
+"line 4" in a TXT that is not a chat). Ingest stores each one as an `evidence_page` row.
 
 PDF parsing is bounded: at most MAX_PAGES pages, MAX_CHARS characters and PDF_SECONDS of
 work (checked between pages). Pages that share one content stream are parsed once. Ingest
@@ -12,8 +12,9 @@ import multiprocessing
 import re
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pypdf import PdfReader
 from pypdf.generic import ArrayObject, IndirectObject
@@ -184,16 +185,67 @@ def _read_pdf_child(data: bytes, conn: _PipeEnd, scans: bool = False) -> None:
         conn.close()
 
 
+TxtKind = Literal["messages", "letter"]
+STAMP_WINDOW = 40  # a chat line's timestamp is within its first 40 characters
+MIN_STAMPED = 3  # this many timestamped lines make a chat, however long its messages are
+_DATE = (r"[0-9]{4}[-/.年][0-9]{1,2}[-/.月][0-9]{1,2}"  # 2026-08-14, 2026/8/14, 2026年8月14
+         r"|[0-9]{1,2}[-/.][0-9]{1,2}[-/.][0-9]{2,4}")  # 14/08/2026, 8/14/26, 14.08.2026
+_STAMP = re.compile(rf"(?<![0-9])(?:{_DATE}|[0-9]{{1,2}}:[0-9]{{2}})(?![0-9])")
+# A short name, an optional space and a colon: an ASCII one then a space or the end ("Tenant: ",
+# not "https://"), or a full-width one, which Chinese text follows with no space ("房东：").
+_SPEAKER = re.compile(r"^([^\s:：][^:：]{0,29}?)\s?(?::(?:\s|$)|：)")
+# Letter and e-mail headers look like "Name:" but are not speakers. Matched on the first word.
+_HEADERS = frozenset({"to", "from", "date", "re", "subject", "cc", "bcc", "attn", "attention",
+                      "dear", "sent", "address", "tel", "phone", "email", "e-mail"})
+
+
 def read_txt(data: bytes) -> Pages:
-    """One locator per non-empty line ("message 1", "message 2", ...): chat exports put one
-    message on each line, and the timeline cites messages by number."""
+    """The pages of read_txt_as, without the kind."""
+    return read_txt_as(data)[1]
+
+
+def read_txt_as(data: bytes, kind: TxtKind | None = None) -> tuple[TxtKind, Pages]:
+    """One locator per non-empty line: "message 1", "message 2", ... for a chat export (one
+    message per line, cited by number), "line 1", "line 2", ... for any other text, such as a
+    letter. `kind` None decides by looks_like_chat; a caller that knows the kind (a tenant's
+    typed answer is a message) passes it."""
     # The encodings sniff accepts; anything else as UTF-8, with control characters cleaned.
     decoded = sniff.decode_text(data)
     text = _clean(data.decode("utf-8-sig") if decoded is None else decoded)[:MAX_CHARS]
     # Newlines only: splitlines() would also break on form feeds and U+2028 inside a message.
     lines = [line.strip() for line in re.split(r"\r\n|\r|\n", text) if line.strip()]
-    return [{"locator": f"message {n}", "text": line}
-            for n, line in enumerate(lines[:MAX_MESSAGES], start=1)]
+    lines = lines[:MAX_MESSAGES]
+    if kind is None:
+        kind = "messages" if looks_like_chat(lines) else "letter"
+    prefix = "message" if kind == "messages" else "line"
+    return kind, [{"locator": f"{prefix} {n}", "text": line}
+                  for n, line in enumerate(lines, start=1)]
+
+
+def looks_like_chat(lines: Sequence[str]) -> bool:
+    """Whether a TXT's non-empty lines are a chat or message export rather than a letter or
+    other document (#125). A line counts when a timestamp (a date such as 2026-08-14 or
+    14/08/2026, or a time such as 21:10) is in its first STAMP_WINDOW characters, or when it
+    starts with a speaker prefix ("Tenant: ", "房东：", "Locataire : "; header words such as
+    "To:", "Date:" or "Re:" are not speakers). The file is a chat when more than half of its
+    lines count, or when at least MIN_STAMPED lines carry a timestamp: a WhatsApp export whose
+    long messages run on over untimed lines, or a WeChat PC export ("陈梅 2026-08-14 21:10"
+    with the message on the next line), where only half the lines count.
+
+    Deterministic and simple, so it can be wrong at the edges: a letter that lists three or
+    more dates near the start of its lines reads as a chat, and a chat of one or two messages
+    with long untimed continuation lines reads as a letter. No lines: a chat (today's kind)."""
+    if not lines:
+        return True
+    stamped = sum(1 for line in lines if _STAMP.search(line[:STAMP_WINDOW]))
+    counted = sum(1 for line in lines
+                  if _STAMP.search(line[:STAMP_WINDOW]) or _is_speaker(line))
+    return stamped >= MIN_STAMPED or counted * 2 > len(lines)
+
+
+def _is_speaker(line: str) -> bool:
+    match = _SPEAKER.match(line)
+    return match is not None and match.group(1).split()[0].casefold() not in _HEADERS
 
 
 def _contents_key(raw: object) -> tuple[int, ...]:
