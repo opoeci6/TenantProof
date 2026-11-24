@@ -12,7 +12,9 @@ F2_DATE_KEYS = frozenset({
 })
 MONEY_KEYS = frozenset({"monthly_rent", "weekly_rent", "deposit_amount"})
 RENT_KEYS = frozenset({"monthly_rent", "weekly_rent"})
+EMAIL_KEYS = frozenset({"tenant_email", "landlord_email"})
 _YES_NO = {"yes": "Yes", "no": "No"}
+F1_CHOICES = {"applicant_email_consent": _YES_NO}
 F2_CHOICES = {
     "notice_given": _YES_NO,
     "notice_given_by": {"landlord": "Landlord", "tenant": "Tenant"},
@@ -26,6 +28,7 @@ F2_CHOICES = {
     "deposit_paid": _YES_NO,
     "deposit_in_trust": _YES_NO,
 }
+FORM_CHOICES = {**F1_CHOICES, **F2_CHOICES}
 
 # A blank answer is unknown. Hide related values only when explicitly inapplicable.
 F2_DEPENDENCIES = {
@@ -45,6 +48,10 @@ _RENT = re.compile(
     r"(?P<suffix>[ \t]+CAD)?",
     re.IGNORECASE,
 )
+_DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_EMAIL = re.compile(
+    rf"[A-Za-z0-9.!#$%&'*+/=?^_`{{|}}~-]+@{_DOMAIN_LABEL}(?:\.{_DOMAIN_LABEL})*"
+)
 
 
 def cad_amount(value: str) -> Decimal | None:
@@ -54,6 +61,10 @@ def cad_amount(value: str) -> Decimal | None:
         return None
     amount = Decimal(match["amount"].replace(",", ""))
     return amount if amount > 0 else None
+
+
+def is_email_address(value: str) -> bool:
+    return _EMAIL.fullmatch(value) is not None
 
 
 def is_tenancy_start_date(value: str, max_year: int = date.max.year) -> bool:

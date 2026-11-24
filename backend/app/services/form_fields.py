@@ -29,15 +29,52 @@ F2_FIELDS = (
     FormFieldSpec("deposit_paid_date", "Security deposit payment date", required=False),
     FormFieldSpec("deposit_in_trust", "Security deposit held in trust", required=False),
 )
-F2_BY_KEY = {field.key: field for field in F2_FIELDS}
-_F2_POSITIONS = {field.key: i for i, field in enumerate(F2_FIELDS, start=len(FORM_J_FIELDS))}
+F1_ADDRESS_GROUPS = {
+    "tenant_civic": "Tenant civic address",
+    "tenant_mailing": "Tenant mailing address",
+    "landlord_civic": "Landlord civic address",
+    "landlord_mailing": "Landlord mailing address",
+    "premises": "Rental premises address",
+}
+F1_ADDRESS_PARTS = {
+    "street": "Street address",
+    "apartment": "Apartment or unit",
+    "city": "City or town",
+    "province": "Province or territory",
+    "postal_code": "Postal code",
+}
+F1_CONTACT_GROUPS = {
+    "Tenant contact details": {
+        "tenant_home_phone": "Home phone",
+        "tenant_other_phone": "Other phone",
+        "tenant_email": "Email",
+        "applicant_email_consent": "Consent to email from Service Nova Scotia",
+    },
+    "Landlord contact details": {
+        "landlord_home_phone": "Home phone",
+        "landlord_other_phone": "Other phone",
+        "landlord_email": "Email",
+    },
+}
+F1_FIELDS = (
+    *(FormFieldSpec(f"{prefix}_{part}", f"{group} · {label}", required=False)
+      for prefix, group in F1_ADDRESS_GROUPS.items() for part, label in F1_ADDRESS_PARTS.items()),
+    *(FormFieldSpec(key, label, required=False)
+      for fields in F1_CONTACT_GROUPS.values() for key, label in fields.items()),
+)
+F2_FIELD_KEYS = frozenset(field.key for field in F2_FIELDS)
+MANUAL_FIELDS = (*F2_FIELDS, *F1_FIELDS)
+MANUAL_FIELDS_BY_KEY = {field.key: field for field in MANUAL_FIELDS}
+_MANUAL_POSITIONS = {
+    field.key: i for i, field in enumerate(MANUAL_FIELDS, start=len(FORM_J_FIELDS))
+}
 F2_ALTERNATIVES = {"weekly_rent": "monthly_rent", "move_in_date": "tenancy_start"}
 LEGACY_ALTERNATIVES = {legacy: current for current, legacy in F2_ALTERNATIVES.items()}
 
 
 def _optional_field(case_id: str, spec: FormFieldSpec) -> FormFieldRow:
     return FormFieldRow(
-        case_id=case_id, key=spec.key, position=_F2_POSITIONS[spec.key],
+        case_id=case_id, key=spec.key, position=_MANUAL_POSITIONS[spec.key],
         label=spec.label, required=spec.required, status="missing",
     )
 
@@ -45,14 +82,14 @@ def _optional_field(case_id: str, spec: FormFieldSpec) -> FormFieldRow:
 def with_optional_fields(case: CaseRow, fields: Sequence[FormFieldRow]) -> list[FormFieldRow]:
     existing = {field.key: field for field in fields}
     return [
-        *(field for field in fields if field.key not in F2_BY_KEY),
+        *(field for field in fields if field.key not in MANUAL_FIELDS_BY_KEY),
         *(existing[spec.key] if spec.key in existing else _optional_field(case.id, spec)
-          for spec in F2_FIELDS),
+          for spec in MANUAL_FIELDS),
     ]
 
 
 def materialize_optional_field(session: Session, case_id: str, key: str) -> FormFieldRow | None:
-    spec = F2_BY_KEY.get(key)
+    spec = MANUAL_FIELDS_BY_KEY.get(key)
     if spec is None:
         return None
     field = _optional_field(case_id, spec)

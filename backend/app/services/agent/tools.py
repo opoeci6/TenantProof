@@ -33,8 +33,8 @@ from app.services import activity
 from app.services.agent.evidence_text import EvidenceTextStore, Page
 from app.services.dates import choose_date, date_mismatch, exif_matches
 from app.services.form_fields import (
-    F2_BY_KEY,
     LEGACY_ALTERNATIVES,
+    MANUAL_FIELDS_BY_KEY,
     covered_legacy_field_for_case,
     covered_legacy_fields,
     lock_alternative_fields,
@@ -770,7 +770,7 @@ class ListFormFields(BaseTool):
                 "fields": [
                     {"key": r.key, "label": r.label, "required": r.required, "status": r.status}
                     for r in rows
-                    if r.key not in F2_BY_KEY and r.key not in covered_fields
+                    if r.key not in MANUAL_FIELDS_BY_KEY and r.key not in covered_fields
                 ]
             }
         )
@@ -879,7 +879,7 @@ class CreateGap(BaseTool):
                 ),
             )  # fmt: skip
         if key is not None and (
-            key in F2_BY_KEY or ctx.session.get(FormFieldRow, (case.id, key)) is None
+            key in MANUAL_FIELDS_BY_KEY or ctx.session.get(FormFieldRow, (case.id, key)) is None
         ):
             return ToolError(
                 tool=self.name, kind="invalid_input",
@@ -1102,7 +1102,7 @@ def is_fillable(field: FormFieldRow) -> bool:
     and the caseworker has not cleared an earlier draft of it."""
     return (
         field.status == FILLABLE_STATUS
-        and field.key not in F2_BY_KEY
+        and field.key not in MANUAL_FIELDS_BY_KEY
         and field.key not in NEVER_FILLED
         and field.note != CLEARED_NOTE
     )
@@ -1198,7 +1198,7 @@ class FillFormField(BaseTool):
                 tool=self.name, kind="invalid_input",
                 message="The remedy is the tenant's choice. Leave it for the caseworker.",
             )  # fmt: skip
-        if field.key in F2_BY_KEY:
+        if field.key in MANUAL_FIELDS_BY_KEY:
             return ToolError(
                 tool=self.name, kind="invalid_input",
                 message="This field is completed by the caseworker.",

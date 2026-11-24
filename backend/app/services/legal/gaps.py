@@ -26,7 +26,7 @@ from app.models import (
 )
 from app.services import activity
 from app.services.agent.tools import clean_text
-from app.services.form_fields import F2_BY_KEY, covered_legacy_fields, is_required
+from app.services.form_fields import MANUAL_FIELDS_BY_KEY, covered_legacy_fields, is_required
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
 from app.services.review import request_sent_line, sync_attestation_gap
@@ -58,7 +58,7 @@ def case_facts(session: Session, case: CaseRow) -> CaseFacts:
     fields = tuple(
         FieldFact(key=row.key, label=row.label, required=is_required(row, covered_fields),
                   status=row.status)
-        for row in rows if row.key not in F2_BY_KEY
+        for row in rows if row.key not in MANUAL_FIELDS_BY_KEY
     )
     evidence = tuple(
         _evidence_fact(row)
@@ -107,7 +107,7 @@ def ensure_form_fields(session: Session, case: CaseRow) -> int:
     This edges into the `draft` step's area; the field list lives in the corpus so the two steps
     agree on it."""
     existing = session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case.id)).all()
-    if any(field.key not in F2_BY_KEY for field in existing):
+    if any(field.key not in MANUAL_FIELDS_BY_KEY for field in existing):
         return 0
     form = next(entry for entry in corpus.CORPUS if entry.kind == "form")
     for position, field in enumerate(form.form_fields):

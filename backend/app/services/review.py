@@ -18,12 +18,14 @@ from app.services.form_fields import (
     materialize_optional_field,
 )
 from app.services.form_values import (
-    F2_CHOICES,
+    EMAIL_KEYS,
     F2_DATE_KEYS,
+    FORM_CHOICES,
     MIN_TENANCY_YEAR,
     MONEY_KEYS,
     RENT_KEYS,
     cad_amount,
+    is_email_address,
     is_tenancy_start_date,
 )
 from app.services.legal.gap_checks import UNATTESTED_TITLE
@@ -100,11 +102,13 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
     if value != (field.value or ""):
         # Existing verbatim drafts can still be confirmed, and an empty value clears the field.
         if value:
+            if field.key in EMAIL_KEYS and not is_email_address(value):
+                raise _bad("Enter a valid email address")
             if field.key in MONEY_KEYS and cad_amount(value) is None:
                 raise _bad(
                     f"Enter {field.label.lower()} as a positive CAD amount with up to two decimals"
                 )
-            choices = F2_CHOICES.get(field.key)
+            choices = FORM_CHOICES.get(field.key)
             if choices is not None and value not in choices:
                 raise _bad(f"{field.label} must be one of: {', '.join(choices.values())}")
             if field.key in F2_DATE_KEYS and not is_tenancy_start_date(value):

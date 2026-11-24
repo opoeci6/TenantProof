@@ -107,6 +107,45 @@ def test_application_pdf_labels_rent_with_currency(fresh_db, client):
     assert "CAD 1,200.00" in pdf_text(entries["application_draft.pdf"])
 
 
+def test_application_pdf_groups_f1_addresses_and_respects_email_consent(fresh_db, client):
+    make_ready(client)
+    form_fields = f"/api/cases/{CASE}/form-draft/fields"
+    applicant_email = "f1-applicant@example.test"
+    respondent_email = "f1-respondent@example.test"
+    values = {
+        "tenant_civic_street": "12 Sea Way",
+        "tenant_civic_apartment": "5B",
+        "tenant_civic_city": "Halifax",
+        "tenant_civic_province": "NS",
+        "tenant_civic_postal_code": "B3H 1A1",
+        "landlord_mailing_street": "15 Sample Road",
+        "tenant_home_phone": "902-555-0103",
+        "tenant_email": applicant_email,
+        "landlord_email": respondent_email,
+        "written_lease": "yes",
+    }
+    for key, value in values.items():
+        r = client.patch(f"{form_fields}/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+
+    consent_url = f"{form_fields}/applicant_email_consent"
+    for consent in (None, "yes", "no"):
+        if consent is not None:
+            r = client.patch(consent_url, json={"value": consent})
+            assert r.status_code == 200, r.text
+        build(client)
+        text = pdf_text(unzip(download(client).content)["application_draft.pdf"])
+        assert "Tenant civic address" in text and "12 Sea Way" in text
+        assert "Apartment or unit 5B" in text and "Halifax, NS B3H 1A1" in text
+        assert "Landlord mailing address" in text and "15 Sample Road" in text
+        assert "Tenant mailing address" not in text
+        assert "902-555-0103" in text and respondent_email in text
+        assert (applicant_email in text) == (consent == "yes")
+        consent_label = "Consent to email from Service Nova Scotia"
+        assert (consent_label in text) == (consent is not None)
+        assert text.index("Tenant civic address") < text.index("Written lease")
+
+
 def test_application_pdf_exports_f2_and_accepts_weekly_rent(fresh_db, client):
     make_ready(client)
     values = {

@@ -510,6 +510,51 @@ def test_old_form_projects_f2_fields_and_preserves_legacy_date(fresh_db, client,
     assert _field(client, "tenancy_start") == {**legacy, "required": False}
 
 
+def test_old_form_projects_f1_fields_and_preserves_legacy_addresses(fresh_db, client, session):
+    legacy = {key: _field(client, key) for key in ("landlord_address", "rental_address")}
+    values = {
+        "tenant_civic_street": "3 Harbour Road",
+        "tenant_mailing_apartment": "4A",
+        "landlord_civic_city": "Dartmouth",
+        "landlord_mailing_province": "NS",
+        "premises_postal_code": "B3H 1A1",
+    }
+    for key, value in values.items():
+        field = _field(client, key)
+        assert field["status"] == "missing" and field["value"] is None
+        assert field["required"] is False and field["sources"] == []
+        assert session.get(FormFieldRow, (CASE, key)) is None
+        r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == value
+
+    assert {key: _field(client, key) for key in legacy} == legacy
+    assert _gap(client, "gap_01")["status"] == "open"
+
+
+def test_f1_applicant_email_consent_remains_separate_from_email(fresh_db, client):
+    email = "f1-applicant@example.test"
+    email_url = f"{FORM}/fields/tenant_email"
+    r = client.patch(email_url, json={"value": email})
+    assert r.status_code == 200, r.text
+    r = client.patch(email_url, json={"value": "f1-applicant.example.test"})
+    assert r.status_code == 422, r.text
+    assert _field(client, "tenant_email")["value"] == email
+    key = "applicant_email_consent"
+    url = f"{FORM}/fields/{key}"
+    assert _field(client, key)["value"] is None
+
+    r = client.patch(url, json={"value": "by phone"})
+    assert r.status_code == 422, r.text
+    assert _field(client, key)["value"] is None
+
+    for selected, saved in (("yes", "yes"), ("no", "no"), ("", None)):
+        r = client.patch(url, json={"value": selected})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == saved
+        assert _field(client, "tenant_email")["value"] == email
+
+
 @pytest.mark.parametrize(("key", "value"), [
     ("fixed_term_end", "2030-02-30"),
     ("move_out_date", "1899-12-31"),

@@ -307,6 +307,7 @@ textarea.field{min-height:72px;resize:vertical}
 
 /* form */
 .form-grid{display:flex;flex-direction:column}
+.form-subheading{margin:0 0 6px;font-size:14px}
 .frow{display:grid;grid-template-columns:200px minmax(0,1fr) 170px;gap:8px 16px;padding:12px 18px;border-top:1px solid var(--line);align-items:start}
 .frow:first-child{border-top:0}
 .frow .fl{font-weight:600;font-size:13.5px;padding-top:7px}
@@ -533,7 +534,7 @@ const SEED = {
   sources: [
     { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
     { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
-    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes lease details from Form J. The caseworker completes the official form." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes party and lease details from Form J. The caseworker completes the official form." },
     { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
   ],
   fields: [
@@ -583,8 +584,38 @@ const leaseFields = {
   deposit_paid_date: { when: ["deposit_paid", "yes"], label: "Date the deposit was paid", date: "future" },
   deposit_in_trust: { when: ["deposit_paid", "yes"], label: "Is the deposit held in trust?", options: yesNoOptions }
 };
+/* #67: Form J F1 applicant, respondent, and rental premises. */
+const addressParts = {
+  street: "Street number and name", apartment: "Apartment", city: "City or town",
+  province: "Province", postal_code: "Postal code"
+};
+const addressKeys = prefix => Object.keys(addressParts).map(part => `${prefix}_${part}`);
+const contactFields = {
+  tenant_home_phone: { label: "Home phone", type: "tel" },
+  tenant_other_phone: { label: "Business or other phone", type: "tel" },
+  tenant_email: { label: "Email", type: "email" },
+  applicant_email_consent: { label: "Consent to email from Service Nova Scotia", options: yesNoOptions },
+  landlord_home_phone: { label: "Home phone", type: "tel" },
+  landlord_other_phone: { label: "Business or other phone", type: "tel" },
+  landlord_email: { label: "Email", type: "email" }
+};
+const partyFields = { ...contactFields };
+for (const prefix of ["tenant_civic", "tenant_mailing", "landlord_civic", "landlord_mailing", "premises"]) {
+  for (const [part, label] of Object.entries(addressParts)) partyFields[`${prefix}_${part}`] = { label };
+}
+const partyGroups = [
+  ["Tenant applicant", ["tenant_name", ...addressKeys("tenant_civic"), "tenant_home_phone",
+    "tenant_other_phone", "tenant_email", "applicant_email_consent"]],
+  ["Tenant mailing address, if different", addressKeys("tenant_mailing")],
+  ["Landlord respondent", ["landlord_name", "landlord_address", ...addressKeys("landlord_civic"),
+    "landlord_home_phone", "landlord_other_phone", "landlord_email"]],
+  ["Landlord mailing address, if different", addressKeys("landlord_mailing")],
+  ["Rental premises", ["rental_address", ...addressKeys("premises")]]
+];
+const partyKeys = new Set(partyGroups.flatMap(([, keys]) => keys));
+const fieldControls = { ...leaseFields, ...partyFields };
 const db = JSON.parse(JSON.stringify(SEED));
-for (const [key, field] of Object.entries(leaseFields)) {
+for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
 db.runs = {}; db.intakeRequests = []; let runCounter = 0;
@@ -1308,7 +1339,7 @@ const fieldMaxDate = key => leaseFields[key]?.date === "future" ? "9999-12-31" :
 function caseFieldAttrs(key) {
   if (leaseFields[key]?.date) return `type="date" min="${minTenancyDate}" max="${fieldMaxDate(key)}"`;
   if (leaseFields[key]?.money) return 'inputmode="decimal"';
-  return "";
+  return partyFields[key]?.type ? `type="${partyFields[key].type}"` : "";
 }
 function validCaseField(key, value, saved) {
   if (!leaseFields[key]?.money || !value || value === saved) return true;
@@ -1357,7 +1388,7 @@ function viewForm() {
   const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
   const renderField = x => {
     const saved = x.value || "";
-    const { date, options, money } = leaseFields[x.key] || {};
+    const { date, options, money } = fieldControls[x.key] || {};
     const day = date ? new Date(saved + "T00:00:00Z") : null;
     const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
       || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
@@ -1368,15 +1399,21 @@ function viewForm() {
       ? `<select ${attrs}><option value="">Choose an answer</option>${Object.entries(options).map(([value, label]) =>
           `<option value="${value}" ${saved === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
       : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
-    return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
+    return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(partyFields[x.key]?.label || x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
       <div style="display:grid;gap:6px;min-width:0">${control}
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
+        ${x.key === "applicant_email_consent" ? '<span class="muted">The applicant email appears in the draft PDF only if you select Yes.</span>' : ""}
         ${x.key === "tenancy_start" && saved ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
         ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
       <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
   };
   const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
-  const rows = f.fields.filter(field => !Object.hasOwn(leaseFields, field.key)).map(renderField).join("");
+  const partySections = partyGroups.map(([title, keys]) => {
+    const group = keys.filter(key => fieldsByKey.has(key)).map(key => renderField(fieldsByKey.get(key))).join("");
+    return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
+  }).join("");
+  const rows = f.fields.filter(field => !partyKeys.has(field.key) && !Object.hasOwn(leaseFields, field.key))
+    .map(renderField).join("");
   const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
     if (!fieldsByKey.has(key)) return false;
     if (!definition.when) return true;
@@ -1388,9 +1425,10 @@ function viewForm() {
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
-    ${rows ? `<div class="panel form-grid">${rows}</div>` : ""}
+    ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
     ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
       <div class="panel form-grid">${leaseRows}</div>` : ""}
+    ${rows ? `<h2 class="section-h">Tenant request</h2><div class="panel form-grid">${rows}</div>` : ""}
     <h2 class="section-h">Details of the problem</h2>
     <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
       <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>
