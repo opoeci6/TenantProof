@@ -28,11 +28,10 @@ from app.models import (
 )
 from app.services.mappers import OPEN_GAP, has_completed_run
 from app.services.package import (
-    HINDI_NOTE,
     NOT_ANALYSED,
     analysis_warning,
     new_pdf,
-    pdf_text,
+    shape_for,
 )
 from app.services.verifier import normalize, verify_citation
 
@@ -71,7 +70,7 @@ def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: flo
     any character."""
     cjk = any("\u2e80" <= ch <= "\u9fff" or "\uff00" <= ch <= "\uffef" for ch in text)
     pdf.set_font("NotoSans", "B" if bold else "", size)
-    pdf.multi_cell(0, size * 0.5 + 1.5, pdf_text(pdf, text), new_x="LMARGIN", new_y="NEXT",
+    pdf.multi_cell(0, size * 0.5 + 1.5, shape_for(pdf, text), new_x="LMARGIN", new_y="NEXT",
                    wrapmode=WrapMode.CHAR if cjk else WrapMode.WORD)
     pdf.ln(gap)
 
@@ -294,7 +293,7 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
     _evidence(body, evidence, events)
     _gaps(body, gaps, sources, latest)
 
-    pdf = new_pdf(case.tenant_language)
+    pdf = new_pdf()
     pdf.set_title(f"Case brief {case.id}")
     stamp = _when(now or datetime.now(UTC))
     _write(pdf, "Case brief for caseworker review", bold=True, size=16, gap=2)
@@ -309,8 +308,6 @@ def build_brief(session: Session, case: CaseRow, *, now: datetime | None = None)
         "included.",
         size=9, gap=3,
     )
-    if case.tenant_language == "hi":
-        _write(pdf, HINDI_NOTE, size=9, gap=3)
     count = len(body.flagged)
     items = "1 item needs" if count == 1 else f"{count} items need"
     _write(pdf, f"{items} caseworker verification.", bold=True)
