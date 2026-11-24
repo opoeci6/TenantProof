@@ -1493,7 +1493,7 @@ function packageResult(p) {
     <h2>Package v${p.version} is ready</h2>
     ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${API_BASE}${C}/package/download?version=${p.version}" download>${zip}</a>`}
     <dl class="pkg-meta"><dt>Version</dt><dd>v${p.version}</dd><dt>Built by</dt><dd>${esc(p.built_by)}</dd><dt>Built</dt><dd>${fmtTime(p.built_at)}</dd><dt>SHA-256</dt><dd class="mono">${esc(p.sha256)}</dd></dl>
-    <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records." : "The zip is for your records."} The Program does not accept zip files: upload the files inside one by one.</p></section>`;
+    <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records. The Program does not accept zip files: in the real app, each file can be downloaded from the table below and uploaded on its own." : "The zip is for your records. The Program does not accept zip files: download each file from the table below and upload it on its own."}</p></section>`;
 }
 function showPackageResult() {
   const panel = $("#pkg-result");
@@ -1524,8 +1524,13 @@ function viewPackage() {
     const out = S.evidence.filter(e => e.processing === "failed" && !inZip.has(e.label) && new Date(e.received_at) <= built);
     return out.length ? `<div class="note warn"><span class="note-ico">!</span><span>Not in the zip: ${out.map(e => `<span class="exhibit">${esc(e.label)}</span> ${esc(e.filename)}`).join(", ")}. ${out.length === 1 ? "This file" : "These files"} could not be read, so ${out.length === 1 ? "it" : "they"} could not be checked for location data. The evidence manifest says so too. Ask the tenant for a new copy if it matters.</span></div>` : "";
   };
+  const fileCell = r => {
+    if (USE_MOCK) return esc(r.filename);
+    const path = r.filename.split("/").map(encodeURIComponent).join("/");
+    return `<a href="${API_BASE}${C}/package/files/${path}?version=${S.pkg.version}" download>${esc(r.filename)}</a>`;
+  };
   const manifest = S.pkg ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
-    <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${esc(r.filename)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
+    <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${fileCell(r)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
     ${unreadableLeftOut(S.pkg)}
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
   return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>

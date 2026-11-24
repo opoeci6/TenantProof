@@ -571,3 +571,22 @@ def get_package(session: Session, case: CaseRow, version: int | None) -> Package
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not found")
     return row
+
+
+def package_file(row: PackageRow, filename: str) -> tuple[str, bytes]:
+    entry = next((item for item in row.files if item.get("filename") == filename), None)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+    member_name: str = entry["filename"]
+    with storage.open_blob(row.storage_key) as blob, zipfile.ZipFile(blob) as archive:
+        data = archive.read(member_name)
+    if _sha(data) != entry.get("sha256"):
+        log.warning(
+            "package file hash mismatch for case %s v%s: %s",
+            row.case_id, row.version, member_name,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Package file does not match its recorded hash",
+        )
+    return member_name, data

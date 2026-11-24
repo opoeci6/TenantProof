@@ -1,7 +1,10 @@
+import hashlib
+import mimetypes
 from collections.abc import Iterator
+from pathlib import PurePosixPath
 from typing import Annotated
 
-from fastapi import APIRouter, Body, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.deps import CaseDep, SessionDep, UserDep
@@ -48,5 +51,28 @@ def download_package(
             "Content-Length": str(row.size_bytes),
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Package-Sha256": row.sha256,
+        },
+    )
+
+
+@router.get("/cases/{case_id}/package/files/{filename:path}")
+def download_package_file(
+    case: CaseDep,
+    session: SessionDep,
+    filename: str,
+    version: int | None = Query(default=None, ge=1),
+) -> Response:
+    row = svc.get_package(session, case, version)
+    name, data = svc.package_file(row, filename)
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    leaf = PurePosixPath(name).name
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Length": str(len(data)),
+            "Content-Disposition": f'attachment; filename="{leaf}"',
+            "Cache-Control": "private, no-store",
+            "X-File-Sha256": hashlib.sha256(data).hexdigest(),
         },
     )
