@@ -509,6 +509,27 @@ def test_documents_are_letters(letter: str):
     assert txt_kind(letter.encode()) == "letter"
 
 
+def test_a_tenants_text_letter_and_chat_now_corroborate_like_a_pdf_letter_and_chat():
+    """Intended consequence of #125: strength counts two files as independent when their kind
+    or uploader differs. The same tenant's letter.txt and chat.txt were both "messages"
+    (single source); they are now letter + messages and corroborate, as a PDF letter (kind
+    "other") and a chat from the same tenant already did."""
+    from app.services.strength import SourceFacts, compute_strength
+
+    def cited(evidence_id: str, kind: str) -> SourceFacts:
+        return SourceFacts(evidence_id, kind, "tenant", captured_at=None, software=None)
+
+    letter, chat = txt_kind(LETTER.encode()), txt_kind(WHATSAPP.encode())
+    assert (letter, chat) == ("letter", "messages")
+    now = compute_strength([cited("ev_letter", letter), cited("ev_chat", chat)], mismatch=False)
+    assert now.strength == "corroborated"
+    before = compute_strength([cited("ev_letter", "messages"), cited("ev_chat", "messages")],
+                              mismatch=False)
+    assert before.strength == "single_source"
+    pdf = compute_strength([cited("ev_pdf", "other"), cited("ev_chat", chat)], mismatch=False)
+    assert pdf.strength == "corroborated"
+
+
 def test_a_known_kind_is_kept_whatever_the_lines_look_like():
     """A tenant's typed answer is a message even when it reads like a note."""
     kind, pages = text.read_txt_as(b"My rent is $1,650 a month.", kind="messages")
