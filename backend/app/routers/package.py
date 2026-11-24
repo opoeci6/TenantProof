@@ -13,6 +13,7 @@ from app.services import package as svc
 from app.services import storage
 
 router = APIRouter()
+_LANDLORD_PACKAGE_REASON = "Landlord cases use the manual Form J draft download."
 
 
 def _refuse(code: int, reasons: list[str]) -> HTTPException:
@@ -26,6 +27,8 @@ def build_package(
     user: UserDep,
     body: Annotated[PackageRequest, Body(default_factory=PackageRequest)],
 ) -> Package:
+    if case.applicant_role == "landlord":
+        raise _refuse(status.HTTP_409_CONFLICT, [_LANDLORD_PACKAGE_REASON])
     # Body first (422), then case state (409): CONTRACT_CHANGES #8.
     att = Attestations(**body.attestations.model_dump())
     if missing := svc.attestation_reasons(att):
@@ -42,6 +45,8 @@ def build_package(
 def download_package(
     case: CaseDep, session: SessionDep, version: int | None = Query(default=None, ge=1)
 ) -> StreamingResponse:
+    if case.applicant_role == "landlord":
+        raise _refuse(status.HTTP_409_CONFLICT, [_LANDLORD_PACKAGE_REASON])
     row = svc.get_package(session, case, version)
     chunks: Iterator[bytes] = storage.open_chunks(row.storage_key)
     filename = f"tenantproof-{case.id}-v{row.version}.zip"
@@ -62,6 +67,8 @@ def download_package_file(
     filename: str,
     version: int | None = Query(default=None, ge=1),
 ) -> Response:
+    if case.applicant_role == "landlord":
+        raise _refuse(status.HTTP_409_CONFLICT, [_LANDLORD_PACKAGE_REASON])
     row = svc.get_package(session, case, version)
     name, data = svc.package_file(row, filename)
     media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"

@@ -9,19 +9,25 @@ import uuid
 
 from sqlmodel import Session
 
-from app.models import CaseRow, UserRow
+from app.models import CaseRow, FormFieldRow, UserRow
 from app.schemas import CaseCreate
 from app.services import activity
 from app.services.agent.tools import clean_text
-from app.services.legal.corpus import FORM_J_DRAFT_LABEL
+from app.services.form_fields import field_allowed_for_case
+from app.services.legal.corpus import FORM_J_DRAFT_LABEL, FORM_J_FIELDS
 
 FORM_NAME = FORM_J_DRAFT_LABEL
 FORM_DISCLAIMER = (
     "Prepared with the tenant to help fill in the official form. It is information, not legal "
     "advice, and is not submitted anywhere."
 )
+LANDLORD_FORM_DISCLAIMER = (
+    "Prepared by a caseworker to help fill in the official form. This draft is unsigned "
+    "and has not been submitted."
+)
 LIMITS = {"tenant_name": 120, "unit": 200, "title": 120}  # the CaseCreate limits
 LABELS = {
+    "applicant_role": "Applicant role",
     "tenant_name": "Tenant name",
     "tenant_language": "Preferred language",
     "unit": "Unit address",
@@ -67,6 +73,7 @@ def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
     """The new case, in the user's org and assigned to them. Caller checks `problems` first, and
     commits."""
     text = cleaned(body)
+    landlord_applicant = body.applicant_role == "landlord"
     case = CaseRow(
         id=f"case_{uuid.uuid4().hex[:10]}",
         org_id=user.org_id,
@@ -76,14 +83,25 @@ def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
         unit=text["unit"],
         tenant_name=text["tenant_name"],
         tenant_language=body.tenant_language,
-        stage="waiting_tenant",
+        applicant_role=body.applicant_role,
+        stage="needs_review" if landlord_applicant else "waiting_tenant",
         synthetic=True,  # every case in this prototype is synthetic demo data
         has_demo_data=True,  # it has a case view: the caseload opens it like the live-demo case
         form_name=FORM_NAME,
-        form_disclaimer=FORM_DISCLAIMER,
+        form_disclaimer=LANDLORD_FORM_DISCLAIMER if landlord_applicant else FORM_DISCLAIMER,
         intake_status="not_sent",
     )
     session.add(case)
     session.flush()  # the activity row's foreign key needs the case row first
+    if "applicant_role" in body.model_fields_set:
+        values = {"tenant_name": case.tenant_name, "rental_address": case.unit}
+        for position, spec in enumerate(FORM_J_FIELDS):
+            if not field_allowed_for_case(case, spec.key):
+                continue
+            value = values.get(spec.key)
+            session.add(FormFieldRow(
+                case_id=case.id, key=spec.key, position=position, label=spec.label,
+                value=value, required=spec.required, status="user_entered" if value else "missing",
+            ))
     activity.log(session, case.id, "caseworker", user.name, "Created the case")
     return case

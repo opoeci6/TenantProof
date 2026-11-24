@@ -80,6 +80,7 @@ class Intake(BaseModel):
 
 class Case(BaseModel):
     id: str
+    applicant_role: ApplicantRole = "tenant"
     dispute_type: Literal["maintenance"]
     title: str
     unit: str
@@ -371,6 +372,7 @@ class CaseCreate(BaseModel):
     """Request side of POST /cases (CONTRACT_CHANGES #35). The org, the assignee and the stage come
     from the server, never from the body; `dispute_type` is always "maintenance"."""
 
+    applicant_role: ApplicantRole = "tenant"
     tenant_name: str = Field(min_length=1, max_length=120)
     # The languages the tenant page has text for: en, zh, fr, es, ru, hi (no Arabic yet).
     tenant_language: Literal["en", "zh", "fr", "es", "ru", "hi"]

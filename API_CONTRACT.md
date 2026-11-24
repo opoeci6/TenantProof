@@ -45,13 +45,13 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | POST | `/auth/logout` | `{ ok }` | Ends the session and clears the cookie. |
 | GET | `/me` | `User` | Signed-in caseworker (401 when signed out). |
 | GET | `/cases` | `CaseSummary[]` | Caseload, already sorted by priority (rule-based). |
-| POST | `/cases` | `Case` | Creates a case in the signed-in caseworker's org, assigned to them. Body: `CaseCreate` `{ tenant_name, tenant_language, unit, title }`; `tenant_language` is one of `en`, `zh`, `fr`, `es`, `ru`, `hi`. 422 `{ detail: { reasons } }` for a blank, too long or unknown value, or an extra field. See CONTRACT_CHANGES #35. |
-| GET | `/cases/{case_id}` | `Case` | |
+| POST | `/cases` | `Case` | Creates a case in the signed-in caseworker's org, assigned to them. Body: `CaseCreate` `{ applicant_role?, tenant_name, tenant_language, unit, title }`; `tenant_language` is one of `en`, `zh`, `fr`, `es`, `ru`, `hi`. `applicant_role` accepts `tenant` or `landlord` and defaults to `tenant` for callers that omit it. An explicit role prepares a draft immediately. 422 `{ detail: { reasons } }` for invalid or unknown values. |
+| GET | `/cases/{case_id}` | `Case` | Includes the stored `applicant_role`. |
 | POST | `/cases/{case_id}/intake-link` | `Intake` | Creates or re-sends the tenant link. |
 | GET | `/cases/{case_id}/evidence` | `EvidenceItem[]` | |
 | POST | `/cases/{case_id}/evidence` | `EvidenceItem` | Caseworker upload, `multipart/form-data`, field `file`. |
 | GET | `/cases/{case_id}/evidence/{evidence_id}/preview` | image (`image/jpeg` or `image/png`) | The photo as the caseworker sees it: the copy made at upload without EXIF or GPS, never the original (a HEIC's copy is a JPEG). `Cache-Control: private, no-cache` with `ETag: "<sha256 of the copy>"`, so the browser checks the session on every view and an unchanged copy answers 304 without its bytes. 404 for another org's case, an item in another case, or an item with `has_preview: false`; 401 when not signed in (CONTRACT_CHANGES #97). |
-| POST | `/cases/{case_id}/runs` | `Run` | Starts analysis, returns immediately with `status: "running"`. |
+| POST | `/cases/{case_id}/runs` | `Run` | Starts tenant case analysis and returns immediately with `status: "running"`. Landlord cases return 409 and use the manual draft. |
 | GET | `/cases/{case_id}/runs/latest` | `Run` | 404 if none. |
 | GET | `/runs/{run_id}` | `Run` | UI polls every ~1 s until `status` is not `running`. |
 | POST | `/runs/{run_id}/answer` | `Run` | Body: `{ answer }`, a string of 1 to 500 characters. Resumes a run paused by `ask_caseworker` and returns it with `status: "running"`. 404 for an unknown run or another org's run, 409 when the run is not `needs_input` or this pause was already answered, 422 `{ detail: { reasons } }` when the answer is not a valid date for a date question (the run stays paused). See "Answering a paused run". |
@@ -64,11 +64,12 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
 | GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. See [Form J draft fields](#form-j-draft-fields) for the F1–F3 rollout (PR #143). |
+| GET | `/cases/{case_id}/form-draft/pdf` | PDF (`application/pdf`) | Partial unsigned draft for landlord applicants. Signed-in caseworker in the case org only; 409 for tenant applications. |
 | PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body `{ value }`. A nonempty value becomes `user_entered`. An empty value clears the field to `missing` with `value: null`. See [Form J draft fields](#form-j-draft-fields) for accepted keys and validation. |
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
-| POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 if blocking gaps open or tenant hasn't attested. |
-| GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built package. Query `version` (default: the latest); 404 if none is built. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
-| GET | `/cases/{case_id}/package/files/{filename:path}` | file (`mimetypes` guess or `application/octet-stream`) | Downloads one file from a built package zip. Query `version` (default: the latest). Serves only files listed in that version's `files` (exact, case-sensitive match against the entry's `filename`, e.g. `application_draft.pdf` or `evidence/E-01.jpg`). 404 for another org's case, no built package, an unknown version, or a name not in that version's `files`; 401 when signed out; 500 if the member's SHA-256 differs from its recorded hash. Headers: `Content-Type` (guessed from the filename, fallback `application/octet-stream`), `Content-Disposition: attachment; filename="<last path segment>"`, `Content-Length`, `Cache-Control: private, no-store`, and `X-File-Sha256` (the entry's SHA-256). Not logged (CONTRACT_CHANGES #91). |
+| POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 for landlord cases, blocking gaps, or missing tenant attestation. |
+| GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built tenant package. Query `version` (default: the latest); 404 if none is built, 409 for landlord cases. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
+| GET | `/cases/{case_id}/package/files/{filename:path}` | file (`mimetypes` guess or `application/octet-stream`) | Downloads one file from a built tenant package zip. Landlord cases return 409. Query `version` (default: the latest). Serves only files listed in that version's `files` (exact, case-sensitive match against the entry's `filename`, e.g. `application_draft.pdf` or `evidence/E-01.jpg`). 404 for another org's case, no built package, an unknown version, or a name not in that version's `files`; 401 when signed out; 500 if the member's SHA-256 differs from its recorded hash. Headers: `Content-Type` (guessed from the filename, fallback `application/octet-stream`), `Content-Disposition: attachment; filename="<last path segment>"`, `Content-Length`, `Cache-Control: private, no-store`, and `X-File-Sha256` (the entry's SHA-256). Not logged (CONTRACT_CHANGES #91). |
 | GET | `/cases/{case_id}/case-brief` | PDF (`application/pdf`) | The caseworker's case brief, built on request: summary, timeline, evidence index, gaps. 404 for another org's case, 409 `{ detail: { reasons } }` until an analysis has completed. Starts with a warning when a step of the latest run is `incomplete`. Not stored. |
 
 ### Answering a paused run
@@ -125,6 +126,7 @@ type CaseSummary = {
 
 type Case = {
   id: string;
+  applicant_role: "tenant" | "landlord";
   dispute_type: "maintenance";
   title: string;
   unit: string;

@@ -72,6 +72,72 @@ def pdf_text(data: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages)
 
 
+def test_landlord_manual_pdf_stays_separate_from_tenant_package(
+    fresh_db, client, anon_client, other_org_client,
+):
+    created = client.post("/api/cases", json={
+        "applicant_role": "landlord",
+        "tenant_name": "Morgan Test",
+        "tenant_language": "en",
+        "unit": "4 Example Street, Halifax",
+        "title": "Landlord manual draft",
+    })
+    assert created.is_success, created.text
+    base = f"/api/cases/{created.json()['id']}"
+    draft_pdf = f"{base}/form-draft/pdf"
+    assert anon_client.get(draft_pdf).status_code == 401
+    assert other_org_client.get(draft_pdf).status_code == 404
+    assert client.get(f"/api/cases/{CASE}/form-draft/pdf").status_code == 409
+    assert client.post(f"{base}/runs").status_code == 409
+    for blocked in (
+        client.post(f"{base}/package"),
+        client.get(f"{base}/package/download"),
+        client.get(f"{base}/package/files/application_draft.pdf"),
+    ):
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["detail"]["reasons"] == [
+            "Landlord cases use the manual Form J draft download."
+        ]
+
+    values = {
+        "landlord_name": "Example Landlord",
+        "tenant_email": "respondent@example.test",
+        "landlord_email": "applicant@example.test",
+        "landlord_request_termination_other": "yes",
+        "landlord_request_termination_other_reason": "A caseworker recorded the reason.",
+        "landlord_request_unpaid_rent": "yes",
+        "landlord_request_unpaid_rent_reason": "The rent ledger is incomplete.",
+    }
+    for key, value in values.items():
+        saved = client.patch(f"{base}/form-draft/fields/{key}", json={"value": value})
+        assert saved.is_success, saved.text
+
+    draft = client.get(draft_pdf)
+    assert draft.is_success, draft.text
+    assert draft.headers["content-type"] == "application/pdf"
+    assert draft.headers["content-disposition"].endswith('-draft.pdf"')
+    text = pdf_text(draft.content)
+    assert "Landlord applicant" in text and "Tenant respondent" in text
+    assert "Landlord requests" in text and "Tenant requests" not in text
+    assert values["landlord_request_termination_other_reason"] in text
+    assert "Unpaid rent" not in text and values["landlord_request_unpaid_rent_reason"] not in text
+    assert values["tenant_email"] in text and values["landlord_email"] not in text
+    assert "Complete the signature and date manually on the official Form J." in text
+
+    for key in ("landlord_request_payment", "applicant_email_consent"):
+        saved = client.patch(f"{base}/form-draft/fields/{key}", json={"value": "yes"})
+        assert saved.is_success, saved.text
+    updated = client.get(draft_pdf)
+    assert updated.is_success, updated.text
+    text = pdf_text(updated.content)
+    assert "Unpaid rent" in text and values["landlord_request_unpaid_rent_reason"] in text
+    assert values["tenant_email"] in text and values["landlord_email"] in text
+
+    make_ready(client)
+    build(client)
+    assert "application_draft.pdf" in unzip(download(client).content)
+
+
 def test_downloaded_application_and_text_evidence_keep_words_intact(fresh_db, client):
     make_ready(client)
     # Exercise several line boundaries at the normal font sizes in both PDF templates.

@@ -203,6 +203,7 @@ def to_case(case: CaseRow, assignee_name: str) -> Case:
     return Case.model_validate(
         {
             "id": case.id,
+            "applicant_role": case.applicant_role,
             "dispute_type": case.dispute_type,
             "title": case.title,
             "unit": case.unit,

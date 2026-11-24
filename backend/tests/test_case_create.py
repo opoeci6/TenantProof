@@ -7,7 +7,7 @@ import pytest
 from sqlmodel import Session, select
 
 from app.main import api
-from app.models import ActivityRow, CaseRow, RunRow
+from app.models import ActivityRow, CaseRow, FormFieldRow, RunRow
 from app.routers import runs as runs_router
 from app.services import cases as cases_service
 from app.services.agent import llm
@@ -32,6 +32,7 @@ def create(client, **changes) -> dict:
 def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, session: Session):
     body = create(client)
     assert body["id"].startswith("case_") and len(body["id"]) == 15
+    assert body["applicant_role"] == "tenant"
     assert body["tenant"] == {"name": "Ana Silva", "preferred_language": "es"}
     assert (body["title"], body["unit"]) == (BODY["title"], BODY["unit"])
     assert body["dispute_type"] == "maintenance" and body["synthetic"] is True
@@ -45,6 +46,34 @@ def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, se
     # in the caller's caseload, openable
     listed = {c["id"]: c for c in client.get(URL).json()}
     assert body["id"] in listed and listed[body["id"]]["has_demo_data"] is True
+
+
+@pytest.mark.parametrize(("role", "allowed", "excluded"), [
+    ("tenant", "request_repairs", "landlord_request_unpaid_rent"),
+    ("landlord", "landlord_request_unpaid_rent", "request_repairs"),
+])
+def test_explicit_applicant_roles_get_scoped_manual_drafts(
+    fresh_db, client, session, role, allowed, excluded,
+):
+    created = create(client, applicant_role=role)
+    base = f"{URL}/{created['id']}"
+    assert created["applicant_role"] == role
+    assert client.get(base).json()["applicant_role"] == role
+    row = session.get(CaseRow, created["id"])
+    assert row is not None and row.applicant_role == role
+    draft = client.get(f"{base}/form-draft").json()
+    fields = {field["key"]: field for field in draft["fields"]}
+    assert fields["tenant_name"]["value"] == BODY["tenant_name"]
+    assert fields["rental_address"]["value"] == BODY["unit"]
+    assert {"tenant_email", "landlord_email", "move_in_date", "written_lease"} <= fields.keys()
+    assert allowed in fields and f"{allowed}_reason" in fields
+    assert excluded not in fields and f"{excluded}_reason" not in fields
+    assert ("remedy" in fields) == (role == "tenant")
+    assert client.patch(f"{base}/form-draft/fields/{allowed}", json={"value": "yes"}).is_success
+    for key in (excluded, f"{excluded}_reason"):
+        r = client.patch(f"{base}/form-draft/fields/{key}", json={"value": "yes"})
+        assert r.status_code == 404, r.text
+        assert session.get(FormFieldRow, (created["id"], key)) is None
 
 
 def test_the_form_name_and_disclaimer_are_the_seeded_cases(fresh_db, client, session: Session):
@@ -84,6 +113,7 @@ def test_the_body_cannot_choose_the_org_or_the_stage(fresh_db, client, session: 
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
+        ({"applicant_role": "other"}, "Applicant role: not valid"),
         ({"tenant_language": "ar"}, CHOOSE),
         ({"tenant_language": "de"}, CHOOSE),
         ({"tenant_name": ""}, "Tenant name: enter some text"),
