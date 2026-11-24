@@ -767,7 +767,7 @@ function railMeta(st, evidenceCount) {
     evidence: `${plural(evidenceCount, "file")} · from tenant`,
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
     gaps: st.gaps === 0 ? NOTHING : st.blocking ? `${st.blocking} required open` : st.waiting ? `${st.waiting} waiting for tenant` : plural(st.recommended, "suggestion"),
-    form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}`,
+    form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
     doneGaps: st.gaps > 0 && !st.blocking, doneForm: st.fieldsTotal > 0 && !st.reqMissing,
     doneTimeline: st.total > 0 && st.reviewed === st.total,
   };
@@ -779,6 +779,7 @@ function packageChecks(st) {
       : { state: "yes", text: "all resolved" },
     fields: st.fieldsTotal === 0 ? { state: "none", text: NOTHING }
       : st.reqMissing ? { state: "no", href: "#form", text: `${st.reqMissing} empty` }
+      : st.toConfirm ? { state: "maybe", href: "#form", text: `${st.toConfirm} to confirm` }
       : { state: "yes", text: "all filled" },
     timeline: st.total === 0 ? { state: "none", text: NOTHING }
       : { state: st.reviewed === st.total ? "yes" : "maybe", text: `${st.reviewed} of ${st.total}. ${st.reviewed < st.total ? "Unreviewed events are left out of the form." : ""}`.trim() },
@@ -979,7 +980,7 @@ function stats() {
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
   const fields = S.form ? S.form.fields : [];
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, filled: fields.filter(f => f.value).length, fieldsTotal: fields.length, reqMissing: fields.filter(f => f.required && !f.value).length };
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, filled: fields.filter(f => f.value).length, fieldsTotal: fields.length, toConfirm: fields.filter(f => f.status === "needs_confirmation").length, reqMissing: fields.filter(f => f.required && !f.value).length };
 }
 
 /* ---------- login (M1) ---------- */

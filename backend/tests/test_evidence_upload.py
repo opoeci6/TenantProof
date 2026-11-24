@@ -749,6 +749,9 @@ def test_package_zip_contains_the_uploaded_originals(fresh_db, client, session):
     by_label = {e["label"]: e for e in manifest["evidence"]}
     assert len(manifest["evidence"]) == SEEDED + 2
     assert by_label["E-08"]["sha256"] == sha(photo)  # what was received
+    assert by_label["E-08"]["location"] == {"present": True, "removed": True}
+    assert by_label["E-09"]["location"] == {"present": False, "removed": False}
+    # the older boolean stays for existing readers of the manifest
     assert by_label["E-08"]["location_data_removed"] is True
     assert by_label["E-09"]["location_data_removed"] is False
     assert by_label["E-08"]["in_zip"] == "evidence/E-08.jpg"
@@ -998,7 +1001,7 @@ def test_heic_goes_in_the_package_only_as_a_jpg(fresh_db, client, session):
     assert listed["evidence/E-08.jpg"]["sha256"] == sha(entries["evidence/E-08.jpg"])
     assert "evidence/E-08.heic" not in listed
     assert "does not accept HEIC" in listed["evidence/E-08.jpg"]["note"]
-    assert item["location_data_removed"] is True
+    assert item["location"]["removed"] is True
     assert "location data removed" in listed["evidence/E-08.jpg"]["note"]
     assert "location data removed" in " ".join(manifest_text(entries).split())
     # the stored original still has its GPS
@@ -1121,7 +1124,7 @@ def test_a_gps_tagged_png_is_filed_without_gps_but_with_its_capture_time(fresh_d
     assert pixels(filed) == pixels(original)
     with Image.open(io.BytesIO(filed)) as img:
         img.load()  # the CRCs are right: it still decodes
-    assert json.loads(entries["manifest.json"])["evidence"][-1]["location_data_removed"] is True
+    assert json.loads(entries["manifest.json"])["evidence"][-1]["location"]["removed"] is True
 
 
 def test_the_exif_orientation_survives_the_gps_removal(fresh_db, client):
@@ -1140,7 +1143,8 @@ def test_an_image_without_gps_is_filed_byte_for_byte_and_not_marked(fresh_db, cl
     entries = package_entries(client)
 
     assert entries["evidence/E-08.jpg"] == original
-    assert json.loads(entries["manifest.json"])["evidence"][-1]["location_data_removed"] is False
+    assert json.loads(entries["manifest.json"])["evidence"][-1]["location"] == {
+        "present": False, "removed": False}
     assert "location data removed" not in " ".join(manifest_text(entries).split())
 
 
