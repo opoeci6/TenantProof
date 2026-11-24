@@ -74,7 +74,7 @@ from app.services.agent.tools import (
     FillFormFieldOutput,
     ProposeEventOutput,
     ToolContext,
-    clean_text,
+    clean_model_text,
     is_fillable,
     new_nonce,
 )
@@ -259,7 +259,7 @@ def _start_timeline(session: Session, case: CaseRow) -> tuple[list[str], list[st
         )
         when = (e.date or {}).get("value") or "no date"
         state = "kept" if e.review_status == "pending" else e.review_status
-        lines.append(f"- {e.id} [{state}] {when}: {clean_text(e.title, 200)} ({cited})")
+        lines.append(f"- {e.id} [{state}] {when}: {clean_model_text(e.title, 200)} ({cited})")
     return lines, replaces
 
 

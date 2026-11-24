@@ -62,15 +62,25 @@ def _clean_label(value: str) -> str:
     """For short strings that come from evidence (labels, EXIF): no control characters,
     no angle brackets. Cleans first, then cuts to SAFE_STR_MAX, so the bound holds after
     escaping and long input is truncated, not rejected."""
-    return clean_text(value, SAFE_STR_MAX)
+    return clean_model_text(value, SAFE_STR_MAX)
+
+
+def _strip_controls(value: str) -> str:
+    return _CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES)
 
 
 def clean_text(value: str, limit: int) -> str:
-    """Model- or document-derived text for a summary or a log line: no control characters, no
-    angle brackets, at most `limit` characters after escaping."""
-    cleaned = html.escape(
-        _CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES), quote=False
-    ).strip()
+    """Text a person reads or that is stored (drafts, gap titles, field values): no control
+    characters, no angle brackets, at most `limit` characters after escaping. Only `<` is
+    escaped, so "&" and ">" show as typed."""
+    cleaned = _strip_controls(value).replace("<", "&lt;").strip()
+    return cleaned[:limit].rstrip()
+
+
+def clean_model_text(value: str, limit: int) -> str:
+    """Text that goes back into a model prompt: like `clean_text`, but fully HTML-escaped
+    (`&`, `<`, `>`) so the escaping is reversible with `html.unescape`."""
+    cleaned = html.escape(_strip_controls(value), quote=False).strip()
     return cleaned[:limit].rstrip()
 
 
@@ -121,7 +131,7 @@ def evidence_tag(nonce: str) -> str:
 
 
 def _attr(value: str) -> str:
-    return html.escape(_CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES), quote=True)
+    return html.escape(_strip_controls(value), quote=True)
 
 
 def wrap_evidence(
