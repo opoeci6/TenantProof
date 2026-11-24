@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 Language = str
+ApplicantRole = Literal["tenant", "landlord"]
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 

@@ -6,8 +6,10 @@ routers validate them through the Pydantic models in schemas.py."""
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Column, Index, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, Column, Index, String, UniqueConstraint
 from sqlmodel import Field, SQLModel
+
+from app.schemas import ApplicantRole
 
 
 def utcnow() -> datetime:
@@ -42,6 +44,11 @@ class LoginSessionRow(SQLModel, table=True):
 
 class CaseRow(SQLModel, table=True):
     __tablename__ = "tenant_case"
+    __table_args__ = (
+        CheckConstraint(
+            "applicant_role IN ('tenant', 'landlord')", name="ck_tenant_case_applicant_role"
+        ),
+    )
     id: str = Field(primary_key=True)
     org_id: str = Field(foreign_key="org.id", index=True)
     assigned_to_id: str = Field(foreign_key="app_user.id")
@@ -50,6 +57,9 @@ class CaseRow(SQLModel, table=True):
     unit: str
     tenant_name: str
     tenant_language: str
+    applicant_role: ApplicantRole = Field(
+        default="tenant", sa_column=Column(String(8), nullable=False, server_default="tenant")
+    )
     stage: str
     hearing_date: str | None = None  # ISO date; drives deadline + priority
     no_hearing_yet: bool = False  # a caseworker said there is no hearing scheduled yet (#124)
