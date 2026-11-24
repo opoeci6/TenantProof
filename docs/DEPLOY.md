@@ -51,6 +51,36 @@ phone or browser ──HTTPS──> Cloudflare ──HTTPS──> nginx (on the 
 | `FORWARDED_ALLOW_IPS=*` | The rate limits then count each visitor's IP from nginx's `X-Forwarded-For` (#58). Use `*` only while the API port is reachable by nginx alone. Otherwise list the address the API container sees nginx connect from: through a published port that is the compose network's gateway (or its subnet), never `127.0.0.1`. Leaving the default `127.0.0.1` silently puts every visitor back on one shared budget. |
 | `restart: unless-stopped` on every service | The demo comes back after a server reboot. |
 
+## Keeping intake tokens out of the proxy log
+
+The API already masks `/i/<token>` and `/api/intake/<token>` in its own access log, and `/i/<token>` answers with `Referrer-Policy: no-referrer` so requests from the tenant page carry no `Referer` (#74).
+
+To keep tokens out of nginx's access log too (both the request path and any `Referer` sent by older tabs or external links), add these `map` and `log_format` directives in the `http` context outside `server {}`, and use that format in the TenantProof `server {}` block:
+
+```nginx
+# Outside server {} (http context): mask /i/<token> and /api/intake/<token>
+map $request $masked_request {
+    "~^(?<req_head>\S+\s+/(?:i|api/intake)/)[^/?#\s]+(?<req_tail>.*)$"  "${req_head}***${req_tail}";
+    default                                                             $request;
+}
+
+map $http_referer $masked_referer {
+    "~^(?<ref_head>(?:https?://[^/?#\s]+)?/(?:i|api/intake)/)[^/?#\s]+(?<ref_tail>.*)$"  "${ref_head}***${ref_tail}";
+    default                                                                               $http_referer;
+}
+
+log_format tenantproof '$remote_addr - $remote_user [$time_local] '
+                       '"$masked_request" $status $body_bytes_sent '
+                       '"$masked_referer" "$http_user_agent"';
+
+server {
+    # ...
+    access_log /var/log/nginx/tenantproof.access.log tenantproof;
+}
+```
+
+Logs written before this change still contain tokens, so rotate them or wait out their retention.
+
 Set these as `environment:` entries. The port changes use compose's merge tags: `ports: !reset []`
 removes Postgres's and Redis's published ports, and `ports: !override ["127.0.0.1:<port>:8000"]`
 replaces the API's. Do not override the API's `command:` to add uvicorn flags: once, a
