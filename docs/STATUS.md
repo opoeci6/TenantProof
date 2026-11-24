@@ -22,6 +22,7 @@ Single source of truth. Update the relevant section in every PR.
 | M3 (demo) | Demo-honesty fixes from the usability review, neutral "Nothing yet" states, past hearing dates refused, synthetic upload files in `demo/`, the case brief PDF | PRs #23, #31 to #33, #37 |
 | M3 (WS4) | Legal corpus, URL check, the `rules` step (sources and the "must be received by" deadline), the `gaps` step that drafts requests to the tenant; source check (Reg 25A, received-by wording, no HEIC in the package) | PR #35 (with #39), `569348d` |
 | M3 (#40) | The `draft` step fills missing form fields from verified quotes, as `needs_confirmation`, with a Confirm button | PRs #46, #42 |
+| PDF and form fixes (#121, #122) | Generated PDFs wrap at word boundaries when possible. The form draft and missing-info fields validate monthly rent and tenancy start dates. The start year must be from 1900 through the current year, and the form saves the date when focus leaves the field. The application PDF identifies rent in CAD. | `leozhang5867/fix-121-122` |
 | M3 (#41) | `POST /cases` and a New case form on the caseload | PRs #46, #47 |
 | M3 (#36, #38) | Locale-independent tests; the Tenant view shows the new intake link | PRs #43 to #45 (NineJZ356) |
 | M3 (#49) | `RUN_BUDGET_S` setting: the whole run may take 180 s by default, one model call 60 s | PRs #50, #51 |
