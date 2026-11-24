@@ -58,13 +58,13 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | GET | `/cases/{case_id}/timeline` | `TimelineEvent[]` | Sorted by date. |
 | PATCH | `/timeline/{event_id}` | `TimelineEvent` | Body: `{ review_status, title?, description?, date?, caseworker_note? }` |
 | GET | `/cases/{case_id}/gaps` | `Gap[]` | |
-| PATCH | `/gaps/{gap_id}` | `Gap` | Body: `{ status, resolution_note?, value? }` |
+| PATCH | `/gaps/{gap_id}` | `Gap` | Body: `{ status, resolution_note?, value? }`. A new `value` for `monthly_rent` or `tenancy_start` is checked as on the form draft below (CONTRACT_CHANGES, issues #121 and #122). |
 | POST | `/gaps/{gap_id}/tenant-request` | `Gap` | Caseworker approved the drafted message. Sends it via the intake link; gap → `waiting_tenant`. Optional body `{ message, message_en }`: the request as the caseworker edited it (CONTRACT_CHANGES #37). |
 | POST | `/gaps/{gap_id}/tenant-request/translate` | `{ message }` | Body: `{ message_en }`. Translates the caseworker's English into the tenant's language with one model call. Saves nothing (CONTRACT_CHANGES #37). |
 | POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
 | GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. |
-| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body: `{ value }` → `user_entered`. |
+| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body: `{ value }` → `user_entered`. A new value for `monthly_rent` (a positive CAD amount, up to two decimals) or `tenancy_start` (`YYYY-MM-DD`, year 1900 to now) that does not fit is a 422 with a plain reason; the stored value sent back unchanged (confirming a draft) and an empty value (clearing) are not checked (CONTRACT_CHANGES, issues #121 and #122). |
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 if blocking gaps open or tenant hasn't attested. |
 | GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built package. Query `version` (default: the latest); 404 if none is built. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |
