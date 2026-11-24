@@ -51,6 +51,25 @@ phone or browser ──HTTPS──> Cloudflare ──HTTPS──> nginx (on the 
 | `FORWARDED_ALLOW_IPS=*` | The rate limits then count each visitor's IP from nginx's `X-Forwarded-For` (#58). Use `*` only while the API port is reachable by nginx alone. Otherwise list the address the API container sees nginx connect from: through a published port that is the compose network's gateway (or its subnet), never `127.0.0.1`. Leaving the default `127.0.0.1` silently puts every visitor back on one shared budget. |
 | `restart: unless-stopped` on every service | The demo comes back after a server reboot. |
 
+Set these as `environment:` entries. The port changes use compose's merge tags: `ports: !reset []`
+removes Postgres's and Redis's published ports, and `ports: !override ["127.0.0.1:<port>:8000"]`
+replaces the API's. Do not override the API's `command:` to add uvicorn flags: once, a
+`command:` with the flags on a more-indented YAML line silently dropped them.
+
+**`.env`** (mode 600), which compose reads for `${...}` substitution. Names only; ask the
+maintainer for values:
+
+| Setting | Notes |
+|---|---|
+| `SEED_PASSWORD` | Password of the two seeded caseworker accounts. Random, not the local demo one. |
+| `COMPOSE_PROJECT_NAME` | Keeps this app's containers and volumes apart from the server's other compose apps. |
+| `LLM_MODE` | `live` for real analysis runs, `fixture` for none. |
+| `ANTHROPIC_API_KEY` | Only with `LLM_MODE=live`. The maintainer enters it on the server; never paste it into a chat, a commit or a ticket. |
+| `LLM_MODEL` | Optional. Empty means the built-in default. The demo sets a smaller model because of the API account's rate limits; remove it once those are raised. |
+| `RUN_BUDGET_S` | Optional, seconds one analysis run may take (default 180). |
+| `OCR_ENABLED` | Optional, default `true`: text in photos and scanned PDF pages is read on this server and becomes evidence text. `false` turns it off. |
+| `OCR_REQUEST_SECONDS` | Optional, default 40: the most one upload request spends on OCR (about 2 s per image). Later images are kept without their text, and the evidence says so. Keep it under the proxy's timeout (Cloudflare: 100 s). |
+
 ## Keeping intake tokens out of the proxy log
 
 The API already masks `/i/<token>` and `/api/intake/<token>` in its own access log, and `/i/<token>` answers with `Referrer-Policy: no-referrer` so requests from the tenant page carry no `Referer` (#74).
@@ -79,26 +98,9 @@ server {
 }
 ```
 
-Logs written before this change still contain tokens, so rotate them or wait out their retention.
+nginx's `error_log` still records the raw `request` line and `referrer` on failed requests (for example while the API container is restarting or when a request body exceeds `client_max_body_size`), and its format cannot be changed, so keep its retention short and do not share it.
 
-Set these as `environment:` entries. The port changes use compose's merge tags: `ports: !reset []`
-removes Postgres's and Redis's published ports, and `ports: !override ["127.0.0.1:<port>:8000"]`
-replaces the API's. Do not override the API's `command:` to add uvicorn flags: once, a
-`command:` with the flags on a more-indented YAML line silently dropped them.
-
-**`.env`** (mode 600), which compose reads for `${...}` substitution. Names only; ask the
-maintainer for values:
-
-| Setting | Notes |
-|---|---|
-| `SEED_PASSWORD` | Password of the two seeded caseworker accounts. Random, not the local demo one. |
-| `COMPOSE_PROJECT_NAME` | Keeps this app's containers and volumes apart from the server's other compose apps. |
-| `LLM_MODE` | `live` for real analysis runs, `fixture` for none. |
-| `ANTHROPIC_API_KEY` | Only with `LLM_MODE=live`. The maintainer enters it on the server; never paste it into a chat, a commit or a ticket. |
-| `LLM_MODEL` | Optional. Empty means the built-in default. The demo sets a smaller model because of the API account's rate limits; remove it once those are raised. |
-| `RUN_BUDGET_S` | Optional, seconds one analysis run may take (default 180). |
-| `OCR_ENABLED` | Optional, default `true`: text in photos and scanned PDF pages is read on this server and becomes evidence text. `false` turns it off. |
-| `OCR_REQUEST_SECONDS` | Optional, default 40: the most one upload request spends on OCR (about 2 s per image). Later images are kept without their text, and the evidence says so. Keep it under the proxy's timeout (Cloudflare: 100 s). |
+Access logs written before this change still contain tokens, so rotate them or wait out their retention.
 
 ## Updating the demo
 
