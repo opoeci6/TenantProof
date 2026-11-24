@@ -270,12 +270,11 @@ def test_clean_text_strips_format_and_separator_chars_and_escapes_ampersand() ->
 
 
 def test_proposed_date_value_bound_and_unknown_needs_null() -> None:
-    ok = {"basis": "filename"}
     with pytest.raises(ValidationError):
-        t.ProposedDate(value="2025-01-01" + "x", precision="day", **ok)
+        t.ProposedDate(value="2025-01-01" + "x", precision="day", basis="filename")
     with pytest.raises(ValidationError):
-        t.ProposedDate(value="2025-01-01", precision="unknown", **ok)
-    assert t.ProposedDate(value=None, precision="unknown", **ok).value is None
+        t.ProposedDate(value="2025-01-01", precision="unknown", basis="filename")
+    assert t.ProposedDate(value=None, precision="unknown", basis="filename").value is None
 
 
 def test_locators_are_sanitised_in_outputs() -> None:
