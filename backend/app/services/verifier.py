@@ -9,6 +9,7 @@ Two rules keep the fuzzy match honest:
 - A passing citation returns the text span found in the stored page (`matched`), not the
   model's string, so what is saved as a quote is always text that exists in the evidence."""
 
+import html
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ class Verdict:
 
 def normalize(text: str) -> str:
     """Case, whitespace and the `&lt;` escaping of evidence blocks do not count as a difference."""
-    return _WHITESPACE.sub(" ", text.replace("&lt;", "<")).strip().casefold()
+    return _WHITESPACE.sub(" ", html.unescape(text)).strip().casefold()
 
 
 def _fold(text: str) -> tuple[str, list[int]]:

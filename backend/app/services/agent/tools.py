@@ -19,6 +19,7 @@ import html
 import json
 import re
 import secrets
+import unicodedata
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -43,8 +44,14 @@ ToolErrorKind = Literal["invalid_input", "not_found", "unavailable"]
 # Second layer under the nonce delimiter: every "<" in evidence text and attributes is escaped,
 # including the full-width and small forms. Other lookalikes are not listed here; the random
 # tag name is what keeps a document from closing the block.
-_ANGLE_LOOKALIKES = str.maketrans({"<": "&lt;", "\uff1c": "&lt;", "\ufe64": "&lt;"})
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_ANGLE_LOOKALIKES = str.maketrans({"\uff1c": "<", "\ufe64": "<"})
+# C0, DEL, and Unicode Cc, Cf (bidi/zero-width), Zl, Zp.
+_STRIPPED_CATS = {"Cc", "Cf", "Zl", "Zp"}
+_CONTROL_CHARS = re.compile(
+    "["
+    + "".join(c for c in map(chr, range(0x110000)) if unicodedata.category(c) in _STRIPPED_CATS)
+    + "]"
+)
 SAFE_STR_MAX = 100
 MESSAGE_MAX = 1500  # a drafted tenant message, in characters
 CONFLICT_REASON_MAX = 500  # the input bound: a conflict note is shown whole, never cut
@@ -61,7 +68,9 @@ def _clean_label(value: str) -> str:
 def clean_text(value: str, limit: int) -> str:
     """Model- or document-derived text for a summary or a log line: no control characters, no
     angle brackets, at most `limit` characters after escaping."""
-    cleaned = _CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES).strip()
+    cleaned = html.escape(
+        _CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES), quote=False
+    ).strip()
     return cleaned[:limit].rstrip()
 
 
@@ -112,8 +121,7 @@ def evidence_tag(nonce: str) -> str:
 
 
 def _attr(value: str) -> str:
-    escaped = html.escape(_CONTROL_CHARS.sub(" ", value), quote=True)
-    return escaped.translate(_ANGLE_LOOKALIKES)
+    return html.escape(_CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES), quote=True)
 
 
 def wrap_evidence(
@@ -124,11 +132,11 @@ def wrap_evidence(
     per-run nonce); it is replaced if it occurs in the text or attributes, so the document
     cannot close the block early whatever characters it holds. Every `<` is also escaped as a
     second layer. Verifier code compares excerpts against the stored text after unescaping
-    `&lt;` (the model may copy it back escaped)."""
+    HTML entities (the model may copy it back escaped)."""
     attrs = f'id="{_attr(evidence_id)}"'
     if locator is not None:
         attrs += f' locator="{_attr(locator)}"'
-    safe = text.translate(_ANGLE_LOOKALIKES)
+    safe = html.escape(text.translate(_ANGLE_LOOKALIKES), quote=False)
     nonce = nonce or new_nonce()
     while nonce in safe or nonce in attrs:
         nonce = new_nonce()
@@ -337,7 +345,7 @@ class ReadEvidenceInput(ToolInput):
 
 
 class ReadEvidencePage(BaseModel):
-    locator: str
+    locator: SafeStr
     block: EvidenceBlock
 
 
@@ -483,7 +491,7 @@ class SearchFactsInput(ToolInput):
 
 class FactHit(BaseModel):
     evidence_id: str
-    locator: str
+    locator: SafeStr
     block: EvidenceBlock  # the extracted fact, in a data block
 
 
@@ -535,12 +543,14 @@ class ProposedSource(ToolInput):
 class ProposedDate(ToolInput):
     """Same field names as `EventDate`. The model cannot claim `basis: "user"`."""
 
-    value: str | None
+    value: str | None = Field(max_length=10)
     precision: Literal["day", "month", "unknown"]
     basis: Literal["exif", "message_timestamp", "document_text", "filename"]
 
     @model_validator(mode="after")
     def valid_date(self) -> Self:
+        if self.precision == "unknown" and self.value is not None:
+            raise ValueError("value must be null when precision is unknown")
         self.to_event_date()  # raises on a value that does not match its precision
         return self
 

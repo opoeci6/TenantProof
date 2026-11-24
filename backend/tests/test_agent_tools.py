@@ -261,3 +261,24 @@ def test_propose_event_rejects_loose_sources_and_dates(over: dict[str, object]) 
 def test_not_found_is_the_same_for_missing_and_foreign_ids() -> None:
     err = t.not_found("read_evidence", "Evidence item")
     assert err.kind == "not_found" and "forbidden" not in get_args(t.ToolErrorKind)
+
+
+def test_clean_text_strips_format_and_separator_chars_and_escapes_ampersand() -> None:
+    assert t.clean_text("a‮b​c d e\x85f", 50) == "a b c d e f"
+    assert t.clean_text("A & B < C", 50) == "A &amp; B &lt; C"
+    assert t.clean_text("＜﹤", 50) == "&lt;&lt;"
+
+
+def test_proposed_date_value_bound_and_unknown_needs_null() -> None:
+    ok = {"basis": "filename"}
+    with pytest.raises(ValidationError):
+        t.ProposedDate(value="2025-01-01" + "x", precision="day", **ok)
+    with pytest.raises(ValidationError):
+        t.ProposedDate(value="2025-01-01", precision="unknown", **ok)
+    assert t.ProposedDate(value=None, precision="unknown", **ok).value is None
+
+
+def test_locators_are_sanitised_in_outputs() -> None:
+    block = t.EvidenceBlock.from_text("ev-1", "x")
+    assert t.FactHit(evidence_id="ev-1", locator="p<1‮", block=block).locator == "p&lt;1"
+    assert t.ReadEvidencePage(locator="p<1", block=block).locator == "p&lt;1"
