@@ -298,7 +298,8 @@ def test_evidence_reaches_the_model_only_inside_nonce_blocks(pages, session: Ses
     hostile_block = next(b for b in page_blocks if "ignore previous" in b)
     assert t.is_wrapped_evidence(hostile_block, tag)
     assert hostile_block.count(f"</{tag}>") == 1  # the page could not close its own block
-    assert "&lt;/evidence>" in hostile_block  # its fake closing tag is escaped data
+    # its fake closing tag is escaped data
+    assert "&lt;/evidence>" in hostile_block
 
 
 # --------------------------------------------------------------------------- in a run

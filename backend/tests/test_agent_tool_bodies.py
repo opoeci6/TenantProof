@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 
 from app.models import ActivityRow, EvidenceRow, GapRow, TimelineEventRow
 from app.services.agent import tools as t
+from app.services.agent.evidence_text import Page
 from app.services.legal import corpus
 from tests.agent_support import (
     CAPTION,
@@ -718,3 +719,28 @@ def test_control_tools_only_answer(session: Session) -> None:
     ctx = make_ctx(session)
     assert call("ask_caseworker", ctx, {"question": "Hearing date?"}).paused is True
     assert call("finish", ctx, {"summary": "done"}).done is True
+
+
+def test_read_evidence_passes_a_locator_with_an_ampersand_through_once(session: Session) -> None:
+    store = demo_store()
+    store.add_pages(CASE, "ev_01", [Page("a&b", "text")])
+    res = call("read_evidence", make_ctx(session, store), {"evidence_id": "ev_01"})
+    assert isinstance(res, t.ReadEvidenceOutput) and res.pages[0].locator == "a&b"
+    assert "amp;amp" not in res.pages[0].block.content
+
+
+def test_propose_event_accepts_excerpts_copied_from_a_block_with_special_characters(
+    fresh_db: None, session: Session
+) -> None:
+    store = demo_store()
+    text = "Landlord: Smith & Sons Ltd. pays -> rent. Heat < 15C in the unit."
+    store.add_pages(CASE, "ev_01", [Page("page 1", text)])
+    for excerpt, saved in (
+        ("Landlord: Smith & Sons Ltd. pays -> rent.", "Landlord: Smith & Sons Ltd. pays -> rent."),
+        ("Heat &lt; 15C in the unit.", "Heat < 15C in the unit."),  # copied from the block
+    ):
+        source = {"evidence_id": "ev_01", "locator": "page 1", "excerpt": excerpt}
+        res = call("propose_event", make_ctx(session, store), good_event(sources=[source]))
+        assert isinstance(res, t.ProposeEventOutput) and res.accepted and res.event_id
+        row = session.get(TimelineEventRow, res.event_id)
+        assert row is not None and row.sources[0]["excerpt"] == saved

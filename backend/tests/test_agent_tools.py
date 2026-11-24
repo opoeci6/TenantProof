@@ -261,3 +261,41 @@ def test_propose_event_rejects_loose_sources_and_dates(over: dict[str, object]) 
 def test_not_found_is_the_same_for_missing_and_foreign_ids() -> None:
     err = t.not_found("read_evidence", "Evidence item")
     assert err.kind == "not_found" and "forbidden" not in get_args(t.ToolErrorKind)
+
+
+def test_clean_text_removes_invisible_chars_and_leaves_ampersands_alone() -> None:
+    # bidi mark, zero-width space and soft hyphen are deleted; NEL, LS and PS become a space
+    assert t.clean_text("a\u202eb\u200bc\u00add\u2028e\u2029f\x85g", 50) == "abcd e f g"
+    assert t.clean_text("A & B < C > D", 50) == "A & B &lt; C > D"
+    assert t.clean_text("\uff1c\ufe64", 50) == "&lt;&lt;"
+    assert t.clean_text("?a=1&copy=2&amp;x", 50) == "?a=1&copy=2&amp;x"  # no entity is decoded
+
+
+def test_clean_text_keeps_joiners_and_is_idempotent() -> None:
+    hindi = "\u0915\u094d\u200c\u0937 \u0928\u092e\u0938\u094d\u0924\u0947"  # with a ZWNJ
+    emoji = "\U0001f469\u200d\U0001f4bb"  # woman technologist: a ZWJ sequence
+    assert t.clean_text(hindi, 50) == hindi and t.clean_text(emoji, 50) == emoji
+    for value in ("a&b <x> &lt;", hindi, "p\uff1c1"):
+        once = t.clean_text(value, 50)
+        assert t.clean_text(once, 50) == once
+
+
+def test_proposed_date_value_bound_and_unknown_needs_null() -> None:
+    with pytest.raises(ValidationError):
+        t.ProposedDate(value="2025-01-01" + "x", precision="day", basis="filename")
+    with pytest.raises(ValidationError):
+        t.ProposedDate(value="2025-01-01", precision="unknown", basis="filename")
+    assert t.ProposedDate(value=None, precision="unknown", basis="filename").value is None
+
+
+def test_validate_input_rejects_unknown_precision_with_a_value() -> None:
+    unknown = {"value": "2026-05-01", "precision": "unknown", "basis": "document_text"}
+    res = t.validate_input(t.TOOLS["propose_event"], good_event(date_candidates=[unknown]))
+    assert isinstance(res, t.ToolError) and res.kind == "invalid_input"
+
+
+def test_locators_are_sanitised_in_outputs() -> None:
+    block = t.EvidenceBlock.from_text("ev-1", "x")
+    assert t.FactHit(evidence_id="ev-1", locator="p<1‮", block=block).locator == "p&lt;1"
+    assert t.ReadEvidencePage(locator="p<1", block=block).locator == "p&lt;1"
+    assert t.ReadEvidencePage(locator="a&b", block=block).locator == "a&b"  # "&" is not escaped

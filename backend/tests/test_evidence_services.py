@@ -3,6 +3,7 @@ EXIF reading, metadata stripping and text extraction. Every image and PDF is bui
 
 import io
 import multiprocessing
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -391,14 +392,198 @@ def test_read_txt_strips_the_bom_and_gives_one_message_per_line():
 
 
 def test_read_txt_skips_blank_lines_and_drops_control_characters():
-    pages = text.read_txt(b"a\tb\x00\r\n\n   \nc\x0cd\n")
-    assert pages == [{"locator": "message 1", "text": "a\tb"},
-                     {"locator": "message 2", "text": "c\x0cd"}]
+    pages = text.read_txt(b"a\tb\x00\r\n\n   \nc\x0cd\n")  # not a chat: "line N" (#125)
+    assert pages == [{"locator": "line 1", "text": "a\tb"},
+                     {"locator": "line 2", "text": "c\x0cd"}]
 
 
 def test_read_txt_caps_the_number_of_messages(monkeypatch):
     monkeypatch.setattr(text, "MAX_MESSAGES", 3)
     assert len(text.read_txt(b"1\n2\n3\n4\n5\n")) == 3
+
+
+# --- #125: a TXT is a chat export or a letter ------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+# The team's test files are not in the repo: point TENANTPROOF_TEST_KIT at the folder to
+# check them too (for example ..\test-kit). Unset, as in CI, that test is skipped.
+TEST_KIT_ENV = "TENANTPROOF_TEST_KIT"
+
+WHATSAPP = """[14/08/2026, 21:10:05] Jordan Lee: There's water coming through the bathroom wall.
+It started last night and the stain is about a metre wide now.
+I put a bucket under it but it keeps dripping onto the floor.
+Can you send someone this week? My daughter has asthma.
+[15/08/2026, 09:02:11] Landlord: I'll send someone next week.
+[29/08/2026, 18:40:37] Jordan Lee: Nobody came.
+The stain is bigger and there's mould on the ceiling now.
+The smell is getting worse every day.
+Please call me back today.
+"""
+
+WECHAT_PC = """陈梅 2026-08-14 21:10
+房东您好，我家浴室的墙在漏水，墙面上已经有一大块水渍。
+房东 2026-08-15 09:12
+收到。我这周会派人去看一下。
+陈梅 2026-08-22 18:30
+这周没有人来。水渍变大了，还长了霉点。
+"""
+
+LETTER = """Jordan Lee
+Unit 4B, 100 Example Street, Halifax, NS
+Date: 2026-08-20
+
+To: Sample Property Management Ltd.
+Re: Repair request for the bathroom leak
+
+Dear Sample Property Management,
+
+On 2026-08-14 I told you that water was coming through the bathroom wall.
+Nobody has come to fix it, and there is now mould on the ceiling.
+Please repair the leak and the damaged wall within 14 days.
+
+Sincerely,
+Jordan Lee
+"""
+
+
+def txt_kind(data: bytes) -> str:
+    return text.read_txt_as(data)[0]
+
+
+def assert_chat(path: Path) -> None:
+    kind, pages = text.read_txt_as(path.read_bytes())
+    assert kind == "messages", path.name
+    assert pages[0]["locator"] == "message 1", path.name
+
+
+def test_the_demo_chat_stays_messages():
+    """The demo's chat_zh.txt keeps `messages` and `message N` locators, exactly as before #125."""
+    assert_chat(REPO / "demo" / "chat_zh.txt")
+
+
+def test_every_test_kit_chat_stays_messages():
+    """Every test-kit TXT the upload accepts keeps `messages`. Files in encodings the upload
+    refuses (cp1252, cp1251, Big5) and empty.txt never get a kind."""
+    folder = os.environ.get(TEST_KIT_ENV)
+    if not folder:
+        pytest.skip(f"{TEST_KIT_ENV} is not set")
+    kit = Path(folder)
+    assert kit.is_dir(), f"{TEST_KIT_ENV}={folder} is not a folder"
+    checked = []
+    for path in sorted(kit.rglob("*.txt")):
+        if path.name == "expected-results.txt" or sniff.sniff(path.read_bytes()) != sniff.TEXT:
+            continue  # the kit's notes, or a file the upload refuses
+        assert_chat(path)
+        checked.append(path.name)
+    assert checked, f"no TXT the upload accepts in {kit}"
+
+
+def test_a_whatsapp_export_with_multi_line_messages_is_messages():
+    """3 of 9 lines are timestamped: under half, but at least MIN_STAMPED."""
+    kind, pages = text.read_txt_as(WHATSAPP.encode())
+    assert kind == "messages"
+    assert pages[1] == {"locator": "message 2",
+                        "text": "It started last night and the stain is about a metre wide now."}
+
+
+def test_a_wechat_pc_export_with_the_name_first_is_messages():
+    """No line starts with a timestamp or "Name:", and exactly half the lines are headers."""
+    assert not any(text._is_speaker(line) for line in WECHAT_PC.splitlines())
+    assert txt_kind(WECHAT_PC.encode()) == "messages"
+
+
+def test_a_letter_with_a_date_header_a_dated_line_and_a_re_line_stays_a_letter():
+    kind, pages = text.read_txt_as(LETTER.encode())
+    assert kind == "letter"
+    assert [p["locator"] for p in pages] == [f"line {n}" for n in range(1, 12)]
+    assert pages[2]["text"] == "Date: 2026-08-20"
+
+
+def test_a_letter_with_three_dated_sentences_stays_a_letter():
+    """opoeci6's example on #145: three dates, none where a chat export puts its timestamp."""
+    letter = ("To: Harbour Properties\nRe: repairs\n"
+              "On 2026-08-14 I reported the leak by phone.\n"
+              "On 2026-09-02 I reported it again.\n"
+              "On 2026-10-01 I sent this letter.\n"
+              "Nothing has been fixed.\n")
+    assert txt_kind(letter.encode()) == "letter"
+
+
+def test_a_letter_with_three_clock_times_stays_a_letter():
+    letter = ("To: Harbour Properties\nRe: no heat\n"
+              "The heat went off at 9:30 pm on Friday.\n"
+              "It came back on Saturday at 6:00 am\n"
+              "and went off again at 11:15 pm\n"
+              "Please repair the boiler.\n")
+    assert txt_kind(letter.encode()) == "letter"
+
+
+@pytest.mark.parametrize(("line", "stamped"), [
+    ("[2026-08-14 21:10] 陈梅：浴室漏水", True),
+    ("[14/08/2026, 21:10:05] Jordan Lee: water", True),
+    ("14/08/2026, 21:10 - Jordan Lee: water", True),
+    ("2026-08-14 21:10 Tenant: water", True),
+    ("21:10 Tenant: water", True),
+    ("\ufeff2026-08-14 21:10 Tenant: water", True),  # a BOM the decoder left
+    ("陈梅 2026-08-14 21:10", True),
+    ("Jordan Lee 14/08/2026 21:10:05", True),
+    ("On 2026-08-14 I reported the leak by phone.", False),
+    ("The heat went off at 9:30 pm", False),
+    ("Date 2026-08-20 10:00", False),  # a header word, not a name
+    ("陈梅 21:10", False),  # a time alone after a name
+    ("Room 2026-08-14 21:10 was wet", False),  # more than a name and a timestamp
+])
+def test_a_timestamp_counts_only_where_chat_exports_put_it(line: str, stamped: bool):
+    assert text._is_stamped(line) is stamped
+
+
+@pytest.mark.parametrize("chat", [
+    "Tenant: it leaks",  # one line with a speaker
+    "Tenant: it leaks\nLandlord: ok\nNo reply after that",  # 2 of 3 lines
+    "房东：明天来修\nTenant: OK",  # full-width colon
+    "Locataire : L'eau coule encore.\nPropriétaire : Je passe demain.",  # space before colon
+    "21:10 Tenant: it leaks\n21:12 Landlord: ok",  # a time only
+])
+def test_short_chats_are_messages(chat: str):
+    assert txt_kind(chat.encode()) == "messages"
+
+
+@pytest.mark.parametrize("letter", [
+    "Please fix the leak.",
+    "To: Landlord\nFrom: Tenant\nRe: Leak\nThe bathroom wall leaks.",  # headers aren't speakers
+    "Dear Landlord:\nThe wall leaks.\nPlease send someone.",
+    "I paid $1,650.00 on 1 August.\nThe receipt number is 4021-77.\nThank you.",
+])
+def test_documents_are_letters(letter: str):
+    assert txt_kind(letter.encode()) == "letter"
+
+
+def test_a_tenants_text_letter_and_chat_now_corroborate_like_a_pdf_letter_and_chat():
+    """Intended consequence of #125: strength counts two files as independent when their kind
+    or uploader differs. The same tenant's letter.txt and chat.txt were both "messages"
+    (single source); they are now letter + messages and corroborate, as a PDF letter (kind
+    "other") and a chat from the same tenant already did."""
+    from app.services.strength import SourceFacts, compute_strength
+
+    def cited(evidence_id: str, kind: str) -> SourceFacts:
+        return SourceFacts(evidence_id, kind, "tenant", captured_at=None, software=None)
+
+    letter, chat = txt_kind(LETTER.encode()), txt_kind(WHATSAPP.encode())
+    assert (letter, chat) == ("letter", "messages")
+    now = compute_strength([cited("ev_letter", letter), cited("ev_chat", chat)], mismatch=False)
+    assert now.strength == "corroborated"
+    before = compute_strength([cited("ev_letter", "messages"), cited("ev_chat", "messages")],
+                              mismatch=False)
+    assert before.strength == "single_source"
+    pdf = compute_strength([cited("ev_pdf", "other"), cited("ev_chat", chat)], mismatch=False)
+    assert pdf.strength == "corroborated"
+
+
+def test_a_known_kind_is_kept_whatever_the_lines_look_like():
+    """A tenant's typed answer is a message even when it reads like a note."""
+    kind, pages = text.read_txt_as(b"My rent is $1,650 a month.", kind="messages")
+    assert kind == "messages"
+    assert pages == [{"locator": "message 1", "text": "My rent is $1,650 a month."}]
 
 
 def test_read_pdf_parses_a_content_stream_shared_by_many_pages_once(monkeypatch):
