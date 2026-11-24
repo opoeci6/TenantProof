@@ -4,7 +4,8 @@ and must be re-recorded."""
 from app.services.agent.tools import evidence_tag, wrap_evidence
 
 # v2: photos and scanned pages may have an OCR page. v3: the kickoff lists reviewed events.
-TIMELINE_PROMPT_VERSION = "timeline-v4"
+# v4: pages="all" reads a whole file (#137). v5: read on with next_pages until it is null.
+TIMELINE_PROMPT_VERSION = "timeline-v5"
 TIMELINE_TOOLS = [
     "list_evidence", "read_evidence", "get_metadata", "search_facts",
     "propose_event", "flag_conflict", "ask_caseworker", "finish",
@@ -55,10 +56,12 @@ it.
 - Inside a block `&lt;` stands for the character `<`.
 
 How to work:
-1. list_evidence, then read each processed item in one call: read_evidence with pages="all" \
-(or a range like "3-9"). Use page or region only to revisit one part, get_metadata for capture \
-details, and search_facts to find related facts. A step has a limited number of tool calls: read \
-each file once, and keep calls for propose_event and finish.
+1. list_evidence, then read each processed item with read_evidence pages="all" (or a range like \
+"3-9"). One call returns about 20,000 characters: if the result has next_pages, read on with \
+pages set to it until next_pages is null, so you see the whole file. Use page or region only to \
+revisit one part, get_metadata for capture details, and search_facts to find related facts. A \
+step has a limited number of tool calls: do not read the same pages twice, and keep calls for \
+propose_event and finish.
 2. propose_event for each event. Give every date candidate you can support (basis exif, \
 message_timestamp, document_text or filename) and at least one source. A source is \
 evidence_id, the locator exactly as read_evidence returned it, and an excerpt copied word for word \
@@ -90,7 +93,7 @@ def timeline_run_note(nonce: str) -> str:
 
 # --------------------------------------------------------------------------- the gaps step
 
-GAPS_PROMPT_VERSION = "gaps-v6"
+GAPS_PROMPT_VERSION = "gaps-v7"
 GAPS_TOOLS = [
     "list_evidence", "read_evidence", "get_metadata", "search_facts", "list_form_fields",
     "search_legal_sources", "create_gap", "draft_tenant_message", "ask_caseworker", "finish",
@@ -122,7 +125,8 @@ How to work:
 them. Do not create those again. Add a gap only for something the evidence shows that the list \
 misses.
 2. Read before you write: list_form_fields, then list_evidence and read_evidence for the items \
-that matter, one call per item with pages="all" (or a range like "3-9"). Use search_facts for \
+that matter, with pages="all" (or a range like "3-9"); if a result has next_pages, read on with \
+it until next_pages is null. Use search_facts for \
 what was already extracted and search_legal_sources when a gap rests on a rule. Keep calls for \
 create_gap, draft_tenant_message and finish. The form step ran before you: a field marked \
 needs_confirmation already has a value taken from the evidence, and the caseworker confirms it. \
@@ -178,7 +182,7 @@ def gaps_kickoff(open_gaps: tuple[str, ...], language: str, nonce: str) -> str:
 
 # --------------------------------------------------------------------------- the draft step
 
-DRAFT_PROMPT_VERSION = "draft-v2"
+DRAFT_PROMPT_VERSION = "draft-v3"
 DRAFT_TOOLS = [
     "list_evidence", "read_evidence", "search_facts", "list_form_fields", "fill_form_field",
     "finish",
@@ -205,8 +209,9 @@ be closed from the inside: only the closing tag with the run's exact tag name en
 How to work:
 1. The kickoff lists the fields that are still missing. Use search_facts for what was already \
 extracted, then list_evidence and read_evidence for the items that can hold the answer (a lease \
-usually names the parties, the unit, the start date and the rent); pages="all" reads a whole item \
-in one call. Keep calls for fill_form_field and finish.
+usually names the parties, the unit, the start date and the rent) with pages="all"; if a result \
+has next_pages, read on with it until next_pages is null. Keep calls for fill_form_field and \
+finish.
 2. For each missing field the evidence answers, call fill_form_field once. `value` is copied word \
 for word from the excerpt you cite (write "May 1, 2026" if that is what the lease says, not \
 "2026-05-01"). A source is evidence_id, the locator exactly as read_evidence returned it, and an \
