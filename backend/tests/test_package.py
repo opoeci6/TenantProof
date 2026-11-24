@@ -72,6 +72,41 @@ def pdf_text(data: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages)
 
 
+def test_downloaded_application_and_text_evidence_keep_words_intact(fresh_db, client):
+    make_ready(client)
+    # Exercise several line boundaries at the normal font sizes in both PDF templates.
+    remedy = " ".join(["The leak has affected Unit 2 since the morning."] * 12)
+    evidence = " ".join(["Please see the texts attached separately for the report."] * 12)
+    saved = client.patch("/api/gaps/gap_02", json={"status": "resolved", "value": remedy})
+    assert saved.status_code == 200, saved.text
+    uploaded = client.post(
+        f"/api/cases/{CASE}/evidence",
+        files=[("file", ("messages.txt", evidence.encode(), "text/plain"))],
+    )
+    assert uploaded.status_code == 200, uploaded.text
+
+    build(client)
+    entries = unzip(download(client).content)
+    manifest = json.loads(entries["manifest.json"])
+    evidence_entry = next(
+        item for item in manifest["evidence"] if item["filename"] == "messages.txt"
+    )
+    assert evidence_entry["rendition"] is not None
+    evidence_pdf = evidence_entry["rendition"]["path"]
+    assert evidence_pdf.endswith(".pdf")
+    assert remedy in " ".join(pdf_text(entries["application_draft.pdf"]).split())
+    assert evidence in " ".join(pdf_text(entries[evidence_pdf]).split())
+
+
+def test_application_pdf_labels_rent_with_currency(fresh_db, client):
+    make_ready(client)
+    r = client.patch(f"/api/cases/{CASE}/form-draft/fields/monthly_rent", json={"value": "1200"})
+    assert r.status_code == 200, r.text
+    build(client)
+    entries = unzip(download(client).content)
+    assert "CAD 1,200.00" in pdf_text(entries["application_draft.pdf"])
+
+
 def package_rows(session) -> list[PackageRow]:
     session.expire_all()
     return list(session.exec(

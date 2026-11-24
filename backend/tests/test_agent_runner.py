@@ -297,6 +297,75 @@ def test_the_last_calls_of_a_step_are_kept_for_recording_the_result(
     assert step["status"] == "done"
 
 
+def _reads(prefix: str, n: int) -> list[dict]:
+    return [
+        tool_use("read_evidence", f"{prefix}{i}", evidence_id="ev_01", pages="all")
+        for i in range(n)
+    ]
+
+
+def test_one_turn_of_reads_over_the_line_gets_the_warning_before_any_stop(
+    fresh_db: None, session: Session
+) -> None:
+    # 33 calls used, then a parallel batch of 8 reads: 4 run, 4 are skipped. The model must see
+    # the warning and get to use the reserve; the step must not stop in that same turn.
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 34)}
+    script["timeline-turn34"] = turn(*_reads("r", 8))
+    script["timeline-turn35"] = turn(
+        propose("p1", title="What was read"), tool_use("finish", "f1", summary="done")
+    )
+    provider = RecordingProvider(script)
+    row = execute(session, new_run(session), provider)
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["status"] == "done" and len(provider.requests) == 35
+    assert "kept for what records your result" in json.dumps(
+        provider.requests[-1].messages[-1].content
+    )
+    tools = [c["tool"] for c in step["tool_calls"]]
+    assert tools.count("read_evidence") == 4 and tools[-2:] == ["propose_event", "finish"]
+
+
+def test_a_turn_of_only_skipped_reads_is_warned_not_stopped(
+    fresh_db: None, session: Session
+) -> None:
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 38)}
+    script["timeline-turn38"] = turn(*_reads("r", 5))  # all skipped: only the reserve is left
+    script["timeline-turn39"] = turn(
+        propose("p1", title="What was read"), tool_use("finish", "f1", summary="done")
+    )
+    provider = RecordingProvider(script)
+    row = execute(session, new_run(session), provider)
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["status"] == "done"
+    assert [c["tool"] for c in step["tool_calls"]][-2:] == ["propose_event", "finish"]
+
+
+def test_reading_on_after_the_warning_stops_the_step(fresh_db: None, session: Session) -> None:
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 38)}
+    script["timeline-turn38"] = turn(*_reads("r", 2))
+    script["timeline-turn39"] = turn(*_reads("s", 1))
+    provider = RecordingProvider(script)
+    row = execute(session, new_run(session), provider)
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert len(provider.requests) == 39 and len(step["tool_calls"]) == 37
+    assert step["status"] == "incomplete"
+    assert step["summary"].startswith(
+        f"Stopped early: the step reached its read limit; the last {loop.RESERVED_READ_CALLS} "
+        "calls are kept for what records the result."
+    )
+
+
+def test_a_write_between_skipped_reads_resets_the_count(fresh_db: None, session: Session) -> None:
+    script = {f"timeline-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 38)}
+    script["timeline-turn38"] = turn(*_reads("r", 1))
+    script["timeline-turn39"] = turn(propose("p1", title="First"))
+    script["timeline-turn40"] = turn(*_reads("s", 1))
+    script["timeline-turn41"] = turn(tool_use("finish", "f1", summary="done"))
+    row = execute(session, new_run(session), RecordingProvider(script))
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["status"] == "done"
+
+
 def test_the_turn_limit_stays_above_the_call_limit() -> None:
     # One call per turn must reach the call limit before the turn limit stops the step.
     assert loop.MAX_TURNS > loop.MAX_TOOL_CALLS

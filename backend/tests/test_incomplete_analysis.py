@@ -38,8 +38,9 @@ class Slow(RecordingProvider):
 
 
 def capped(key: str) -> dict[str, llm.LLMResponse]:
-    """One turn asking for more tool calls than a step may make."""
-    uses = [tool_use("list_evidence", f"u{i}") for i in range(loop.MAX_TOOL_CALLS + 1)]
+    """One turn asking for more tool calls than a step may make. Not reads: the last calls of a
+    step are kept for results (#118), so a turn of reads would stop at the read limit instead."""
+    uses = [tool_use("not_a_tool", f"u{i}") for i in range(loop.MAX_TOOL_CALLS + 1)]
     return {f"{key}-turn1": turn(*uses)}
 
 
@@ -97,9 +98,9 @@ def test_a_step_at_the_tool_call_limit_ends_incomplete(
     row = execute(session, RecordingProvider(capped(key)), key)
     step = step_of(row, key)
     assert step["status"] == "incomplete"
-    # The cap is reached by reading here: the last calls are kept for results (#118), so the
-    # step stops at its read limit rather than at MAX_TOOL_CALLS.
-    assert step["summary"].startswith("Stopped early:")
+    assert step["summary"].startswith(
+        f"Stopped early: the step reached its limit of {loop.MAX_TOOL_CALLS} tool calls."
+    )
     shown = client.get(f"/api/runs/{row.id}").json()
     assert next(s for s in shown["steps"] if s["key"] == key)["status"] == "incomplete"
 

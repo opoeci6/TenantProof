@@ -104,7 +104,7 @@ deterministic. Pattern: **agent proposes, rules verify, caseworker approves.**
 
 **Agent tools** (read-only or draft-only; no tool can send, delete or reach the internet):
 
-- `list_evidence()`, `read_evidence(id, page|pages|region)` (stripped content only; `pages="all"` reads a whole file in one call), `get_metadata(id)`, `search_facts(query)`
+- `list_evidence()`, `read_evidence(id, page|pages|region)` (stripped content only; `pages="all"` reads a whole file, about 20,000 characters per call as sent; a longer read returns `next_pages` to read on with), `get_metadata(id)`, `search_facts(query)`
 - `propose_event(title, description, actor, date_candidates[], sources[])`, `flag_conflict(event_ref, reason)`
 - `list_form_fields()`, `search_legal_sources(query)`, `create_gap(severity, title, why, how_to_fix, field_key?)`
 - `draft_tenant_message(gap_ref, language)`, `ask_caseworker(question)` → step goes `needs_input`, run pauses
@@ -112,7 +112,7 @@ deterministic. Pattern: **agent proposes, rules verify, caseworker approves.**
 - `finish(summary)`
 
 **Guardrails**
-- Budget per loop: max 40 tool calls (25 until #118), max tokens, wall-clock timeout. Exceeding it ends the step with what it has, plus a summary saying so. The last 3 calls of a step are kept for what records its result: a read made there is skipped, because a step that spends every call reading writes nothing (#118). A model that keeps asking to read instead of recording is stopped (incomplete) after four skipped reads in the step.
+- Budget per loop: max 40 tool calls (25 until #118), max tokens, wall-clock timeout. Exceeding it ends the step with what it has, plus a summary saying so. The last 3 calls of a step are kept for what records its result: a read made there is skipped, because a step that spends every call reading writes nothing (#118). The skipped read tells the model to record what it has and call finish; if the next turn again does nothing but read, the step is stopped (incomplete).
 - **Citation verifier** (deterministic, after every `propose_event`): each `SourceRef.excerpt` must fuzzy-match the stored
   text of that evidence item (`rapidfuzz` ratio ≥ 90), and the locator must exist. Failures are dropped and logged as
   `tool_calls` entries ("citation rejected: excerpt not found"). This is the anti-hallucination story for the demo.
