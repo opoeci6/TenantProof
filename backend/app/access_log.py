@@ -3,7 +3,7 @@
 import logging
 import re
 
-INTAKE_PATH = re.compile(r"^/(i|api/intake)/[^/?#]+")
+INTAKE_PATH = re.compile(r"^/+(i|api/intake)/[^/?#]+")
 
 
 def mask_path(path: str) -> str:
@@ -16,6 +16,8 @@ class MaskIntakeTokens(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args
-        if isinstance(args, tuple) and len(args) == 5 and isinstance(args[2], str):
-            record.args = (args[0], args[1], mask_path(args[2]), args[3], args[4])
+        if args and isinstance(args, tuple):
+            record.args = tuple(mask_path(a) if isinstance(a, str) else a for a in args)
+        elif not args and isinstance(record.msg, str):
+            record.msg = mask_path(record.msg)
         return True
