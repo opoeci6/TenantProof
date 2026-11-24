@@ -37,6 +37,8 @@ MUTATIONS = [
     pytest.param("POST", "/api/gaps/gap_01/tenant-request", None, id="gap-tenant-request"),
     pytest.param("PATCH", f"{FORM}/fields/landlord_address", {"value": "5 Elm St"},
                  id="field-set"),
+    pytest.param("PATCH", f"{FORM}/fields/tenant_email", {"value": "applicant@example.test"},
+                 id="optional-field-set"),
 ]
 
 
@@ -599,9 +601,13 @@ def test_f3_requests_save_independently_without_replacing_the_existing_remedy(fr
     ("deposit_amount", "0"),
 ])
 def test_invalid_f2_edits_do_not_create_a_saved_field(fresh_db, client, session, key, value):
+    if key == "weekly_rent":
+        assert client.patch(f"{FORM}/fields/monthly_rent", json={"value": ""}).status_code == 200
     before = _snapshot(client)
     response = client.patch(f"{FORM}/fields/{key}", json={"value": value})
     assert response.status_code == 422, response.text
+    if key == "weekly_rent":
+        assert "positive CAD amount" in response.json()["detail"]
     assert _snapshot(client) == before
     assert session.get(FormFieldRow, (CASE, key)) is None
 
@@ -621,6 +627,9 @@ def test_weekly_rent_resolves_the_same_gap_as_monthly_rent(fresh_db, client, ses
     assert _field(client, "monthly_rent")["required"] is False
     assert _gap(client, "gap_01")["status"] == "resolved"
     assert client.patch(monthly, json={"value": "1400"}).status_code == 422
+    refused = client.patch("/api/gaps/gap_01", json={"status": "open"})
+    assert refused.status_code == 422
+    assert _gap(client, "gap_01")["status"] == "resolved"
 
     assert client.patch(weekly, json={"value": ""}).status_code == 200
     assert _field(client, "monthly_rent")["required"] is True

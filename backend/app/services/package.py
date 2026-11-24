@@ -262,7 +262,9 @@ def _write_f3_requests(pdf: FPDF, values: dict[str, str | None]) -> None:
         _write(pdf, "Tenant requests", bold=True, size=12, gap=2)
         for key, label in selected:
             _write(pdf, label, bold=True, gap=0)
-            _write(pdf, values.get(f"{key}_reason") or "(reason not filled in)")
+            reason = values.get(f"{key}_reason")
+            if reason or key != "request_payment":
+                _write(pdf, reason or "(reason not filled in)")
     _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
 
 

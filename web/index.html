@@ -541,7 +541,7 @@ const SEED = {
   sources: [
     { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
     { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
-    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes parties, lease details and tenant requests from Form J. The caseworker completes the official form." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The application the partial draft is based on. It covers tenant information, lease details and requests. The caseworker completes the official form." },
     { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
   ],
   fields: [
@@ -575,8 +575,8 @@ const leaseFields = {
   notice_effective_date: { when: ["notice_given", "yes"], label: "Date notice takes effect", date: "future" },
   written_lease: { label: "Is there a written lease?", options: yesNoOptions },
   lease_term: { label: "Lease term", options: {
-    year_to_year: "Year-to-year", month_to_month: "Month-to-month",
-    week_to_week: "Week-to-week", fixed_term: "Fixed term"
+    year_to_year: "Year to year", month_to_month: "Month to month",
+    week_to_week: "Week to week", fixed_term: "Fixed term"
   } },
   fixed_term_start: { when: ["lease_term", "fixed_term"], label: "Fixed-term start date", date: "future" },
   fixed_term_end: { when: ["lease_term", "fixed_term"], label: "Fixed-term end date", date: "future" },
@@ -658,7 +658,7 @@ const RUN_SCRIPT = [
     tool_calls: [{ tool: "rag_search", input: "“landlord repair obligation maintenance”", output: "Residential Tenancies Act, statutory conditions" }, { tool: "rag_search", input: "“photo evidence format deadline”", output: "Evidence Policy #42" }, { tool: "verify_source_url", input: "src_02 Evidence Policy #42", output: "content unchanged since Oct 31" }, { tool: "verify_source_url", input: "src_01, src_03, src_04", output: "not checked yet" }] },
   { key: "gaps", label: "Find missing information", summary: "2 required items (landlord address, what the tenant is asking for) and 3 suggestions. 4 requests to the tenant drafted in 中文, waiting for your approval.", final: "needs_input",
     tool_calls: [{ tool: "check_required_fields", input: "form fields vs. extracted facts", output: "landlord_address, remedy missing" }, { tool: "check_evidence_quality", input: "9 events", output: "E-05 no metadata · E-06 edited · nothing after Oct 1" }, { tool: "draft_tenant_request", input: "4 gaps · tenant language zh", output: "4 drafts, not sent" }] },
-  { key: "draft", label: "Draft form", summary: "5 of 7 fields filled. Narrative uses only the events a caseworker accepts.",
+  { key: "draft", label: "Draft form", summary: "Draft prepared. Narrative uses only the events a caseworker accepts.",
     tool_calls: [{ tool: "fill_fields", input: "Form J field map", output: "5 filled · 1 to confirm · 2 missing" }, { tool: "write_narrative", input: "accepted events only", output: "plain-language summary with exhibit labels" }] }
 ];
 function makeRun(instant) {
@@ -858,6 +858,15 @@ const deadlineLabel = label => String(label).replace(/^\s*evidence due\b/i, "Mus
 // `st` is stats(): `gaps` is how many missing-info items exist at all, `fieldsTotal` the form
 // fields, `total` the timeline events. With none of them there is nothing to be "done" about, so
 // the checks are neutral ("none") rather than a green tick.
+function formFieldCounts(fields) {
+  const visible = fields.filter(field => field.required || field.value);
+  return {
+    filled: visible.filter(field => field.value).length,
+    fieldsTotal: visible.length,
+    toConfirm: visible.filter(field => field.status === "needs_confirmation").length,
+    reqMissing: visible.filter(field => field.required && !field.value).length
+  };
+}
 function railMeta(st, evidenceCount) {
   return {
     evidence: `${plural(evidenceCount, "file")} · from tenant`,
@@ -1075,8 +1084,7 @@ function stats() {
   const blocking = S.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
-  const fields = S.form ? S.form.fields : [];
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, filled: fields.filter(f => f.value).length, fieldsTotal: fields.length, toConfirm: fields.filter(f => f.status === "needs_confirmation").length, reqMissing: fields.filter(f => f.required && !f.value).length };
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
 }
 
 /* ---------- login (M1) ---------- */
@@ -1429,7 +1437,7 @@ function viewForm() {
       <div style="display:grid;gap:6px;min-width:0">${control}
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
         ${x.key === "applicant_email_consent" ? '<span class="muted">The applicant email appears in the draft PDF only if you select Yes.</span>' : ""}
-        ${x.key === "tenancy_start" && saved ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
+        ${x.key === "tenancy_start" && saved && (legacyDate || x.status === "needs_confirmation") ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
         ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
       <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
   };

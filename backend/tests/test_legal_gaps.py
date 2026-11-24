@@ -4,7 +4,7 @@ tenant. Fixture providers only, so nothing reaches the network."""
 import pytest
 from sqlmodel import Session, col, select
 
-from app.models import ActivityRow, CaseRow, EvidencePageRow, GapRow, LegalSourceRow
+from app.models import ActivityRow, CaseRow, EvidencePageRow, FormFieldRow, GapRow, LegalSourceRow
 from app.services.agent import llm, loop, runner
 from app.services.agent import tools as t
 from app.services.legal import gaps
@@ -55,6 +55,23 @@ def run_gaps(session: Session, script: dict[str, llm.LLMResponse], case_id: str 
 
 
 # --- the deterministic checks ----------------------------------------------------------------
+
+
+def test_optional_only_case_still_gets_baseline_form_fields(fresh_db, session):
+    case = session.get(CaseRow, LIVE)
+    assert case is not None
+    manual = FormFieldRow(
+        case_id=LIVE, key="tenant_email", label="Tenant email", required=False,
+        value="applicant@example.test", status="user_entered",
+    )
+    session.add(manual)
+    session.commit()
+
+    assert gaps.ensure_form_fields(session, case) == 7
+    session.commit()
+    assert gaps.ensure_form_fields(session, case) == 0
+    session.refresh(manual)
+    assert manual.value == "applicant@example.test" and manual.status == "user_entered"
 
 
 def test_the_demo_case_already_has_every_gap_the_checks_find(fresh_db, session):

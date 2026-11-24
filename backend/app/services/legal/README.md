@@ -87,8 +87,8 @@ effective April 30, 2025"), so check the Royal Gazette Part II for later amendme
   fields. The caseworker can fill structured addresses, contact details and email consent (F1),
   lease details (F2), and multiple tenant requests with individual reasons (F3). The caseworker
   transfers the reviewed data to the official form, and the applicant signs and dates it there.
-  F4 is the official form's section for landlord applicants. Tenant draft coverage is tracked
-  in #67.
+  The draft uses plain-English labels. F4 is the official form's section for landlord applicants.
+  Issue #67 tracks tenant draft coverage and links back to the field comparison in #54.
 - **Policy #28 ("Hearings Procedures and Conduct") is not in the corpus.** The URL the seed data
   carries
   (`.../ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf`)

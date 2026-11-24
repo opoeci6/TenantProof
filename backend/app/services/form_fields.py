@@ -46,21 +46,21 @@ F1_ADDRESS_PARTS = {
 F1_CONTACT_GROUPS = {
     "Tenant contact details": {
         "tenant_home_phone": "Home phone",
-        "tenant_other_phone": "Other phone",
+        "tenant_other_phone": "Business or other phone",
         "tenant_email": "Email",
         "applicant_email_consent": "Consent to email from Service Nova Scotia",
     },
     "Landlord contact details": {
         "landlord_home_phone": "Home phone",
-        "landlord_other_phone": "Other phone",
+        "landlord_other_phone": "Business or other phone",
         "landlord_email": "Email",
     },
 }
 F1_FIELDS = (
     *(FormFieldSpec(f"{prefix}_{part}", f"{group} · {label}", required=False)
       for prefix, group in F1_ADDRESS_GROUPS.items() for part, label in F1_ADDRESS_PARTS.items()),
-    *(FormFieldSpec(key, label, required=False)
-      for fields in F1_CONTACT_GROUPS.values() for key, label in fields.items()),
+    *(FormFieldSpec(key, f"{group} · {label}", required=False)
+      for group, fields in F1_CONTACT_GROUPS.items() for key, label in fields.items()),
 )
 F2_FIELD_KEYS = frozenset(field.key for field in F2_FIELDS)
 F3_REQUESTS = {
