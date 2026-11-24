@@ -62,6 +62,8 @@ Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to 
 
 ## In progress
 
+- **#67 (F2 lease details):** expanded the tenant application draft with move-in and move-out dates, notice and lease details, weekly rent, and security deposit fields. Existing tenancy start values and sources remain available for review. F1 and F3 coverage still needs work.
+
 Open PRs (2026-11-18), all into `dev`: this one (`opoeci6/fix-97-photo-preview`) and #101 (YCL0609: splitting `web/index.html` into `index.html`, `index.css` and `index.js`; not for the submission).
 
 Open issues:

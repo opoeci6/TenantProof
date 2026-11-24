@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services import activity
 from app.services.agent.tools import clean_text
+from app.services.form_fields import F2_BY_KEY, covered_legacy_fields, is_required
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
 from app.services.review import request_sent_line, sync_attestation_gap
@@ -48,13 +49,16 @@ class Prepared:
 def case_facts(session: Session, case: CaseRow) -> CaseFacts:
     """The case as `gap_checks` sees it. The photo facts come from `strength.SourceFacts`, so the
     gaps step and the timeline flags cannot disagree about what "edited" means."""
+    rows = session.exec(
+        select(FormFieldRow)
+        .where(FormFieldRow.case_id == case.id)
+        .order_by(col(FormFieldRow.position))
+    ).all()
+    covered_fields = covered_legacy_fields(rows)
     fields = tuple(
-        FieldFact(key=row.key, label=row.label, required=row.required, status=row.status)
-        for row in session.exec(
-            select(FormFieldRow)
-            .where(FormFieldRow.case_id == case.id)
-            .order_by(col(FormFieldRow.position))
-        ).all()
+        FieldFact(key=row.key, label=row.label, required=is_required(row, covered_fields),
+                  status=row.status)
+        for row in rows if row.key not in F2_BY_KEY
     )
     evidence = tuple(
         _evidence_fact(row)
@@ -103,7 +107,7 @@ def ensure_form_fields(session: Session, case: CaseRow) -> int:
     This edges into the `draft` step's area; the field list lives in the corpus so the two steps
     agree on it."""
     existing = session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case.id)).all()
-    if existing:
+    if any(field.key not in F2_BY_KEY for field in existing):
         return 0
     form = next(entry for entry in corpus.CORPUS if entry.kind == "form")
     for position, field in enumerate(form.form_fields):

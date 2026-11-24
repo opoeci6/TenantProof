@@ -32,7 +32,8 @@ from app.models import CaseRow, EvidenceRow, FormFieldRow, GapRow, PackageRow, U
 from app.schemas import Attestations, Package, PackageFile
 from app.services import activity, storage
 from app.services.evidence import gps, sniff  # also registers the HEIC opener
-from app.services.form_values import monthly_rent_amount
+from app.services.form_fields import F2_BY_KEY, covered_legacy_fields, is_required
+from app.services.form_values import F2_CHOICES, F2_DEPENDENCIES, MONEY_KEYS, cad_amount
 from app.services.gating import MissingField, OpenGap, package_blockers
 from app.services.mappers import (
     OPEN_GAP,
@@ -134,14 +135,16 @@ def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
 
 def state_reasons(session: Session, case: CaseRow) -> list[str]:
     fields = session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case.id)).all()
+    covered_fields = covered_legacy_fields(fields)
     gaps = session.exec(select(GapRow).where(GapRow.case_id == case.id)).all()
     reasons = package_blockers(
         [OpenGap(g.title, (g.input or {}).get("field_key"))
          for g in gaps if g.severity == "blocking" and g.status in OPEN_GAP],
-        [MissingField(f.key, f.label) for f in fields if f.required and not f.value],
+        [MissingField(f.key, f.label)
+         for f in fields if is_required(f, covered_fields) and not f.value],
         case.tenant_attested_genuine,
     )
-    if not fields:
+    if not any(f.key not in F2_BY_KEY for f in fields):
         reasons.insert(0, "No form draft has been prepared for this case yet")
     return [*analysis_reasons(session, case), *reasons]
 
@@ -201,11 +204,18 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
     _write(pdf, draft.disclaimer, size=9, gap=4)
     _write(pdf, f"Case: {case.title} ({case.unit})")
     _write(pdf, f"Prepared by {prepared_by} on {built_at:%Y-%m-%d %H:%M} UTC", gap=4)
+    values = {field.key: field.value for field in draft.fields}
     for field in draft.fields:
+        dependency = F2_DEPENDENCIES.get(field.key)
+        if dependency is not None and values.get(dependency[0]) not in (None, "", dependency[1]):
+            continue
+        if not field.required and not field.value:
+            continue
         _write(pdf, field.label, bold=True, gap=0)
         value = field.value or "(not filled in)"
-        if field.key == "monthly_rent" and (amount := monthly_rent_amount(value)) is not None:
+        if field.key in MONEY_KEYS and (amount := cad_amount(value)) is not None:
             value = f"CAD {amount:,.2f}"
+        value = F2_CHOICES.get(field.key, {}).get(value, value)
         _write(pdf, value)
     _write(pdf, "Summary of events", bold=True, size=12, gap=2)
     _write(pdf, draft.narrative.text or "(no accepted events)")

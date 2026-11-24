@@ -107,6 +107,58 @@ def test_application_pdf_labels_rent_with_currency(fresh_db, client):
     assert "CAD 1,200.00" in pdf_text(entries["application_draft.pdf"])
 
 
+def test_application_pdf_exports_f2_and_accepts_weekly_rent(fresh_db, client):
+    make_ready(client)
+    values = {
+        "monthly_rent": "",
+        "weekly_rent": "350.50",
+        "tenancy_start": "",
+        "move_in_date": "2026-05-03",
+        "fixed_term_start": "2026-05-01",
+        "fixed_term_end": "2030-05-01",
+        "lease_term": "fixed_term",
+        "deposit_paid": "yes",
+        "deposit_amount": "500",
+    }
+    for key, value in values.items():
+        r = client.patch(f"/api/cases/{CASE}/form-draft/fields/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+
+    build(client)
+    text = pdf_text(unzip(download(client).content)["application_draft.pdf"])
+    for value in (
+        "Weekly rent", "CAD 350.50", "Move-in date", "2026-05-03",
+        "Fixed-term lease start date", "2026-05-01", "Fixed-term lease end date", "2030-05-01",
+        "Fixed term", "Security deposit amount", "CAD 500.00",
+    ):
+        assert value in text
+    assert "Monthly rent" not in text
+
+
+def test_application_pdf_omits_details_marked_inapplicable(fresh_db, client):
+    make_ready(client)
+    for key, value in {
+        "notice_given_by": "landlord",
+        "notice_given": "no",
+        "fixed_term_end": "2030-05-01",
+        "lease_term": "month_to_month",
+        "deposit_amount": "500",
+        "deposit_paid": "no",
+    }.items():
+        response = client.patch(f"/api/cases/{CASE}/form-draft/fields/{key}", json={"value": value})
+        assert response.status_code == 200, response.text
+
+    build(client)
+    text = pdf_text(unzip(download(client).content)["application_draft.pdf"])
+    assert "Month to month" in text
+    assert "Notice given by" not in text
+    assert "Fixed-term lease end date" not in text
+    assert "CAD 500.00" not in text
+    draft = client.get(f"/api/cases/{CASE}/form-draft").json()
+    saved_amount = next(field for field in draft["fields"] if field["key"] == "deposit_amount")
+    assert saved_amount["value"] == "500"
+
+
 def package_rows(session) -> list[PackageRow]:
     session.expire_all()
     return list(session.exec(

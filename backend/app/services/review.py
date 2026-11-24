@@ -10,7 +10,22 @@ from app.models import CaseRow, FormFieldRow, GapRow, TimelineEventRow, UserRow
 from app.schemas import FieldPatch, GapPatch, TimelineEventPatch
 from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
-from app.services.form_values import MIN_TENANCY_YEAR, is_tenancy_start_date, monthly_rent_amount
+from app.services.form_fields import (
+    F2_ALTERNATIVES,
+    LEGACY_ALTERNATIVES,
+    covered_legacy_field_for_case,
+    lock_alternative_fields,
+    materialize_optional_field,
+)
+from app.services.form_values import (
+    F2_CHOICES,
+    F2_DATE_KEYS,
+    MIN_TENANCY_YEAR,
+    MONEY_KEYS,
+    RENT_KEYS,
+    cad_amount,
+    is_tenancy_start_date,
+)
 from app.services.legal.gap_checks import UNATTESTED_TITLE
 from app.services.stage import refresh_stage
 from app.services.verifier import normalize
@@ -18,6 +33,10 @@ from app.services.verifier import normalize
 OPEN = ("open", "waiting_tenant")
 CONTENT_FIELDS = ("title", "description", "date")
 VERB = {"accepted": "Accepted", "edited": "Edited", "rejected": "Rejected", "pending": "Reset"}
+_F2_RESOLUTION_NOTES = {
+    "weekly_rent": "Weekly rent saved on the form draft",
+    "move_in_date": "Move-in date saved on the form draft",
+}
 
 
 def _bad(detail: str) -> HTTPException:
@@ -81,8 +100,18 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
     if value != (field.value or ""):
         # Existing verbatim drafts can still be confirmed, and an empty value clears the field.
         if value:
-            if field.key == "monthly_rent" and monthly_rent_amount(value) is None:
-                raise _bad("Enter monthly rent as a positive CAD amount with up to two decimals")
+            if field.key in MONEY_KEYS and cad_amount(value) is None:
+                raise _bad(
+                    f"Enter {field.label.lower()} as a positive CAD amount with up to two decimals"
+                )
+            choices = F2_CHOICES.get(field.key)
+            if choices is not None and value not in choices:
+                raise _bad(f"{field.label} must be one of: {', '.join(choices.values())}")
+            if field.key in F2_DATE_KEYS and not is_tenancy_start_date(value):
+                raise _bad(
+                    f"Enter a valid {field.label.lower()} in YYYY-MM-DD format "
+                    f"({MIN_TENANCY_YEAR} or later)"
+                )
             if field.key == "tenancy_start":
                 current_year = date.today().year
                 if not is_tenancy_start_date(value, current_year):
@@ -106,9 +135,21 @@ def _field_for_gap(session: Session, gap: GapRow) -> FormFieldRow | None:
     return session.get(FormFieldRow, (gap.case_id, key)) if key else None
 
 
+def _check_rent_period(session: Session, case_id: str, key: str, value: str) -> None:
+    if value and key in RENT_KEYS:
+        other = "weekly_rent" if key == "monthly_rent" else "monthly_rent"
+        existing = session.get(FormFieldRow, (case_id, other))
+        if existing is not None and existing.value:
+            raise _bad(f"Clear {existing.label.lower()} before saving a different rent period")
+
+
 def patch_gap(
     session: Session, case: CaseRow, gap: GapRow, patch: GapPatch, user: UserRow
 ) -> GapRow:
+    key = (gap.input or {}).get("field_key")
+    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
+        lock_alternative_fields(session, case.id)
+        session.refresh(gap)
     was_resolved = gap.status == "resolved"
     if patch.value is not None:
         field = _field_for_gap(session, gap)
@@ -119,9 +160,12 @@ def patch_gap(
         value = patch.value.strip()
         if not value:
             raise _bad("value cannot be empty")
+        _check_rent_period(session, case.id, field.key, value)
         save_field_value(field, value)
         session.add(field)
     elif patch.status in OPEN and was_resolved:
+        if key in LEGACY_ALTERNATIVES and covered_legacy_field_for_case(session, case.id, key):
+            raise _bad("Clear the corresponding Form J field before reopening this item")
         field = _field_for_gap(session, gap)
         if field is not None and field.status == "user_entered":
             save_field_value(field, "")  # reopen clears what this gap wrote
@@ -162,20 +206,41 @@ def request_from_tenant(session: Session, case: CaseRow, gap: GapRow, user: User
 def patch_field(
     session: Session, case: CaseRow, key: str, patch: FieldPatch, user: UserRow
 ) -> FormFieldRow:
+    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
+        lock_alternative_fields(session, case.id)
     field = session.get(FormFieldRow, (case.id, key))
+    if field is None:
+        field = materialize_optional_field(session, case.id, key)
     if field is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
     value = patch.value.strip()
+    _check_rent_period(session, case.id, key, value)
     save_field_value(field, value)
     session.add(field)
     for gap in session.exec(select(GapRow).where(GapRow.case_id == case.id)).all():
-        if (gap.input or {}).get("field_key") != key:
+        gap_key = (gap.input or {}).get("field_key")
+        if key in F2_ALTERNATIVES and gap_key == F2_ALTERNATIVES[key]:
+            if value and gap.status in OPEN:
+                gap.status, gap.resolution_note = "resolved", _F2_RESOLUTION_NOTES[key]
+                session.add(gap)
+            elif not value and gap.resolution_note == _F2_RESOLUTION_NOTES[key]:
+                legacy = session.get(FormFieldRow, (case.id, gap_key))
+                if legacy is None or not legacy.value:
+                    gap.status, gap.resolution_note = "open", None
+                else:
+                    gap.resolution_note = f"Saved: {legacy.value}"
+                session.add(gap)
+            continue
+        if gap_key != key:
             continue
         if value and gap.status in OPEN:
             gap.status, gap.resolution_note = "resolved", f"Saved: {value}"
             session.add(gap)
         elif not value and gap.status == "resolved":
-            gap.status, gap.resolution_note = "open", None  # field emptied: the item is open again
+            if covered_legacy_field_for_case(session, case.id, key):
+                gap.resolution_note = _F2_RESOLUTION_NOTES[LEGACY_ALTERNATIVES[key]]
+            else:
+                gap.status, gap.resolution_note = "open", None
             session.add(gap)
     activity.log(session, case.id, "caseworker", user.name, f"Edited form field: {field.label}")
     refresh_stage(session, case)

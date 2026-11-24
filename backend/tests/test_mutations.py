@@ -486,6 +486,68 @@ def test_blank_field_value_sets_field_missing_and_null(fresh_db, client):
     assert field["value"] is None and field["status"] == "missing"
 
 
+def test_old_form_projects_f2_fields_and_preserves_legacy_date(fresh_db, client, session):
+    legacy = _field(client, "tenancy_start")
+    for key in ("move_in_date", "fixed_term_start", "fixed_term_end"):
+        assert session.get(FormFieldRow, (CASE, key)) is None
+        field = _field(client, key)
+        assert field["status"] == "missing" and field["value"] is None
+        assert field["required"] is False and field["sources"] == []
+        assert session.get(FormFieldRow, (CASE, key)) is None
+
+    for key, value in (
+        ("move_in_date", "2026-05-03"),
+        ("fixed_term_start", "2026-05-01"),
+        ("fixed_term_end", "2030-05-01"),
+        ("notice_effective_date", "2030-05-01"),
+        ("lease_term", "fixed_term"),
+        ("deposit_amount", "CAD 1200.50"),
+    ):
+        response = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "user_entered"
+        assert _field(client, key)["value"] == value
+    assert _field(client, "tenancy_start") == {**legacy, "required": False}
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("fixed_term_end", "2030-02-30"),
+    ("move_out_date", "1899-12-31"),
+    ("notice_given", "perhaps"),
+    ("notice_given_by", "unknown"),
+    ("lease_term", "daily"),
+    ("weekly_rent", "400 USD"),
+    ("deposit_amount", "0"),
+])
+def test_invalid_f2_edits_do_not_create_a_saved_field(fresh_db, client, session, key, value):
+    before = _snapshot(client)
+    response = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+    assert response.status_code == 422, response.text
+    assert _snapshot(client) == before
+    assert session.get(FormFieldRow, (CASE, key)) is None
+
+
+def test_weekly_rent_resolves_the_same_gap_as_monthly_rent(fresh_db, client, session):
+    gap = session.get(GapRow, "gap_01")
+    assert gap is not None
+    gap.input = {**(gap.input or {}), "field_key": "monthly_rent"}
+    session.add(gap)
+    session.commit()
+
+    monthly = f"{FORM}/fields/monthly_rent"
+    weekly = f"{FORM}/fields/weekly_rent"
+    assert client.patch(weekly, json={"value": "400"}).status_code == 422
+    assert client.patch(monthly, json={"value": ""}).status_code == 200
+    assert client.patch(weekly, json={"value": "400"}).status_code == 200
+    assert _field(client, "monthly_rent")["required"] is False
+    assert _gap(client, "gap_01")["status"] == "resolved"
+    assert client.patch(monthly, json={"value": "1400"}).status_code == 422
+
+    assert client.patch(weekly, json={"value": ""}).status_code == 200
+    assert _field(client, "monthly_rent")["required"] is True
+    assert _gap(client, "gap_01")["status"] == "open"
+
+
 def test_emptying_a_field_reopens_the_gap_it_had_resolved(fresh_db, client):
     client.patch(f"{FORM}/fields/landlord_address", json={"value": "5 Elm St"})
     assert _gap(client, "gap_01")["status"] == "resolved"

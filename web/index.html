@@ -533,7 +533,7 @@ const SEED = {
   sources: [
     { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
     { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
-    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft is based on this form (seven tenant-applicant fields). The caseworker completes the rest." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes lease details from Form J. The caseworker completes the official form." },
     { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
   ],
   fields: [
@@ -555,7 +555,38 @@ const SEED = {
 };
 
 /* ---------- mock backend ---------- */
+/* #67: Form J F2 fields and controls. */
+const yesNoOptions = { yes: "Yes", no: "No" };
+const leaseFields = {
+  tenancy_start: { date: "past" },
+  move_in_date: { label: "Move-in date", date: "future" },
+  move_out_date: { label: "Move-out date", date: "future" },
+  notice_given: { label: "Was notice to quit given?", options: yesNoOptions },
+  notice_given_by: { when: ["notice_given", "yes"], label: "Who gave notice?", options: { landlord: "Landlord", tenant: "Tenant" } },
+  notice_given_date: { when: ["notice_given", "yes"], label: "Date notice was given", date: "future" },
+  notice_effective_date: { when: ["notice_given", "yes"], label: "Date notice takes effect", date: "future" },
+  written_lease: { label: "Is there a written lease?", options: yesNoOptions },
+  lease_term: { label: "Lease term", options: {
+    year_to_year: "Year-to-year", month_to_month: "Month-to-month",
+    week_to_week: "Week-to-week", fixed_term: "Fixed term"
+  } },
+  fixed_term_start: { when: ["lease_term", "fixed_term"], label: "Fixed-term start date", date: "future" },
+  fixed_term_end: { when: ["lease_term", "fixed_term"], label: "Fixed-term end date", date: "future" },
+  monthly_rent: { money: true },
+  weekly_rent: { label: "Weekly rent", money: true },
+  lease_copy_provided: { label: "Did the landlord provide a copy of the lease?", options: yesNoOptions },
+  act_copy_provided: {
+    label: "Did the landlord provide a copy of the Residential Tenancies Act?", options: yesNoOptions
+  },
+  deposit_paid: { label: "Was a security deposit paid?", options: yesNoOptions },
+  deposit_amount: { when: ["deposit_paid", "yes"], label: "Security deposit amount", money: true },
+  deposit_paid_date: { when: ["deposit_paid", "yes"], label: "Date the deposit was paid", date: "future" },
+  deposit_in_trust: { when: ["deposit_paid", "yes"], label: "Is the deposit held in trust?", options: yesNoOptions }
+};
 const db = JSON.parse(JSON.stringify(SEED));
+for (const [key, field] of Object.entries(leaseFields)) {
+  if (field.label) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
+}
 db.runs = {}; db.intakeRequests = []; let runCounter = 0;
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
@@ -664,8 +695,16 @@ function mockRoute(method, path, body) {
   if (method === "GET" && path === `${C}/sources`) return clone(db.sources);
   if (method === "GET" && path === `${C}/form-draft`) return clone({ form_name: "Partial Form J draft: caseworker completes the rest", disclaimer: "Prepared with the tenant to help fill in the official form. It is information, not legal advice, and is not submitted anywhere.", fields: db.fields, narrative: buildNarrative() });
   if (method === "PATCH" && (m = path.match(/^\/cases\/[^/]+\/form-draft\/fields\/(\w+)$/))) {
-    const f = db.fields.find(x => x.key === m[1]); f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
-    const g = db.gaps.find(x => x.input && x.input.field_key === f.key);
+    const f = db.fields.find(x => x.key === m[1]);
+    const paired = { monthly_rent: "weekly_rent", weekly_rent: "monthly_rent" }[f.key];
+    if (paired && body.value && db.fields.find(field => field.key === paired)?.value) {
+      throw Object.assign(new Error("Clear the other rent amount before changing the payment frequency."), { status: 422 });
+    }
+    f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
+    const covered = { weekly_rent: "monthly_rent", move_in_date: "tenancy_start" }[f.key];
+    const legacy = db.fields.find(field => field.key === covered);
+    if (legacy) legacy.required = !f.value;
+    const g = db.gaps.find(x => x.input && x.input.field_key === (covered || f.key));
     if (g) { g.status = f.value ? "resolved" : "open"; g.resolution_note = f.value ? "Entered on the form draft" : null; }
     log("caseworker", `Updated form field “${f.label}”`);
     return clone(f);
@@ -1265,16 +1304,17 @@ async function sendDraft(id) {
 /* #122: input controls for the form draft and its missing-info fields. */
 const minTenancyDate = "1900-01-01";
 const maxTenancyDate = `${new Date().getFullYear()}-12-31`;
+const fieldMaxDate = key => leaseFields[key]?.date === "future" ? "9999-12-31" : maxTenancyDate;
 function caseFieldAttrs(key) {
-  if (key === "tenancy_start") return `type="date" min="${minTenancyDate}" max="${maxTenancyDate}"`;
-  if (key === "monthly_rent") return 'inputmode="decimal"';
+  if (leaseFields[key]?.date) return `type="date" min="${minTenancyDate}" max="${fieldMaxDate(key)}"`;
+  if (leaseFields[key]?.money) return 'inputmode="decimal"';
   return "";
 }
 function validCaseField(key, value, saved) {
-  if (key !== "monthly_rent" || !value || value === saved) return true;
+  if (!leaseFields[key]?.money || !value || value === saved) return true;
   const rent = /^(?:(CAD)[ \t]+)?\$?[ \t]*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]{1,2})?(?:[ \t]+(CAD))?$/i.exec(value);
   if (!rent || (rent[1] && rent[4]) || !/[1-9]/.test(rent[2] + (rent[3] || ""))) {
-    toast("Enter a positive monthly rent in CAD, with up to two decimal places.", 6000);
+    toast("Enter a positive amount in CAD, with up to two decimal places.", 6000);
     return false;
   }
   return true;
@@ -1315,23 +1355,42 @@ function viewGaps() {
 function viewForm() {
   const f = S.form;
   const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
-  const rows = f.fields.map(x => {
+  const renderField = x => {
     const saved = x.value || "";
-    const day = x.key === "tenancy_start" ? new Date(saved + "T00:00:00Z") : null;
+    const { date, options, money } = leaseFields[x.key] || {};
+    const day = date ? new Date(saved + "T00:00:00Z") : null;
     const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
       || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
-      || saved < minTenancyDate || saved > maxTenancyDate);
+      || saved < minTenancyDate || saved > fieldMaxDate(x.key));
     const confirm = x.status === "needs_confirmation" && saved;
-    return `<div class="frow"><label class="fl" for="fld-${x.key}">${esc(x.label)}${x.key === "monthly_rent" ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
-      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="${day ? "date-field" : "field"}" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
-        ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
-      <div class="fs">${stPill[x.status]}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
-  }).join("");
+    const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"`;
+    const control = options
+      ? `<select ${attrs}><option value="">Choose an answer</option>${Object.entries(options).map(([value, label]) =>
+          `<option value="${value}" ${saved === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
+      : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
+    return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
+      <div style="display:grid;gap:6px;min-width:0">${control}
+        ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
+        ${x.key === "tenancy_start" && saved ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
+        ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
+      <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
+  };
+  const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
+  const rows = f.fields.filter(field => !Object.hasOwn(leaseFields, field.key)).map(renderField).join("");
+  const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
+    if (!fieldsByKey.has(key)) return false;
+    if (!definition.when) return true;
+    const [controller, eligible] = definition.when;
+    const choice = fieldsByKey.get(controller)?.value;
+    return !choice || choice === eligible;
+  }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
-    <div class="panel form-grid">${rows}</div>
+    ${rows ? `<div class="panel form-grid">${rows}</div>` : ""}
+    ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
+      <div class="panel form-grid">${leaseRows}</div>` : ""}
     <h2 class="section-h">Details of the problem</h2>
     <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
       <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>

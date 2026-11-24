@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.deps import CaseDep, SessionDep, UserDep
 from app.schemas import FieldPatch, FormDraft, FormField
 from app.services import review
+from app.services.form_fields import covered_legacy_field_for_case
 from app.services.mappers import build_form_draft, to_field
 
 router = APIRouter()
@@ -21,4 +22,5 @@ def patch_field(
     field = review.patch_field(session, case, key, body, user)
     session.commit()
     session.refresh(field)
-    return to_field(field)
+    covered = {key} if covered_legacy_field_for_case(session, case.id, key) else set()
+    return to_field(field, covered_fields=covered)

@@ -33,6 +33,7 @@ from app.schemas import (
     TimelineEvent,
 )
 from app.services.dates import demo_deadline
+from app.services.form_fields import covered_legacy_fields, is_required, with_optional_fields
 from app.services.legal.corpus import FORM_J_DRAFT_LABEL
 from app.services.narrative import build_narrative
 from app.services.priority import PriorityInput, compute_priority, sort_key
@@ -303,13 +304,13 @@ def to_source(row: LegalSourceRow) -> LegalSource:
     )
 
 
-def to_field(row: FormFieldRow) -> FormField:
+def to_field(row: FormFieldRow, *, covered_fields: set[str] | None = None) -> FormField:
     return FormField.model_validate(
         {
             "key": row.key,
             "label": row.label,
             "value": row.value,
-            "required": row.required,
+            "required": is_required(row, covered_fields or set()),
             "status": row.status,
             "sources": row.sources,
             "note": row.note,
@@ -334,6 +335,7 @@ def build_form_draft(session: Session, case: CaseRow) -> FormDraft:
         .where(FormFieldRow.case_id == case.id)
         .order_by(col(FormFieldRow.position))
     ).all()
+    covered_fields = covered_legacy_fields(fields)
     events = session.exec(
         select(TimelineEventRow)
         .where(TimelineEventRow.case_id == case.id)
@@ -360,7 +362,10 @@ def build_form_draft(session: Session, case: CaseRow) -> FormDraft:
         {
             "form_name": FORM_J_DRAFT_LABEL if case.form_name else "",  # also for old rows
             "disclaimer": case.form_disclaimer,
-            "fields": [to_field(f).model_dump() for f in fields],
+            "fields": [
+                to_field(f, covered_fields=covered_fields).model_dump()
+                for f in with_optional_fields(case, fields)
+            ] if fields else [],
             "narrative": narrative,
         }
     )
