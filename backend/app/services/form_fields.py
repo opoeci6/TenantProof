@@ -63,7 +63,27 @@ F1_FIELDS = (
       for fields in F1_CONTACT_GROUPS.values() for key, label in fields.items()),
 )
 F2_FIELD_KEYS = frozenset(field.key for field in F2_FIELDS)
-MANUAL_FIELDS = (*F2_FIELDS, *F1_FIELDS)
+F3_REQUESTS = {
+    "request_termination": "Termination of tenancy",
+    "request_compliance": "Compliance with a lease or the Act",
+    "request_repairs": "Repairs",
+    "request_set_aside_notice": "Set aside a notice to quit given by the landlord",
+    "request_payment": "Payment of money",
+    "request_rent_relief": "Relief from rent owing",
+    "request_expense_compensation": "Compensation for expenses",
+    "request_application_fee": "Award of the application fee",
+    "request_other": "Other",
+}
+F3_PAYMENT_REQUESTS = frozenset({"request_rent_relief", "request_expense_compensation"})
+F3_FIELDS = tuple(
+    field
+    for key, label in F3_REQUESTS.items()
+    for field in (
+        FormFieldSpec(key, label, required=False),
+        FormFieldSpec(f"{key}_reason", f"Reason for {label.lower()}", required=False),
+    )
+)
+MANUAL_FIELDS = (*F2_FIELDS, *F1_FIELDS, *F3_FIELDS)
 MANUAL_FIELDS_BY_KEY = {field.key: field for field in MANUAL_FIELDS}
 _MANUAL_POSITIONS = {
     field.key: i for i, field in enumerate(MANUAL_FIELDS, start=len(FORM_J_FIELDS))

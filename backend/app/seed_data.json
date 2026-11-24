@@ -673,7 +673,7 @@
         "url": null,
         "last_verified_at": null,
         "verify_status": "unverified",
-        "used_for": "The partial draft is based on this form (seven tenant-applicant fields). The caseworker completes the rest."
+        "used_for": "The application the partial draft is based on. It covers tenant information, lease details and requests. The caseworker completes the official form."
       },
       {
         "id": "src_04",

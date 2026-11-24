@@ -37,6 +37,8 @@ from app.services.form_fields import (
     F1_ADDRESS_GROUPS,
     F1_CONTACT_GROUPS,
     F2_FIELD_KEYS,
+    F3_PAYMENT_REQUESTS,
+    F3_REQUESTS,
     MANUAL_FIELDS_BY_KEY,
     covered_legacy_fields,
     is_required,
@@ -250,6 +252,20 @@ def _write_form_fields(
         _write(pdf, value)
 
 
+def _write_f3_requests(pdf: FPDF, values: dict[str, str | None]) -> None:
+    payment_selected = values.get("request_payment") == "yes"
+    selected = [
+        (key, label) for key, label in F3_REQUESTS.items()
+        if values.get(key) == "yes" and (key not in F3_PAYMENT_REQUESTS or payment_selected)
+    ]
+    if selected:
+        _write(pdf, "Tenant requests", bold=True, size=12, gap=2)
+        for key, label in selected:
+            _write(pdf, label, bold=True, gap=0)
+            _write(pdf, values.get(f"{key}_reason") or "(reason not filled in)")
+    _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
+
+
 def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at: datetime) -> bytes:
     draft = build_form_draft(session, case)
     pdf = new_pdf(case.tenant_language)
@@ -265,6 +281,7 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
     _write_form_fields(
         pdf, (field for field in draft.fields if field.key in F2_FIELD_KEYS), values,
     )
+    _write_f3_requests(pdf, values)
     _write(pdf, "Summary of events", bold=True, size=12, gap=2)
     _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())

@@ -174,6 +174,42 @@ def test_application_pdf_exports_f2_and_accepts_weekly_rent(fresh_db, client):
     assert "Monthly rent" not in text
 
 
+def test_application_pdf_exports_only_selected_f3_requests_and_leaves_signature_manual(
+    fresh_db, client,
+):
+    make_ready(client)
+    form_fields = f"/api/cases/{CASE}/form-draft/fields"
+    values = {
+        "request_repairs": "yes",
+        "request_repairs_reason": "Replace the broken ceiling tiles.",
+        "request_compliance": "yes",
+        "request_other_reason": "Unselected reason stays off the export.",
+        "request_rent_relief": "yes",
+        "request_rent_relief_reason": "Lower rent for loss of a room.",
+        "request_expense_compensation": "yes",
+    }
+    for key, value in values.items():
+        r = client.patch(f"{form_fields}/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+
+    for payment_selected in (False, True):
+        if payment_selected:
+            r = client.patch(f"{form_fields}/request_payment", json={"value": "yes"})
+            assert r.status_code == 200, r.text
+        build(client)
+        text = pdf_text(unzip(download(client).content)["application_draft.pdf"])
+        assert "Tenant requests" in text
+        assert "Repairs" in text and values["request_repairs_reason"] in text
+        assert "Compliance with a lease or the Act" in text
+        assert "(reason not filled in)" in text
+        assert values["request_other_reason"] not in text
+        assert ("Payment of money" in text) == payment_selected
+        assert ("Relief from rent owing" in text) == payment_selected
+        assert (values["request_rent_relief_reason"] in text) == payment_selected
+        assert ("Compensation for expenses" in text) == payment_selected
+        assert "Complete the signature and date manually on the official Form J." in text
+
+
 def test_application_pdf_omits_details_marked_inapplicable(fresh_db, client):
     make_ready(client)
     for key, value in {

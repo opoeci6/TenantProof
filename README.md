@@ -146,7 +146,7 @@ demo/                  synthetic demo files
 
 ## Status
 
-What is built and what is not: [docs/STATUS.md](docs/STATUS.md). Not built: the `ingest` step as its own stage, a background worker queue, and a managed production deploy (the hosted demo is a single server, see [docs/DEPLOY.md](docs/DEPLOY.md)). All five official sources are confirmed by a person (issue #54), and `python -m app.services.legal.verify` re-checks them against the published documents. The Form J draft covers seven tenant-applicant fields; the caseworker completes the rest on the official form.
+What is built and what is not: [docs/STATUS.md](docs/STATUS.md). Not built: the `ingest` step as its own stage, a background worker queue, and a managed production deploy (the hosted demo is a single server, see [docs/DEPLOY.md](docs/DEPLOY.md)). All five official sources are confirmed by a person (issue #54), and `python -m app.services.legal.verify` re-checks them against the published documents. The partial Form J draft covers tenant application data from F1–F3. The caseworker completes the official form, and the applicant signs and dates it.
 
 ## Team
 

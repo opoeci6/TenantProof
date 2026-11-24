@@ -308,6 +308,13 @@ textarea.field{min-height:72px;resize:vertical}
 /* form */
 .form-grid{display:flex;flex-direction:column}
 .form-subheading{margin:0 0 6px;font-size:14px}
+.form-request{display:grid;gap:9px;padding:12px 18px;border-top:1px solid var(--line)}
+.form-request:first-child{border-top:0}
+.form-request label{display:flex;align-items:baseline;gap:8px}
+.form-request .request-options{display:grid;gap:8px;margin-left:24px}
+.form-request .request-reason{display:grid;gap:5px;margin-left:24px;font-size:13px}
+.form-request .request-options .form-request{padding:8px 0 0}
+.form-request .request-reason textarea{max-width:78ch}
 .frow{display:grid;grid-template-columns:200px minmax(0,1fr) 170px;gap:8px 16px;padding:12px 18px;border-top:1px solid var(--line);align-items:start}
 .frow:first-child{border-top:0}
 .frow .fl{font-weight:600;font-size:13.5px;padding-top:7px}
@@ -534,7 +541,7 @@ const SEED = {
   sources: [
     { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
     { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
-    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes party and lease details from Form J. The caseworker completes the official form." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft includes parties, lease details and tenant requests from Form J. The caseworker completes the official form." },
     { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
   ],
   fields: [
@@ -613,7 +620,26 @@ const partyGroups = [
   ["Rental premises", ["rental_address", ...addressKeys("premises")]]
 ];
 const partyKeys = new Set(partyGroups.flatMap(([, keys]) => keys));
-const fieldControls = { ...leaseFields, ...partyFields };
+/* #67: Form J F3 selections are explicit and each choice has its own reason. */
+const tenantRequests = {
+  termination: "Termination of tenancy",
+  compliance: "Compliance with a lease or the Act",
+  repairs: "Repairs",
+  set_aside_notice: "Set aside a notice to quit given by the landlord",
+  payment: "Payment of money",
+  application_fee: "Award of the application fee",
+  other: "Other"
+};
+const paymentRequests = {
+  rent_relief: "Relief from rent owing",
+  expense_compensation: "Compensation for expenses"
+};
+const requestFields = {};
+for (const [key, label] of Object.entries({...tenantRequests, ...paymentRequests})) {
+  requestFields[`request_${key}`] = { label };
+  requestFields[`request_${key}_reason`] = { label: `Reason for ${label.toLowerCase()}` };
+}
+const fieldControls = { ...leaseFields, ...partyFields, ...requestFields };
 const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
@@ -1412,8 +1438,22 @@ function viewForm() {
     const group = keys.filter(key => fieldsByKey.has(key)).map(key => renderField(fieldsByKey.get(key))).join("");
     return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
   }).join("");
-  const rows = f.fields.filter(field => !partyKeys.has(field.key) && !Object.hasOwn(leaseFields, field.key))
+  const rows = f.fields.filter(field => !partyKeys.has(field.key) &&
+    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key))
     .map(renderField).join("");
+  const renderRequest = ([key, title]) => {
+    const selection = fieldsByKey.get(`request_${key}`);
+    const reason = fieldsByKey.get(`request_${key}_reason`);
+    if (!selection || !reason) return "";
+    const selected = selection.value === "yes";
+    return `<div class="form-request">
+      <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
+      ${selected ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
+        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
+      ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentRequests).map(renderRequest).join("")}</div>` : ""}
+    </div>`;
+  };
+  const requestRows = Object.entries(tenantRequests).map(renderRequest).join("");
   const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
     if (!fieldsByKey.has(key)) return false;
     if (!definition.when) return true;
@@ -1428,7 +1468,10 @@ function viewForm() {
     ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
     ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
       <div class="panel form-grid">${leaseRows}</div>` : ""}
-    ${rows ? `<h2 class="section-h">Tenant request</h2><div class="panel form-grid">${rows}</div>` : ""}
+    ${rows || requestRows ? `<h2 class="section-h">Tenant requests (Form J F3)</h2>` : ""}
+    ${rows ? `<div class="panel form-grid">${rows}</div>` : ""}
+    ${requestRows ? `<p class="muted">Select all requests that apply and explain each one. The applicant signs and dates the official Form J. Form J F4 is for landlord applicants.</p>
+      <div class="panel form-grid">${requestRows}</div>` : ""}
     <h2 class="section-h">Details of the problem</h2>
     <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
       <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>
@@ -1840,7 +1883,7 @@ document.addEventListener("change", guarded(async ev => {
   if (t.dataset.action === "field") {
     if (!t.reportValidity()) return;
     const { key } = t.dataset;
-    const value = t.value.trim();
+    const value = t.type === "checkbox" ? (t.checked ? t.value : "") : t.value.trim();
     if (!validCaseField(key, value, S.form.fields.find(field => field.key === key)?.value)) return;
     await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
     await refresh(["form", "gaps"]);

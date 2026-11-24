@@ -12,6 +12,7 @@ from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
 from app.services.form_fields import (
     F2_ALTERNATIVES,
+    F3_REQUESTS,
     LEGACY_ALTERNATIVES,
     covered_legacy_field_for_case,
     lock_alternative_fields,
@@ -102,6 +103,8 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
     if value != (field.value or ""):
         # Existing verbatim drafts can still be confirmed, and an empty value clears the field.
         if value:
+            if field.key in F3_REQUESTS and value != "yes":
+                raise _bad("Select the request or leave it unchecked")
             if field.key in EMAIL_KEYS and not is_email_address(value):
                 raise _bad("Enter a valid email address")
             if field.key in MONEY_KEYS and cad_amount(value) is None:

@@ -555,6 +555,40 @@ def test_f1_applicant_email_consent_remains_separate_from_email(fresh_db, client
         assert _field(client, "tenant_email")["value"] == email
 
 
+def test_f3_requests_save_independently_without_replacing_the_existing_remedy(fresh_db, client):
+    remedy = _field(client, "remedy")
+    gaps = _gaps(client)
+    values = {
+        "request_repairs": "yes",
+        "request_repairs_reason": "Repair the damaged ceiling.",
+        "request_compliance": "yes",
+        "request_compliance_reason": "Restore heat to the rental unit.",
+        "request_rent_relief": "yes",
+        "request_rent_relief_reason": "Rent reduction for the loss of a room.",
+    }
+    for key, value in values.items():
+        original = _field(client, key)
+        assert original["value"] is None and original["required"] is False
+        r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == value
+
+    r = client.patch(f"{FORM}/fields/request_repairs", json={"value": "no"})
+    assert r.status_code == 422, r.text
+    assert _field(client, "request_repairs")["value"] == "yes"
+    r = client.patch(f"{FORM}/fields/request_repairs", json={"value": ""})
+    assert r.status_code == 200, r.text
+    assert _field(client, "request_repairs")["value"] is None
+    assert _field(client, "request_repairs_reason")["value"] == values["request_repairs_reason"]
+    assert _field(client, "request_payment")["value"] is None
+    assert _field(client, "remedy") == remedy and _gaps(client) == gaps
+
+    keys = {field["key"] for field in _draft(client)["fields"]}
+    for key in ("signature", "signature_date"):
+        assert key not in keys
+        assert client.patch(f"{FORM}/fields/{key}", json={"value": "Typed"}).status_code == 404
+
+
 @pytest.mark.parametrize(("key", "value"), [
     ("fixed_term_end", "2030-02-30"),
     ("move_out_date", "1899-12-31"),
