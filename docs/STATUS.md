@@ -63,10 +63,12 @@ Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to 
 
 ## In progress
 
+- **#67 (tenant draft, F1–F3):** expanded the tenant application draft with move-in and move-out dates, notice and lease details, weekly rent, and security deposit fields. Existing tenancy start values and sources remain available for review. F1 adds party and premises addresses, contact fields and explicit applicant email consent. The draft PDF includes the applicant email only with consent. F3 records multiple tenant requests with individual reasons. The applicant signs and dates the official form. F4 is for landlord applicants.
+
 Open PRs (2026-11-18), all into `dev`: this one (`opoeci6/fix-97-photo-preview`) and #101 (YCL0609: splitting `web/index.html` into `index.html`, `index.css` and `index.js`; not for the submission).
 
 Open issues:
-- **#54 (closed, PR #66):** Lameda12 confirmed Form J (the full title line, edition 2024-01) and Regulations s. 25A(2) on 2026-11-17, so all five sources are confirmed. The Form J confirmation covers the title and URL only: the draft is partial (seven tenant-applicant fields; the caseworker completes the rest; F4 is out of scope). Full coverage is a post-submission issue. leozhang5867 also checked 25A(3B) and (3C): the app's "mail" and "after 4 p.m." wording is fixed in #73.
+- **#54 (closed, PR #66):** Lameda12 confirmed Form J (the full title line, edition 2024-01) and Regulations s. 25A(2) on 2026-11-17, so all five sources are confirmed. The Form J confirmation covers the title and URL only. The draft remains partial; see #67 for coverage of tenant pages F1–F3. leozhang5867 also checked 25A(3B) and (3C): the app's "mail" and "after 4 p.m." wording is fixed in #73.
 - **#74:** intake tokens are written to the access logs in plain text (the API's, and a proxy's path and `Referer`).
 - **#4:** WS3 follow-ups from the PR #2 review.
 - **#68:** Hindi needs text shaping in the PDFs (uharfbuzz with fpdf2 `set_text_shaping`); everything else is in. Russian (#69) is done and closed.

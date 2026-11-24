@@ -307,6 +307,14 @@ textarea.field{min-height:72px;resize:vertical}
 
 /* form */
 .form-grid{display:flex;flex-direction:column}
+.form-subheading{margin:0 0 6px;font-size:14px}
+.form-request{display:grid;gap:9px;padding:12px 18px;border-top:1px solid var(--line)}
+.form-request:first-child{border-top:0}
+.form-request label{display:flex;align-items:baseline;gap:8px}
+.form-request .request-options{display:grid;gap:8px;margin-left:24px}
+.form-request .request-reason{display:grid;gap:5px;margin-left:24px;font-size:13px}
+.form-request .request-options .form-request{padding:8px 0 0}
+.form-request .request-reason textarea{max-width:78ch}
 .frow{display:grid;grid-template-columns:200px minmax(0,1fr) 170px;gap:8px 16px;padding:12px 18px;border-top:1px solid var(--line);align-items:start}
 .frow:first-child{border-top:0}
 .frow .fl{font-weight:600;font-size:13.5px;padding-top:7px}
@@ -533,7 +541,7 @@ const SEED = {
   sources: [
     { id: "src_01", title: "Residential Tenancies Act (Nova Scotia), statutory conditions", kind: "statute", url: "https://nslegislature.ca/sites/default/files/legc/statutes/residential%20tenancies.pdf", last_verified_at: null, verify_status: "unverified", used_for: "Landlord's duty to keep the premises in good repair. Exact section still to be verified." },
     { id: "src_02", title: "Residential Tenancies Program, Evidence Policy #42", kind: "policy", url: "https://www.novascotia.ca/sites/default/files/documents/1-1319/evidence-policy-42-residential-tenancies-en.pdf", last_verified_at: "2026-10-31T16:20:00-03:00", verify_status: "unchanged", used_for: "Accepted file formats, how evidence is weighed, 5-day submission deadline." },
-    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The partial draft is based on this form (seven tenant-applicant fields). The caseworker completes the rest." },
+    { id: "src_03", title: "Application to Director (Form J)", kind: "form", url: null, last_verified_at: null, verify_status: "unverified", used_for: "The application the partial draft is based on. It covers tenant information, lease details and requests. The caseworker completes the official form." },
     { id: "src_04", title: "Hearings Procedures and Conduct, Policy #28", kind: "policy", url: "https://www.novascotia.ca/sns/access/land/residential-tenancies/residential-tenancies-2018/ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf", last_verified_at: null, verify_status: "unverified", used_for: "What happens at the hearing." }
   ],
   fields: [
@@ -555,7 +563,87 @@ const SEED = {
 };
 
 /* ---------- mock backend ---------- */
+/* #67: Form J F2 fields and controls. */
+const yesNoOptions = { yes: "Yes", no: "No" };
+const leaseFields = {
+  tenancy_start: { date: "past" },
+  move_in_date: { label: "Move-in date", date: "future" },
+  move_out_date: { label: "Move-out date", date: "future" },
+  notice_given: { label: "Was notice to quit given?", options: yesNoOptions },
+  notice_given_by: { when: ["notice_given", "yes"], label: "Who gave notice?", options: { landlord: "Landlord", tenant: "Tenant" } },
+  notice_given_date: { when: ["notice_given", "yes"], label: "Date notice was given", date: "future" },
+  notice_effective_date: { when: ["notice_given", "yes"], label: "Date notice takes effect", date: "future" },
+  written_lease: { label: "Is there a written lease?", options: yesNoOptions },
+  lease_term: { label: "Lease term", options: {
+    year_to_year: "Year to year", month_to_month: "Month to month",
+    week_to_week: "Week to week", fixed_term: "Fixed term"
+  } },
+  fixed_term_start: { when: ["lease_term", "fixed_term"], label: "Fixed-term start date", date: "future" },
+  fixed_term_end: { when: ["lease_term", "fixed_term"], label: "Fixed-term end date", date: "future" },
+  monthly_rent: { money: true },
+  weekly_rent: { label: "Weekly rent", money: true },
+  lease_copy_provided: { label: "Did the landlord provide a copy of the lease?", options: yesNoOptions },
+  act_copy_provided: {
+    label: "Did the landlord provide a copy of the Residential Tenancies Act?", options: yesNoOptions
+  },
+  deposit_paid: { label: "Was a security deposit paid?", options: yesNoOptions },
+  deposit_amount: { when: ["deposit_paid", "yes"], label: "Security deposit amount", money: true },
+  deposit_paid_date: { when: ["deposit_paid", "yes"], label: "Date the deposit was paid", date: "future" },
+  deposit_in_trust: { when: ["deposit_paid", "yes"], label: "Is the deposit held in trust?", options: yesNoOptions }
+};
+/* #67: Form J F1 applicant, respondent, and rental premises. */
+const addressParts = {
+  street: "Street number and name", apartment: "Apartment", city: "City or town",
+  province: "Province", postal_code: "Postal code"
+};
+const addressKeys = prefix => Object.keys(addressParts).map(part => `${prefix}_${part}`);
+const contactFields = {
+  tenant_home_phone: { label: "Home phone", type: "tel" },
+  tenant_other_phone: { label: "Business or other phone", type: "tel" },
+  tenant_email: { label: "Email", type: "email" },
+  applicant_email_consent: { label: "Consent to email from Service Nova Scotia", options: yesNoOptions },
+  landlord_home_phone: { label: "Home phone", type: "tel" },
+  landlord_other_phone: { label: "Business or other phone", type: "tel" },
+  landlord_email: { label: "Email", type: "email" }
+};
+const partyFields = { ...contactFields };
+for (const prefix of ["tenant_civic", "tenant_mailing", "landlord_civic", "landlord_mailing", "premises"]) {
+  for (const [part, label] of Object.entries(addressParts)) partyFields[`${prefix}_${part}`] = { label };
+}
+const partyGroups = [
+  ["Tenant applicant", ["tenant_name", ...addressKeys("tenant_civic"), "tenant_home_phone",
+    "tenant_other_phone", "tenant_email", "applicant_email_consent"]],
+  ["Tenant mailing address, if different", addressKeys("tenant_mailing")],
+  ["Landlord respondent", ["landlord_name", "landlord_address", ...addressKeys("landlord_civic"),
+    "landlord_home_phone", "landlord_other_phone", "landlord_email"]],
+  ["Landlord mailing address, if different", addressKeys("landlord_mailing")],
+  ["Rental premises", ["rental_address", ...addressKeys("premises")]]
+];
+const partyKeys = new Set(partyGroups.flatMap(([, keys]) => keys));
+/* #67: Form J F3 selections are explicit and each choice has its own reason. */
+const tenantRequests = {
+  termination: "Termination of tenancy",
+  compliance: "Compliance with a lease or the Act",
+  repairs: "Repairs",
+  set_aside_notice: "Set aside a notice to quit given by the landlord",
+  payment: "Payment of money",
+  application_fee: "Award of the application fee",
+  other: "Other"
+};
+const paymentRequests = {
+  rent_relief: "Relief from rent owing",
+  expense_compensation: "Compensation for expenses"
+};
+const requestFields = {};
+for (const [key, label] of Object.entries({...tenantRequests, ...paymentRequests})) {
+  requestFields[`request_${key}`] = { label };
+  requestFields[`request_${key}_reason`] = { label: `Reason for ${label.toLowerCase()}` };
+}
+const fieldControls = { ...leaseFields, ...partyFields, ...requestFields };
 const db = JSON.parse(JSON.stringify(SEED));
+for (const [key, field] of Object.entries(fieldControls)) {
+  if (field.label) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
+}
 db.runs = {}; db.intakeRequests = []; let runCounter = 0;
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
@@ -570,7 +658,7 @@ const RUN_SCRIPT = [
     tool_calls: [{ tool: "rag_search", input: "“landlord repair obligation maintenance”", output: "Residential Tenancies Act, statutory conditions" }, { tool: "rag_search", input: "“photo evidence format deadline”", output: "Evidence Policy #42" }, { tool: "verify_source_url", input: "src_02 Evidence Policy #42", output: "content unchanged since Oct 31" }, { tool: "verify_source_url", input: "src_01, src_03, src_04", output: "not checked yet" }] },
   { key: "gaps", label: "Find missing information", summary: "2 required items (landlord address, what the tenant is asking for) and 3 suggestions. 4 requests to the tenant drafted in 中文, waiting for your approval.", final: "needs_input",
     tool_calls: [{ tool: "check_required_fields", input: "form fields vs. extracted facts", output: "landlord_address, remedy missing" }, { tool: "check_evidence_quality", input: "9 events", output: "E-05 no metadata · E-06 edited · nothing after Oct 1" }, { tool: "draft_tenant_request", input: "4 gaps · tenant language zh", output: "4 drafts, not sent" }] },
-  { key: "draft", label: "Draft form", summary: "5 of 7 fields filled. Narrative uses only the events a caseworker accepts.",
+  { key: "draft", label: "Draft form", summary: "Draft prepared. Narrative uses only the events a caseworker accepts.",
     tool_calls: [{ tool: "fill_fields", input: "Form J field map", output: "5 filled · 1 to confirm · 2 missing" }, { tool: "write_narrative", input: "accepted events only", output: "plain-language summary with exhibit labels" }] }
 ];
 function makeRun(instant) {
@@ -664,8 +752,16 @@ function mockRoute(method, path, body) {
   if (method === "GET" && path === `${C}/sources`) return clone(db.sources);
   if (method === "GET" && path === `${C}/form-draft`) return clone({ form_name: "Partial Form J draft: caseworker completes the rest", disclaimer: "Prepared with the tenant to help fill in the official form. It is information, not legal advice, and is not submitted anywhere.", fields: db.fields, narrative: buildNarrative() });
   if (method === "PATCH" && (m = path.match(/^\/cases\/[^/]+\/form-draft\/fields\/(\w+)$/))) {
-    const f = db.fields.find(x => x.key === m[1]); f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
-    const g = db.gaps.find(x => x.input && x.input.field_key === f.key);
+    const f = db.fields.find(x => x.key === m[1]);
+    const paired = { monthly_rent: "weekly_rent", weekly_rent: "monthly_rent" }[f.key];
+    if (paired && body.value && db.fields.find(field => field.key === paired)?.value) {
+      throw Object.assign(new Error("Clear the other rent amount before changing the payment frequency."), { status: 422 });
+    }
+    f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
+    const covered = { weekly_rent: "monthly_rent", move_in_date: "tenancy_start" }[f.key];
+    const legacy = db.fields.find(field => field.key === covered);
+    if (legacy) legacy.required = !f.value;
+    const g = db.gaps.find(x => x.input && x.input.field_key === (covered || f.key));
     if (g) { g.status = f.value ? "resolved" : "open"; g.resolution_note = f.value ? "Entered on the form draft" : null; }
     log("caseworker", `Updated form field “${f.label}”`);
     return clone(f);
@@ -762,6 +858,15 @@ const deadlineLabel = label => String(label).replace(/^\s*evidence due\b/i, "Mus
 // `st` is stats(): `gaps` is how many missing-info items exist at all, `fieldsTotal` the form
 // fields, `total` the timeline events. With none of them there is nothing to be "done" about, so
 // the checks are neutral ("none") rather than a green tick.
+function formFieldCounts(fields) {
+  const visible = fields.filter(field => field.required || field.value);
+  return {
+    filled: visible.filter(field => field.value).length,
+    fieldsTotal: visible.length,
+    toConfirm: visible.filter(field => field.status === "needs_confirmation").length,
+    reqMissing: visible.filter(field => field.required && !field.value).length
+  };
+}
 function railMeta(st, evidenceCount) {
   return {
     evidence: `${plural(evidenceCount, "file")} · from tenant`,
@@ -979,8 +1084,7 @@ function stats() {
   const blocking = S.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
-  const fields = S.form ? S.form.fields : [];
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, filled: fields.filter(f => f.value).length, fieldsTotal: fields.length, toConfirm: fields.filter(f => f.status === "needs_confirmation").length, reqMissing: fields.filter(f => f.required && !f.value).length };
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
 }
 
 /* ---------- login (M1) ---------- */
@@ -1265,16 +1369,17 @@ async function sendDraft(id) {
 /* #122: input controls for the form draft and its missing-info fields. */
 const minTenancyDate = "1900-01-01";
 const maxTenancyDate = `${new Date().getFullYear()}-12-31`;
+const fieldMaxDate = key => leaseFields[key]?.date === "future" ? "9999-12-31" : maxTenancyDate;
 function caseFieldAttrs(key) {
-  if (key === "tenancy_start") return `type="date" min="${minTenancyDate}" max="${maxTenancyDate}"`;
-  if (key === "monthly_rent") return 'inputmode="decimal"';
-  return "";
+  if (leaseFields[key]?.date) return `type="date" min="${minTenancyDate}" max="${fieldMaxDate(key)}"`;
+  if (leaseFields[key]?.money) return 'inputmode="decimal"';
+  return partyFields[key]?.type ? `type="${partyFields[key].type}"` : "";
 }
 function validCaseField(key, value, saved) {
-  if (key !== "monthly_rent" || !value || value === saved) return true;
+  if (!leaseFields[key]?.money || !value || value === saved) return true;
   const rent = /^(?:(CAD)[ \t]+)?\$?[ \t]*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]{1,2})?(?:[ \t]+(CAD))?$/i.exec(value);
   if (!rent || (rent[1] && rent[4]) || !/[1-9]/.test(rent[2] + (rent[3] || ""))) {
-    toast("Enter a positive monthly rent in CAD, with up to two decimal places.", 6000);
+    toast("Enter a positive amount in CAD, with up to two decimal places.", 6000);
     return false;
   }
   return true;
@@ -1315,23 +1420,66 @@ function viewGaps() {
 function viewForm() {
   const f = S.form;
   const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
-  const rows = f.fields.map(x => {
+  const renderField = x => {
     const saved = x.value || "";
-    const day = x.key === "tenancy_start" ? new Date(saved + "T00:00:00Z") : null;
+    const { date, options, money } = fieldControls[x.key] || {};
+    const day = date ? new Date(saved + "T00:00:00Z") : null;
     const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
       || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
-      || saved < minTenancyDate || saved > maxTenancyDate);
+      || saved < minTenancyDate || saved > fieldMaxDate(x.key));
     const confirm = x.status === "needs_confirmation" && saved;
-    return `<div class="frow"><label class="fl" for="fld-${x.key}">${esc(x.label)}${x.key === "monthly_rent" ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
-      <div style="display:grid;gap:6px;min-width:0"><input class="field" id="fld-${x.key}" data-action="${day ? "date-field" : "field"}" data-key="${x.key}" ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.status === "missing" ? "Not found in the files" : ""}">
-        ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
-      <div class="fs">${stPill[x.status]}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
+    const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"`;
+    const control = options
+      ? `<select ${attrs}><option value="">Choose an answer</option>${Object.entries(options).map(([value, label]) =>
+          `<option value="${value}" ${saved === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
+      : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
+    return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(partyFields[x.key]?.label || x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
+      <div style="display:grid;gap:6px;min-width:0">${control}
+        ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
+        ${x.key === "applicant_email_consent" ? '<span class="muted">The applicant email appears in the draft PDF only if you select Yes.</span>' : ""}
+        ${x.key === "tenancy_start" && saved && (legacyDate || x.status === "needs_confirmation") ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
+        ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
+      <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
+  };
+  const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
+  const partySections = partyGroups.map(([title, keys]) => {
+    const group = keys.filter(key => fieldsByKey.has(key)).map(key => renderField(fieldsByKey.get(key))).join("");
+    return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
   }).join("");
+  const rows = f.fields.filter(field => !partyKeys.has(field.key) &&
+    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key))
+    .map(renderField).join("");
+  const renderRequest = ([key, title]) => {
+    const selection = fieldsByKey.get(`request_${key}`);
+    const reason = fieldsByKey.get(`request_${key}_reason`);
+    if (!selection || !reason) return "";
+    const selected = selection.value === "yes";
+    return `<div class="form-request">
+      <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
+      ${selected ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
+        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
+      ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentRequests).map(renderRequest).join("")}</div>` : ""}
+    </div>`;
+  };
+  const requestRows = Object.entries(tenantRequests).map(renderRequest).join("");
+  const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
+    if (!fieldsByKey.has(key)) return false;
+    if (!definition.when) return true;
+    const [controller, eligible] = definition.when;
+    const choice = fieldsByKey.get(controller)?.value;
+    return !choice || choice === eligible;
+  }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
-    <div class="panel form-grid">${rows}</div>
+    ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
+    ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
+      <div class="panel form-grid">${leaseRows}</div>` : ""}
+    ${rows || requestRows ? `<h2 class="section-h">Tenant requests (Form J F3)</h2>` : ""}
+    ${rows ? `<div class="panel form-grid">${rows}</div>` : ""}
+    ${requestRows ? `<p class="muted">Select all requests that apply and explain each one. The applicant signs and dates the official Form J. Form J F4 is for landlord applicants.</p>
+      <div class="panel form-grid">${requestRows}</div>` : ""}
     <h2 class="section-h">Details of the problem</h2>
     <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
       <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>
@@ -1743,7 +1891,7 @@ document.addEventListener("change", guarded(async ev => {
   if (t.dataset.action === "field") {
     if (!t.reportValidity()) return;
     const { key } = t.dataset;
-    const value = t.value.trim();
+    const value = t.type === "checkbox" ? (t.checked ? t.value : "") : t.value.trim();
     if (!validCaseField(key, value, S.form.fields.find(field => field.key === key)?.value)) return;
     await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
     await refresh(["form", "gaps"]);

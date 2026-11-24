@@ -61,19 +61,11 @@ FORM_J_URL = (
 
 RTR_URL = "https://novascotia.ca/just/regulations/regs/rtgenrl.htm"
 
-# What the UI and the package call the form draft. The app drafts seven tenant-applicant fields,
-# not the whole of Form J: the caseworker completes the rest on the real form.
+# The tenant draft covers F1–F3 data entry. The applicant signs and dates the official form.
 FORM_J_DRAFT_LABEL = "Partial Form J draft: caseworker completes the rest"
 
-# The form fields this app drafts. They follow the seeded demo case and the labels are ours. This
-# is a PARTIAL draft: seven fields for a tenant applicant, not a complete Form J. The caseworker
-# completes the rest on the real form (see README.md). F4 (the landlord's requests) is out of scope.
-# TODO(full Form J coverage, issue "Full Form J field coverage"): not drafted here: the
-# address split into number, name, apartment, city, province and postal code; mailing addresses;
-# phone and e-mail with the consent box; the move-in date apart from a fixed-term start; weekly
-# rent; the notice-to-quit, lease and deposit questions; several requests at once (Repairs,
-# Compliance with a lease or the Act, Payment of money, ...) each with its own explanation; the
-# signature and date.
+# Baseline field registry used by the agent and existing cases. Additional F1–F3 fields are
+# completed manually and live in services/form_fields.py. F4 is for landlord applicants.
 FORM_J_FIELDS = (
     FormFieldSpec("tenant_name", "Tenant name"),
     FormFieldSpec("landlord_name", "Landlord name"),
@@ -171,8 +163,8 @@ CORPUS: tuple[CorpusEntry, ...] = (
         kind="form",
         url=FORM_J_URL,
         used_for=(
-            "The application the draft is based on: a partial draft of seven tenant-applicant "
-            "fields. The caseworker completes the rest of the form."
+            "The application the partial draft is based on. It covers tenant information, lease "
+            "details and requests. The caseworker completes the official form."
         ),
         locator="page 1, applicant and dispute details",
         # The full title line of the form, edition 2024-01 (page F1). The confirmation covers this

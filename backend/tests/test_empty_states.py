@@ -58,6 +58,19 @@ def test_the_rail_says_one_file_not_one_files() -> None:
     assert rail(stats(), 3)["evidence"] == "3 files · from tenant"
 
 
+def test_form_field_counts_exclude_unfilled_optional_fields():
+    required = [{"required": True, "value": "known"}] * 5 + [{"required": True, "value": None}] * 2
+    optional = [{"required": False, "value": None}] * 67
+    counts = js(f"formFieldCounts({json.dumps(required + optional)})")
+    assert counts == {"filled": 5, "fieldsTotal": 7, "toConfirm": 0, "reqMissing": 2}
+    counts_with_optional = js(
+        f"formFieldCounts({json.dumps(required + optional + [{'value': 'recorded'}])})"
+    )
+    assert counts_with_optional == {
+        "filled": 6, "fieldsTotal": 8, "toConfirm": 0, "reqMissing": 2,
+    }
+
+
 def test_suggestions_and_fields_are_pluralised() -> None:
     one = rail(stats(gaps=1, recommended=1, fieldsTotal=1, filled=1))
     many = rail(stats(gaps=4, recommended=3, fieldsTotal=7, filled=5))

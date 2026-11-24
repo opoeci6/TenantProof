@@ -78,6 +78,7 @@ from app.services.agent.tools import (
     new_nonce,
     strip_text,
 )
+from app.services.form_fields import covered_legacy_fields
 from app.services.legal import gaps
 from app.services.legal import rules as legal_rules
 from app.services.mappers import case_counts
@@ -220,7 +221,11 @@ def _fillable_fields(session: Session, case: CaseRow) -> list[tuple[str, str]]:
         .where(FormFieldRow.case_id == case.id)
         .order_by(col(FormFieldRow.position))
     ).all()
-    return [(row.key, row.label) for row in rows if is_fillable(row)]
+    covered_fields = covered_legacy_fields(rows)
+    return [
+        (row.key, row.label) for row in rows
+        if is_fillable(row) and row.key not in covered_fields
+    ]
 
 
 def _untouched(event: TimelineEventRow) -> bool:

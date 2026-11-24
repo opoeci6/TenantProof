@@ -83,18 +83,12 @@ effective April 30, 2025"), so check the Royal Gazette Part II for later amendme
 
 ## Decisions a person should look at
 
-- **The Form J draft is partial.** The app drafts seven tenant-applicant fields (`tenant_name`,
-  `landlord_name`, `landlord_address`, `rental_address`, `tenancy_start`, `monthly_rent`,
-  `remedy`). It is **not a complete Form J**: the caseworker completes the rest on the real form,
-  and the UI and the package call it "Partial Form J draft: caseworker completes the rest". The
-  labels are ours, plain-English versions. Not drafted, so the caseworker fills them in: the
-  address split into number, name, apartment, city, province and postal code; mailing
-  addresses; phone and e-mail with the consent box; the move-in date apart from a fixed-term
-  start; weekly rent; the notice-to-quit, lease and deposit questions; several requests at once
-  (Repairs, Compliance with a lease or the Act, Payment of money, ...) each with its own
-  explanation; the signature and date. **F4 (the landlord's requests) is out of scope**: the app
-  drafts tenant applications only. Full coverage is tracked in the issue "Full Form J field
-  coverage"; the comparison behind this list is leozhang5867's comment on #54.
+- **The Form J draft is partial.** The agent-facing baseline still uses the seven original
+  fields. The caseworker can fill structured addresses, contact details and email consent (F1),
+  lease details (F2), and multiple tenant requests with individual reasons (F3). The caseworker
+  transfers the reviewed data to the official form, and the applicant signs and dates it there.
+  The draft uses plain-English labels. F4 is the official form's section for landlord applicants.
+  Issue #67 tracks tenant draft coverage and links back to the field comparison in #54.
 - **Policy #28 ("Hearings Procedures and Conduct") is not in the corpus.** The URL the seed data
   carries
   (`.../ans-residential-tenancies-policy-28-residential-tenancies-hearings-procedures-and-conduct.pdf`)

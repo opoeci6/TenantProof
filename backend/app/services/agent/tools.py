@@ -33,6 +33,13 @@ from app.schemas import EventDate, Language, SourceRef, ToolCall
 from app.services import activity
 from app.services.agent.evidence_text import EvidenceTextStore, Page
 from app.services.dates import choose_date, date_mismatch, exif_matches
+from app.services.form_fields import (
+    LEGACY_ALTERNATIVES,
+    MANUAL_FIELDS_BY_KEY,
+    covered_legacy_field_for_case,
+    covered_legacy_fields,
+    lock_alternative_fields,
+)
 from app.services.legal import corpus
 from app.services.strength import SourceFacts, compute_strength, event_flags
 from app.services.verifier import MIN_EXCERPT_CHARS, normalize, verify_citation
@@ -781,11 +788,13 @@ class ListFormFields(BaseTool):
             return not_found(self.name, "Case")
         stmt = select(FormFieldRow).where(FormFieldRow.case_id == ctx.case_id)
         rows = ctx.session.exec(stmt.order_by(col(FormFieldRow.position))).all()
+        covered_fields = covered_legacy_fields(rows)
         return ListFormFieldsOutput.model_validate(
             {
                 "fields": [
                     {"key": r.key, "label": r.label, "required": r.required, "status": r.status}
                     for r in rows
+                    if r.key not in MANUAL_FIELDS_BY_KEY and r.key not in covered_fields
                 ]
             }
         )
@@ -876,6 +885,13 @@ class CreateGap(BaseTool):
         if case is None:
             return not_found(self.name, "Case")
         key = args.field_key
+        if key is not None and key in LEGACY_ALTERNATIVES:
+            lock_alternative_fields(ctx.session, case.id)
+            if covered_legacy_field_for_case(ctx.session, case.id, key):
+                return ToolError(
+                    tool=self.name, kind="invalid_input",
+                    message="The caseworker already completed the corresponding Form J field.",
+                )
         if args.severity == "blocking" and key is None:
             # The caseworker closes a required item by filling its field; one without a field
             # has no way to be closed in the UI and blocks the package for good.
@@ -886,7 +902,9 @@ class CreateGap(BaseTool):
                     "from list_form_fields. Anything else is severity recommended."
                 ),
             )  # fmt: skip
-        if key is not None and ctx.session.get(FormFieldRow, (case.id, key)) is None:
+        if key is not None and (
+            key in MANUAL_FIELDS_BY_KEY or ctx.session.get(FormFieldRow, (case.id, key)) is None
+        ):
             return ToolError(
                 tool=self.name, kind="invalid_input",
                 message="field_key is not a field of this case's form. Use list_form_fields.",
@@ -1108,6 +1126,7 @@ def is_fillable(field: FormFieldRow) -> bool:
     and the caseworker has not cleared an earlier draft of it."""
     return (
         field.status == FILLABLE_STATUS
+        and field.key not in MANUAL_FIELDS_BY_KEY
         and field.key not in NEVER_FILLED
         and field.note != CLEARED_NOTE
     )
@@ -1185,6 +1204,13 @@ class FillFormField(BaseTool):
         case = _case(ctx)
         if case is None:
             return not_found(self.name, "Case")
+        if args.field_key in LEGACY_ALTERNATIVES:
+            lock_alternative_fields(ctx.session, case.id)
+            if covered_legacy_field_for_case(ctx.session, case.id, args.field_key):
+                return ToolError(
+                    tool=self.name, kind="invalid_input",
+                    message="The caseworker already completed the corresponding Form J field.",
+                )
         field = ctx.session.get(FormFieldRow, (case.id, args.field_key))
         if field is None:
             return ToolError(
@@ -1196,6 +1222,11 @@ class FillFormField(BaseTool):
                 tool=self.name, kind="invalid_input",
                 message="The remedy is the tenant's choice. Leave it for the caseworker.",
             )  # fmt: skip
+        if field.key in MANUAL_FIELDS_BY_KEY:
+            return ToolError(
+                tool=self.name, kind="invalid_input",
+                message="This field is completed by the caseworker.",
+            )
         if field.status != FILLABLE_STATUS:
             return ToolError(
                 tool=self.name, kind="invalid_input",

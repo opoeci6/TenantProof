@@ -18,6 +18,7 @@ import logging
 import re
 import uuid
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,10 +30,20 @@ from PIL import Image
 from sqlmodel import Session, col, select
 
 from app.models import CaseRow, EvidenceRow, FormFieldRow, GapRow, PackageRow, UserRow
-from app.schemas import Attestations, Package, PackageFile
+from app.schemas import Attestations, FormField, Package, PackageFile
 from app.services import activity, storage
 from app.services.evidence import gps, sniff  # also registers the HEIC opener
-from app.services.form_values import monthly_rent_amount
+from app.services.form_fields import (
+    F1_ADDRESS_GROUPS,
+    F1_CONTACT_GROUPS,
+    F2_FIELD_KEYS,
+    F3_PAYMENT_REQUESTS,
+    F3_REQUESTS,
+    MANUAL_FIELDS_BY_KEY,
+    covered_legacy_fields,
+    is_required,
+)
+from app.services.form_values import F2_DEPENDENCIES, FORM_CHOICES, MONEY_KEYS, cad_amount
 from app.services.gating import MissingField, OpenGap, package_blockers
 from app.services.mappers import (
     OPEN_GAP,
@@ -134,14 +145,16 @@ def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
 
 def state_reasons(session: Session, case: CaseRow) -> list[str]:
     fields = session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case.id)).all()
+    covered_fields = covered_legacy_fields(fields)
     gaps = session.exec(select(GapRow).where(GapRow.case_id == case.id)).all()
     reasons = package_blockers(
         [OpenGap(g.title, (g.input or {}).get("field_key"))
          for g in gaps if g.severity == "blocking" and g.status in OPEN_GAP],
-        [MissingField(f.key, f.label) for f in fields if f.required and not f.value],
+        [MissingField(f.key, f.label)
+         for f in fields if is_required(f, covered_fields) and not f.value],
         case.tenant_attested_genuine,
     )
-    if not fields:
+    if not any(f.key not in MANUAL_FIELDS_BY_KEY for f in fields):
         reasons.insert(0, "No form draft has been prepared for this case yet")
     return [*analysis_reasons(session, case), *reasons]
 
@@ -194,6 +207,67 @@ def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: flo
     pdf.ln(gap)
 
 
+def _write_f1_details(pdf: FPDF, values: dict[str, str | None]) -> None:
+    for prefix, label in F1_ADDRESS_GROUPS.items():
+        street = values.get(f"{prefix}_street")
+        apartment = values.get(f"{prefix}_apartment")
+        city = values.get(f"{prefix}_city")
+        province = values.get(f"{prefix}_province")
+        postal = values.get(f"{prefix}_postal_code")
+        region = ", ".join(value for value in (city, province) if value)
+        locality = " ".join(value for value in (region, postal) if value)
+        lines = (street, f"Apartment or unit {apartment}" if apartment else "", locality)
+        if any(lines):
+            _write(pdf, label, bold=True, gap=0)
+            _write(pdf, "\n".join(line for line in lines if line))
+
+    applicant_email_allowed = values.get("applicant_email_consent") == "yes"
+    for label, fields in F1_CONTACT_GROUPS.items():
+        details = []
+        for key, field_label in fields.items():
+            value = values.get(key)
+            if not value or (key == "tenant_email" and not applicant_email_allowed):
+                continue
+            rendered = FORM_CHOICES.get(key, {}).get(value, value)
+            details.append(f"{field_label}  {rendered}")
+        if details:
+            _write(pdf, label, bold=True, gap=0)
+            _write(pdf, "\n".join(details))
+
+
+def _write_form_fields(
+    pdf: FPDF, fields: Iterable[FormField], values: dict[str, str | None],
+) -> None:
+    for field in fields:
+        dependency = F2_DEPENDENCIES.get(field.key)
+        if dependency is not None and values.get(dependency[0]) not in (None, "", dependency[1]):
+            continue
+        if not field.required and not field.value:
+            continue
+        _write(pdf, field.label, bold=True, gap=0)
+        value = field.value or "(not filled in)"
+        if field.key in MONEY_KEYS and (amount := cad_amount(value)) is not None:
+            value = f"CAD {amount:,.2f}"
+        value = FORM_CHOICES.get(field.key, {}).get(value, value)
+        _write(pdf, value)
+
+
+def _write_f3_requests(pdf: FPDF, values: dict[str, str | None]) -> None:
+    payment_selected = values.get("request_payment") == "yes"
+    selected = [
+        (key, label) for key, label in F3_REQUESTS.items()
+        if values.get(key) == "yes" and (key not in F3_PAYMENT_REQUESTS or payment_selected)
+    ]
+    if selected:
+        _write(pdf, "Tenant requests", bold=True, size=12, gap=2)
+        for key, label in selected:
+            _write(pdf, label, bold=True, gap=0)
+            reason = values.get(f"{key}_reason")
+            if reason or key != "request_payment":
+                _write(pdf, reason or "(reason not filled in)")
+    _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
+
+
 def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at: datetime) -> bytes:
     draft = build_form_draft(session, case)
     pdf = new_pdf(case.tenant_language)
@@ -201,12 +275,15 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
     _write(pdf, draft.disclaimer, size=9, gap=4)
     _write(pdf, f"Case: {case.title} ({case.unit})")
     _write(pdf, f"Prepared by {prepared_by} on {built_at:%Y-%m-%d %H:%M} UTC", gap=4)
-    for field in draft.fields:
-        _write(pdf, field.label, bold=True, gap=0)
-        value = field.value or "(not filled in)"
-        if field.key == "monthly_rent" and (amount := monthly_rent_amount(value)) is not None:
-            value = f"CAD {amount:,.2f}"
-        _write(pdf, value)
+    values = {field.key: field.value for field in draft.fields}
+    _write_form_fields(
+        pdf, (field for field in draft.fields if field.key not in MANUAL_FIELDS_BY_KEY), values,
+    )
+    _write_f1_details(pdf, values)
+    _write_form_fields(
+        pdf, (field for field in draft.fields if field.key in F2_FIELD_KEYS), values,
+    )
+    _write_f3_requests(pdf, values)
     _write(pdf, "Summary of events", bold=True, size=12, gap=2)
     _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())

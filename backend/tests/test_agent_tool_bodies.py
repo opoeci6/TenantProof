@@ -4,7 +4,7 @@ ToolContext; a missing id and another case's id answer the same not_found."""
 import pytest
 from sqlmodel import Session, select
 
-from app.models import ActivityRow, EvidenceRow, GapRow, TimelineEventRow
+from app.models import ActivityRow, EvidenceRow, FormFieldRow, GapRow, TimelineEventRow
 from app.services.agent import tools as t
 from app.services.agent.evidence_text import Page
 from app.services.legal import corpus
@@ -616,6 +616,32 @@ def test_list_form_fields(session: Session) -> None:
     assert isinstance(res, t.ListFormFieldsOutput)
     keys = [f.key for f in res.fields]
     assert keys[0] == "tenant_name" and "landlord_address" in keys and len(keys) == 7
+
+
+@pytest.mark.parametrize("key", ["tenant_email", "monthly_rent"])
+def test_agent_cannot_access_manual_or_covered_fields(fresh_db, session, key):
+    session.add(FormFieldRow(
+        case_id=CASE, key="tenant_email", label="Tenant email", required=False,
+    ))
+    session.add(FormFieldRow(
+        case_id=CASE, key="weekly_rent", label="Weekly rent", required=False,
+        value="400", status="user_entered",
+    ))
+    session.commit()
+    ctx = make_ctx(session)
+    listed = call("list_form_fields", ctx, {})
+    assert isinstance(listed, t.ListFormFieldsOutput)
+    assert key not in [field.key for field in listed.fields]
+    proposed = call("fill_form_field", ctx, {
+        "field_key": key, "value": "anything",
+        "sources": [{"evidence_id": "ev_01", "locator": "page 1", "excerpt": LEASE}],
+    })
+    gap = call("create_gap", ctx, {
+        "field_key": key, "severity": "blocking", "title": "Missing field",
+        "why": "Please check the lease.", "how_to_fix": "Fill in the field.",
+    })
+    for refused in (proposed, gap):
+        assert isinstance(refused, t.ToolError) and refused.kind == "invalid_input"
 
 
 def test_search_legal_sources_returns_rows_and_never_invents_an_excerpt(session: Session) -> None:
