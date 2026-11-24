@@ -23,7 +23,9 @@ def upgrade() -> None:
         "tenant_case",
         sa.Column("applicant_role", sa.String(8), nullable=False, server_default="tenant"),
     )
-    op.create_check_constraint(_CONSTRAINT, "tenant_case", "applicant_role IN ('tenant', 'landlord')")
+    op.create_check_constraint(
+        _CONSTRAINT, "tenant_case", "applicant_role IN ('tenant', 'landlord')"
+    )
 
 
 def downgrade() -> None:
