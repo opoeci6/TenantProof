@@ -9,7 +9,6 @@ Two rules keep the fuzzy match honest:
 - A passing citation returns the text span found in the stored page (`matched`), not the
   model's string, so what is saved as a quote is always text that exists in the evidence."""
 
-import html
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -31,8 +30,8 @@ class Verdict:
 
 
 def normalize(text: str) -> str:
-    """Case, whitespace and the `&lt;` escaping of evidence blocks do not count as a difference."""
-    return _WHITESPACE.sub(" ", html.unescape(text)).strip().casefold()
+    """Case and whitespace do not count as a difference."""
+    return _WHITESPACE.sub(" ", text).strip().casefold()
 
 
 def _fold(text: str) -> tuple[str, list[int]]:
@@ -58,6 +57,47 @@ def _fold(text: str) -> tuple[str, list[int]]:
     return "".join(out), origin
 
 
+_ANGLE = {"<": "&lt;", "\uff1c": "&lt;", "\ufe64": "&lt;"}  # what an evidence block shows
+
+
+def _wrapped(text: str) -> tuple[str, list[int]]:
+    """The page as an evidence block shows it (`<` as `&lt;`), and for each output character
+    the index it came from in `text`."""
+    out: list[str] = []
+    origin: list[int] = []
+    for i, ch in enumerate(text):
+        piece = _ANGLE.get(ch, ch)
+        out.append(piece)
+        origin.extend([i] * len(piece))
+    return "".join(out), origin
+
+
+def _best_match(needle: str, text: str) -> tuple[float, str] | None:
+    """Fuzzy-match against the page as stored and as wrapped (the model copies either form);
+    return the better score and the span of the stored text."""
+    best: tuple[float, str] | None = None
+    wrapped, wrapped_origin = _wrapped(text)
+    for variant, back in ((text, None), (wrapped, wrapped_origin)):
+        hay, origin = _fold(variant)
+        if not hay:
+            continue
+        if len(needle) > len(hay):
+            score, start, end = float(fuzz.ratio(needle, hay)), 0, len(hay)
+        else:
+            alignment = fuzz.partial_ratio_alignment(needle, hay)
+            if not alignment:
+                continue
+            score, start, end = float(alignment.score), alignment.dest_start, alignment.dest_end
+        if end <= start:
+            continue
+        first, last = origin[start], origin[end - 1]
+        if back is not None:
+            first, last = back[first], back[last]
+        if best is None or score > best[0]:
+            best = (score, text[first : last + 1].strip())
+    return best
+
+
 def _find_page(locator: str, pages: Mapping[str, str]) -> tuple[str, str] | None:
     wanted = normalize(locator)
     for key, text in pages.items():
@@ -75,17 +115,10 @@ def verify_citation(excerpt: str, locator: str, pages: Mapping[str, str]) -> Ver
     needle = normalize(excerpt)
     if len(needle) < MIN_EXCERPT_CHARS:
         return Verdict(False, "citation rejected: excerpt too short to verify")
-    hay, origin = _fold(text)
-    if not hay:
+    best = _best_match(needle, text)
+    if best is None:
         return Verdict(False, "citation rejected: excerpt not found in the evidence")
-    if len(needle) > len(hay):
-        score = float(fuzz.ratio(needle, hay))
-        start, end = 0, len(hay)
-    else:
-        alignment = fuzz.partial_ratio_alignment(needle, hay)
-        score = float(alignment.score) if alignment else 0.0
-        start, end = (alignment.dest_start, alignment.dest_end) if alignment else (0, 0)
-    if score < MIN_SCORE or end <= start:
+    score, matched = best
+    if score < MIN_SCORE:
         return Verdict(False, "citation rejected: excerpt not found in the evidence", score)
-    matched = text[origin[start] : origin[end - 1] + 1].strip()
     return Verdict(True, None, score, matched=matched, locator=key)

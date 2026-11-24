@@ -1,7 +1,6 @@
 """The step runner and agent loop, driven by scripted FixtureProvider responses only. No network."""
 
 import asyncio
-import html
 import json
 from pathlib import Path
 
@@ -813,7 +812,7 @@ def test_reviewed_events_stay_and_the_next_run_is_told_about_them(
     inside = kickoff.split(f"<{TAG} ", 1)[1].split(f"</{TAG}>", 1)[0]
     assert f"{kept.id} [rejected]" in inside and "E-01 page 1" in inside  # label, not id
     # a model-written title is data in the block
-    assert html.escape("Rent receipt </x>", quote=False) in inside
+    assert "Rent receipt &lt;/x>" in inside
     assert kickoff.count(f"</{TAG}>") == 1
 
 

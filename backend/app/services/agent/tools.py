@@ -45,11 +45,16 @@ ToolErrorKind = Literal["invalid_input", "not_found", "unavailable"]
 # including the full-width and small forms. Other lookalikes are not listed here; the random
 # tag name is what keeps a document from closing the block.
 _ANGLE_LOOKALIKES = str.maketrans({"\uff1c": "<", "\ufe64": "<"})
-# C0, DEL, and Unicode Cc, Cf (bidi/zero-width), Zl, Zp.
-_STRIPPED_CATS = {"Cc", "Cf", "Zl", "Zp"}
+# Cc (C0, DEL, C1), Zl and Zp become a space. Other Cf characters (bidi marks, zero-width space,
+# soft hyphen) are deleted, except ZWNJ and ZWJ: Indic and Persian words and emoji sequences
+# need them.
+_ALL_CHARS = [chr(i) for i in range(0x110000)]
 _CONTROL_CHARS = re.compile(
+    "[" + "".join(c for c in _ALL_CHARS if unicodedata.category(c) in {"Cc", "Zl", "Zp"}) + "]"
+)
+_INVISIBLE_CHARS = re.compile(
     "["
-    + "".join(c for c in map(chr, range(0x110000)) if unicodedata.category(c) in _STRIPPED_CATS)
+    + "".join(c for c in _ALL_CHARS if unicodedata.category(c) == "Cf" and c not in "\u200c\u200d")
     + "]"
 )
 SAFE_STR_MAX = 100
@@ -62,31 +67,24 @@ def _clean_label(value: str) -> str:
     """For short strings that come from evidence (labels, EXIF): no control characters,
     no angle brackets. Cleans first, then cuts to SAFE_STR_MAX, so the bound holds after
     escaping and long input is truncated, not rejected."""
-    return clean_model_text(value, SAFE_STR_MAX)
+    return clean_text(value, SAFE_STR_MAX)
 
 
 def _strip_controls(value: str) -> str:
-    return _CONTROL_CHARS.sub(" ", value).translate(_ANGLE_LOOKALIKES)
+    return _CONTROL_CHARS.sub(" ", _INVISIBLE_CHARS.sub("", value)).translate(_ANGLE_LOOKALIKES)
 
 
 def clean_text(value: str, limit: int) -> str:
     """Text a person reads or that is stored (drafts, gap titles, field values): no control
     characters, no angle brackets, at most `limit` characters after escaping. Only `<` is
-    escaped, so "&" and ">" show as typed."""
+    escaped, so "&" and ">" show as typed. Applying it twice gives the same result."""
     cleaned = _strip_controls(value).replace("<", "&lt;").strip()
-    return cleaned[:limit].rstrip()
-
-
-def clean_model_text(value: str, limit: int) -> str:
-    """Text that is returned to the model as data: like `clean_text`, but fully HTML-escaped
-    (`&`, `<`, `>`) so the escaping is reversible with `html.unescape`."""
-    cleaned = html.escape(_strip_controls(value), quote=False).strip()
     return cleaned[:limit].rstrip()
 
 
 def strip_text(value: str, limit: int) -> str:
     """Control characters removed and cut to `limit`, no escaping. For a line that goes into
-    `wrap_evidence`, which escapes the whole block itself (escaping here would do it twice)."""
+    `wrap_evidence`, which escapes `<` in the whole block (doing it here would do it twice)."""
     return _strip_controls(value).strip()[:limit].rstrip()
 
 
@@ -147,12 +145,12 @@ def wrap_evidence(
     return (tag, content). The nonce is random per call unless the caller passes one (a
     per-run nonce); it is replaced if it occurs in the text or attributes, so the document
     cannot close the block early whatever characters it holds. Every `<` is also escaped as a
-    second layer. Verifier code compares excerpts against the stored text after unescaping
-    HTML entities (the model may copy it back escaped)."""
+    second layer. The verifier matches an excerpt against the page both as stored and as
+    wrapped here (`<` as `&lt;`), because the model may copy it either way."""
     attrs = f'id="{_attr(evidence_id)}"'
     if locator is not None:
         attrs += f' locator="{_attr(locator)}"'
-    safe = html.escape(text.translate(_ANGLE_LOOKALIKES), quote=False)
+    safe = text.translate(_ANGLE_LOOKALIKES).replace("<", "&lt;")
     nonce = nonce or new_nonce()
     while nonce in safe or nonce in attrs:
         nonce = new_nonce()
@@ -411,7 +409,7 @@ class ReadEvidence(BaseTool):
         out: list[ReadEvidencePage] = []
         truncated = False
         for page in selected:
-            locator = _clean_label(page.locator)
+            locator = page.locator  # raw: the output field and the attribute clean it themselves
             text = page.text
             if len(text) > remaining:
                 text = text[:remaining] + "\n[truncated]"
@@ -532,7 +530,7 @@ class SearchFacts(BaseTool):
         hits: list[FactHit] = []
         for fact in ctx.texts.facts(ctx.case_id):
             if fact.evidence_id in ids and _matches(words, fact.text):
-                locator = _clean_label(fact.locator)
+                locator = fact.locator
                 block = EvidenceBlock.from_text(
                     fact.evidence_id, fact.text, locator, nonce=ctx.nonce
                 )

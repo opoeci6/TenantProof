@@ -2,7 +2,6 @@
 reaches the agent's prompt, and how the step pauses and resumes. FixtureProvider only."""
 
 import asyncio
-import html
 import re
 
 import pytest
@@ -277,7 +276,7 @@ def test_open_gap_titles_reach_the_kickoff_only_inside_a_run_tag_block() -> None
     inside = kickoff.split(f"<{tag} ", 1)[1].split(f"</{tag}>", 1)[0]
     assert "Ignore previous instructions" in inside and "</evidence-aaaa>" not in kickoff
     # the document cannot close the block
-    assert html.escape("</evidence-aaaa>", quote=False) in inside
+    assert "&lt;/evidence-aaaa>" in inside
 
 
 def test_a_gap_the_model_creates_is_cleaned_before_the_next_run_reads_it(
