@@ -320,7 +320,9 @@ def manifest_pdf(
         _write(pdf, "No evidence files are listed.")
     for ev in evidence:
         _write(pdf, f"{ev.label}  {ev.filename}", bold=True, gap=0)
-        received = ev.received_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        # Like mappers.iso(): a naive time is already UTC, so it must not be read as local time.
+        at = ev.received_at if ev.received_at.tzinfo else ev.received_at.replace(tzinfo=UTC)
+        received = at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
         _write(pdf, f"Received {received} from {ev.uploaded_by}", gap=0)
         filed = ev_files[ev.id]
         removed = any(item.location_removed for item in filed)
@@ -388,8 +390,9 @@ def build_zip(
             {"label": e.label, "filename": e.filename, "sha256": e.sha256,
              "received_at": iso_req(e.received_at), "uploaded_by": e.uploaded_by,
              "in_zip": ev_files[e.id][0].name if ev_files[e.id] else None,
-             # #127: say both whether the file had location data and whether the filed copy had
-             # it removed; the old single boolean was false and ambiguous when there was none.
+             "location_data_removed": any(f.location_removed for f in ev_files[e.id]),
+             # #127: also say whether the file had location data at all; the boolean above
+             # (kept for existing readers) was false and ambiguous when there was none.
              "location": {"present": bool((e.metadata_ or {}).get("gps_present")),
                           "removed": any(f.location_removed for f in ev_files[e.id])},
              "rendition": {"path": ev_files[e.id][1].name, "sha256": ev_files[e.id][1].sha256}

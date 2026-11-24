@@ -751,6 +751,9 @@ def test_package_zip_contains_the_uploaded_originals(fresh_db, client, session):
     assert by_label["E-08"]["sha256"] == sha(photo)  # what was received
     assert by_label["E-08"]["location"] == {"present": True, "removed": True}
     assert by_label["E-09"]["location"] == {"present": False, "removed": False}
+    # the older boolean stays for existing readers of the manifest
+    assert by_label["E-08"]["location_data_removed"] is True
+    assert by_label["E-09"]["location_data_removed"] is False
     assert by_label["E-08"]["in_zip"] == "evidence/E-08.jpg"
     assert by_label["E-09"]["sha256"] == sha(letter)
     assert by_label["E-09"]["in_zip"] == "evidence/E-09.pdf"

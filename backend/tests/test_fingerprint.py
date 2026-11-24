@@ -22,6 +22,7 @@ def a_stripe() -> bytes:
 def test_the_same_picture_has_distance_zero() -> None:
     first, second = a_stripe(), a_stripe()
     a, b = fingerprint.dhash_bytes(first), fingerprint.dhash_bytes(second)
+    assert a is not None and b is not None
     assert fingerprint.distance(a, b) == 0
     assert fingerprint.looks_the_same(a, b)
 
