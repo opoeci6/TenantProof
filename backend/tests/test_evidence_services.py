@@ -527,14 +527,62 @@ def test_a_letter_with_three_clock_times_stays_a_letter():
     ("\ufeff2026-08-14 21:10 Tenant: water", True),  # a BOM the decoder left
     ("陈梅 2026-08-14 21:10", True),
     ("Jordan Lee 14/08/2026 21:10:05", True),
+    ("Aug 14, 2026, 9:10 PM - Mei: heater", True),
+    ("August 14, 2026 9:10 PM", True),
+    ("Aug 14th, 2026, 9:10 p.m. - Mei: heater", True),
+    ("Aug. 14 2026, 9:10pm - Mei: heater", True),
+    ("14 Aug 2026, 21:10 - Mei: heater", True),
+    ("14 août 2026 à 21:10 - Camille : bonjour", True),
+    ("1er août 2026 à 21:10 - Camille : bonjour", True),
+    ("14 juil. 2026, 21:10 - Camille : bonjour", True),
+    ("[Aug 14, 2026, 9:10:05 PM] Mei: heater", True),
+    ("Mei Aug 14, 2026 9:10 PM", True),
+    ("Mei Aug 14, 2026 9:10pm", True),
+    ("Mei Aug 14, 2026 9:10 p.m.", True),
+    ("AUG 14, 2026, 9:10 PM - Mei: heater", True),
+    ("aug 14, 2026, 9:10 pm - Mei: heater", True),
     ("On 2026-08-14 I reported the leak by phone.", False),
     ("The heat went off at 9:30 pm", False),
     ("Date 2026-08-20 10:00", False),  # a header word, not a name
     ("陈梅 21:10", False),  # a time alone after a name
     ("Room 2026-08-14 21:10 was wet", False),  # more than a name and a timestamp
+    ("May 5 was the last time it worked", False),
+    ("March 3 we met", False),
+    ("On Aug 14, 2026 I reported it", False),
+    ("Date Aug 14, 2026 9:10 PM", False),
+    ("Aug 14, 20261 - x", False),
+    ("Mayor 14, 2026 9:10 PM", False),
+    ("Marching 14, 2026 9:10 PM", False),
 ])
 def test_a_timestamp_counts_only_where_chat_exports_put_it(line: str, stamped: bool):
     assert text._is_stamped(line) is stamped
+
+
+@pytest.mark.parametrize("chat", [
+    (
+        "Aug 14, 2026, 9:10 PM - Mei: the heater is broken again\n"
+        "Aug 15, 2026, 8:02 AM - Landlord: ok, I'll send someone\n"
+        "Aug 22, 2026, 6:30 PM - Mei: nobody came\n"
+    ),
+    (
+        "Aug 14, 2026 9:10:05 PM\n"
+        "Mei\n"
+        "the heater is broken again\n"
+        "Aug 15, 2026 8:02:11 AM\n"
+        "Landlord\n"
+        "ok, I'll send someone\n"
+        "Aug 22, 2026 6:30:40 PM\n"
+        "Mei\n"
+        "nobody came\n"
+    ),
+    (
+        "14 août 2026 à 21:10 - Camille : bonjour\n"
+        "14 août 2026 à 21:15 - Propriétaire : bonjour\n"
+        "15 août 2026 à 18:30 - Camille : personne n'est venu\n"
+    ),
+])
+def test_month_name_chat_exports_are_messages(chat: str):
+    assert txt_kind(chat.encode()) == "messages"
 
 
 @pytest.mark.parametrize("chat", [
@@ -553,6 +601,14 @@ def test_short_chats_are_messages(chat: str):
     "To: Landlord\nFrom: Tenant\nRe: Leak\nThe bathroom wall leaks.",  # headers aren't speakers
     "Dear Landlord:\nThe wall leaks.\nPlease send someone.",
     "I paid $1,650.00 on 1 August.\nThe receipt number is 4021-77.\nThank you.",
+    (
+        "August 20, 2026\n"
+        "To: Harbour Properties\n"
+        "Re: heat\n"
+        "On Aug 14, 2026 I reported that the heat was off.\n"
+        "I called again on September 2, 2026 at 9:30 PM.\n"
+        "Nothing has changed since 1 October 2026.\n"
+    ),
 ])
 def test_documents_are_letters(letter: str):
     assert txt_kind(letter.encode()) == "letter"
