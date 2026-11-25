@@ -1158,6 +1158,7 @@ function renderChrome() {
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
   clearInterval(poller);
+  S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
   S.editing = null; S.drafting = null; S.draftEdit = null; S.draftError = ""; S.askError = ""; S.askDraft = "";
   S.attest = { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false };
@@ -1515,7 +1516,7 @@ function viewForm() {
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
-    ${landlord && !USE_MOCK ? `<a class="btn" href="${API_BASE}${C}/form-draft/pdf" download>Download draft PDF</a>` : ""}
+    ${landlord && !USE_MOCK ? `<button class="btn" type="button" data-action="download-form-draft"${S.draftSaves?.downloading ? " disabled" : ""}>Download draft PDF</button>` : ""}
     </div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
     ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
@@ -1679,7 +1680,15 @@ function render() {
   renderChrome();
   const here = S.cases.find(x => x.id === CASE_ID);
   const banner = !landlordApplication() && CASE_ROUTES.includes(r) && here && here.analysed === false ? `<div class="note warn" role="status"><span class="note-ico">!</span><span><b>Not analysed yet.</b> No analysis has been completed and no events are reviewed, so nothing here is ready to file. <a href="#run">Run the analysis</a></span></div>` : "";
-  $("#view").innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
+  const view = $("#view");
+  if (r === "form" && landlordApplication() && view.querySelector('[data-action="download-form-draft"]')) {
+    const active = document.activeElement;
+    const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
+    // Refresh the data without replacing a control the caseworker is still editing or correcting.
+    const saves = S.draftSaves;
+    if (editing || saves?.downloading || saves?.pending.size || saves?.failed.size || saves?.invalid.size) return;
+  }
+  view.innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
   if (r === "evidence") wireDrop();
 }
 
@@ -1771,6 +1780,99 @@ function pollRun() {
 }
 
 /* ---------- events ---------- */
+/* ---------- Form J draft saves and download ---------- */
+function draftSaveState() {
+  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), downloading: false };
+}
+
+async function saveDraftField(key, value) {
+  const path = `${C}/form-draft/fields/${key}`;
+  if (!landlordApplication()) {
+    await request("PATCH", path, { value });
+    await refresh(["form", "gaps"]);
+    return;
+  }
+
+  const state = draftSaveState();
+  const previous = state.pending.get(key);
+  const save = (async () => {
+    // Preserve edit order if the same field is changed again while a save is pending.
+    if (previous) await previous.promise.catch(() => {});
+    await request("PATCH", path, { value });
+  })();
+  const entry = { value, promise: save };
+  state.pending.set(key, entry);
+  try {
+    await save;
+    state.confirmed.set(key, value);
+    if (state.pending.get(key) === entry) state.failed.delete(key);
+  } catch (error) {
+    if (state.pending.get(key) === entry) state.failed.add(key);
+    throw error;
+  } finally {
+    if (state.pending.get(key) === entry) state.pending.delete(key);
+  }
+  if (S.draftSaves === state) await refresh(["form", "gaps"]);
+}
+
+async function saveDraftControl(input) {
+  const { key } = input.dataset;
+  const value = input.type === "checkbox" ? (input.checked ? input.value : "") : input.value.trim();
+  const saved = S.form.fields.find(field => field.key === key)?.value;
+  const state = landlordApplication() ? draftSaveState() : null;
+  if (!input.reportValidity() || !validCaseField(key, value, saved)) {
+    state?.invalid.add(key);
+    return;
+  }
+  state?.invalid.delete(key);
+  await saveDraftField(key, value);
+}
+
+async function downloadFormDraft(button) {
+  const state = draftSaveState();
+  if (state.downloading) return;
+  const caseId = CASE_ID;
+  const path = `${API_BASE}${C}/form-draft/pdf`;
+  state.downloading = true;
+  try {
+    const editing = document.activeElement;
+    if (editing?.matches('[data-action="field"], [data-action="date-field"]')) editing.blur();
+    button.disabled = true;
+    while (state.pending.size) {
+      await Promise.allSettled([...state.pending.values()].map(entry => entry.promise));
+    }
+    if (S.draftSaves !== state || route() !== "form") return;
+    if (state.invalid.size || state.failed.size) {
+      const key = (state.invalid.size ? state.invalid : state.failed).values().next().value;
+      const label = S.form.fields.find(field => field.key === key)?.label || "Form field";
+      toast(`Save ${label} before downloading the draft.`, 6000);
+      document.getElementById(`fld-${key}`)?.focus();
+      return;
+    }
+
+    const response = await fetch(path, { credentials: "include" });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(errorMessage(data, response)), { status: response.status });
+    }
+    const pdf = await response.blob();
+    if (S.draftSaves !== state || route() !== "form") return;
+    const url = URL.createObjectURL(pdf);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `tenantproof-${caseId}-draft.pdf`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    state.downloading = false;
+    if (S.draftSaves === state) {
+      const current = document.querySelector('[data-action="download-form-draft"]');
+      if (current) current.disabled = false;
+      if (route() === "form") render();
+    }
+  }
+}
+
 /* ---------- case brief (PDF) ---------- */
 const briefButton = () => USE_MOCK ? "" : `<button class="btn" type="button" data-action="brief">Case brief (PDF)</button>`;
 async function openBrief() {
@@ -1817,12 +1919,17 @@ function copyFallback(b) {
   range.selectNodeContents(code); sel.removeAllRanges(); sel.addRange(range);
   toast("Couldn't copy automatically. The link is selected: press Ctrl+C (⌘C on a Mac).");
 }
+// Keep focus in the field until the download handler can commit it before starting a GET.
+document.addEventListener("pointerdown", ev => {
+  if (ev.target.closest('[data-action="download-form-draft"]')) ev.preventDefault();
+});
 document.addEventListener("click", guarded(async ev => {
   const b = ev.target.closest("[data-action]");
   if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
   const a = b.dataset.action, id = b.dataset.id;
   if (a === "logout") return logout();
   if (a === "reload") return location.reload();
+  if (a === "download-form-draft") return downloadFormDraft(b);
   if (a === "brief") return openBrief();
   if (a === "close-brief") return closeBrief();
   if (a === "photo") return showPhoto(id);  /* #97 */
@@ -1844,9 +1951,7 @@ document.addEventListener("click", guarded(async ev => {
     const value = input.type === "date" ? saved : input.value.trim();
     if (!value) return;
     if (!validCaseField(key, value, saved)) return;
-    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
-    await refresh(["form", "gaps"]);
-    return;
+    return saveDraftField(key, value);
   }
   if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
@@ -1934,10 +2039,27 @@ document.addEventListener("input", ev => {
 /* A native date emits change while the user is still editing its individual segments. */
 document.addEventListener("focusout", guarded(async ev => {
   const input = ev.target;
-  if (input.dataset.action !== "date-field" || input.contains(ev.relatedTarget)) return;
-  if (!input.reportValidity() || input.value === input.defaultValue) return;
-  await request("PATCH", `${C}/form-draft/fields/${input.dataset.key}`, { value: input.value });
-  await refresh(["form", "gaps"]);
+  const { action, key } = input.dataset;
+  if (input.contains(ev.relatedTarget)) return;
+  const state = landlordApplication() ? S.draftSaves : null;
+  if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
+      && !state.pending.has(key)) {
+    return saveDraftControl(input);
+  }
+  if (action !== "date-field") return;
+  const dateState = landlordApplication() ? draftSaveState() : null;
+  if (!input.reportValidity()) {
+    dateState?.invalid.add(key);
+    return;
+  }
+  dateState?.invalid.delete(key);
+  const pending = dateState?.pending.get(key);
+  const saved = pending?.value ?? dateState?.confirmed.get(key) ?? input.defaultValue;
+  if (input.value === saved) {
+    if (!pending) dateState?.failed.delete(key);
+    return;
+  }
+  await saveDraftField(key, input.value);
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
@@ -1950,14 +2072,7 @@ document.addEventListener("change", guarded(async ev => {
     return;
   }
   if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
-  if (t.dataset.action === "field") {
-    if (!t.reportValidity()) return;
-    const { key } = t.dataset;
-    const value = t.type === "checkbox" ? (t.checked ? t.value : "") : t.value.trim();
-    if (!validCaseField(key, value, S.form.fields.find(field => field.key === key)?.value)) return;
-    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
-    await refresh(["form", "gaps"]);
-  }
+  if (t.dataset.action === "field") return saveDraftControl(t);
   if (t.closest("form[data-action=attest]")) { S.attest[t.name] = t.checked; S.pkgError = null; render(); }
   if (t.closest("form[data-action=intake-attest]")) { S.intake[t.name] = t.checked; render(); }
   if (t.id === "intakeLang") { S.intake.lang = t.value; if (TENANT_MODE) try { localStorage.setItem("tp-intake-lang", t.value); } catch {} render(); }  // bug 8: kept after a reload
