@@ -70,6 +70,38 @@ maintainer for values:
 | `OCR_ENABLED` | Optional, default `true`: text in photos and scanned PDF pages is read on this server and becomes evidence text. `false` turns it off. |
 | `OCR_REQUEST_SECONDS` | Optional, default 40: the most one upload request spends on OCR (about 2 s per image). Later images are kept without their text, and the evidence says so. Keep it under the proxy's timeout (Cloudflare: 100 s). |
 
+## Keeping intake tokens out of the proxy log
+
+The API already masks `/i/<token>` and `/api/intake/<token>` in its own access log, and `/i/<token>` answers with `Referrer-Policy: no-referrer` so requests from the tenant page carry no `Referer` (#74).
+
+To keep tokens out of nginx's access log too (both the request path and any `Referer` sent by older tabs or external links), add these `map` and `log_format` directives in the `http` context outside `server {}`, and use that format in the TenantProof `server {}` block:
+
+```nginx
+# Outside server {} (http context): mask /i/<token> and /api/intake/<token>
+map $request $masked_request {
+    "~^(?<req_head>\S+\s+/(?:i|api/intake)/)[^/?#\s]+(?<req_tail>.*)$"  "${req_head}***${req_tail}";
+    default                                                             $request;
+}
+
+map $http_referer $masked_referer {
+    "~^(?<ref_head>(?:https?://[^/?#\s]+)?/(?:i|api/intake)/)[^/?#\s]+(?<ref_tail>.*)$"  "${ref_head}***${ref_tail}";
+    default                                                                               $http_referer;
+}
+
+log_format tenantproof '$remote_addr - $remote_user [$time_local] '
+                       '"$masked_request" $status $body_bytes_sent '
+                       '"$masked_referer" "$http_user_agent"';
+
+server {
+    # ...
+    access_log /var/log/nginx/tenantproof.access.log tenantproof;
+}
+```
+
+nginx's `error_log` still records the raw `request` line and `referrer` on failed requests (for example while the API container is restarting or when a request body exceeds `client_max_body_size`), and its format cannot be changed, so keep its retention short and do not share it.
+
+Access logs written before this change still contain tokens, so rotate them or wait out their retention.
+
 ## Updating the demo
 
 From the clone on the server (it tracks `dev`):

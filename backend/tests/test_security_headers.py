@@ -16,11 +16,19 @@ def test_the_expected_headers_are_the_configured_ones():
     assert {k.lower(): v for k, v in SECURITY_HEADERS.items()} == EXPECTED
 
 
-@pytest.mark.parametrize("path", ["/", "/healthz", "/favicon.ico", "/i/not-a-token"])
+@pytest.mark.parametrize("path", ["/", "/healthz", "/favicon.ico"])
 def test_the_ui_and_health_answers_carry_them(fresh_db, anon_client, path):
     r = anon_client.get(path)
     for name, value in EXPECTED.items():
         assert r.headers.get(name) == value, (path, name)
+    assert "content-security-policy" not in r.headers
+
+
+def test_the_tenant_intake_page_sends_no_referrer(fresh_db, anon_client):
+    r = anon_client.get("/i/not-a-token")
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("x-frame-options") == "DENY"
+    assert r.headers.get("referrer-policy") == "no-referrer"
     assert "content-security-policy" not in r.headers
 
 
