@@ -1,5 +1,6 @@
 import re
 from functools import lru_cache
+from importlib.util import find_spec
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -67,6 +68,15 @@ class Settings(BaseSettings):
         value = value.strip()
         if value and not _MODEL_NAME.match(value):
             raise ValueError("LLM_MODEL must be a model name such as claude-sonnet-5-5")
+        return value
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _provider_available(cls, value: str, info: ValidationInfo) -> str:
+        # The shared Settings change can ship before the Chat Completions runtime.
+        if value != "anthropic" and info.data.get("llm_mode") == "live":
+            if find_spec("app.services.agent.chat") is None:
+                raise ValueError("This release does not support the selected live LLM_PROVIDER")
         return value
 
     @field_validator("anthropic_base_url", "openai_compatible_base_url")

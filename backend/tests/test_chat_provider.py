@@ -3,13 +3,15 @@
 import asyncio
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from typing import Any
 
 import httpx
 import pytest
 
 from app.config import Settings
-from app.services.agent import llm
+from app.services.agent import chat, llm
 from app.services.agent.chat import ChatCompletionsProvider
 
 BASE_URL = "https://api.example.test/v1"
@@ -55,10 +57,11 @@ def tool_call(arguments: str = '{"fact":"Water leak"}') -> dict[str, Any]:
 
 def adapter(
     handler: Callable[[httpx.Request], httpx.Response], *, effort: str = "",
+    deadline_s: float = llm.CALL_TIMEOUT_S,
 ) -> ChatCompletionsProvider:
     return ChatCompletionsProvider(
         SECRET, "gpt-5-mini", provider="openai", base_url=BASE_URL, effort=effort,
-        transport=httpx.MockTransport(handler),
+        deadline_s=deadline_s, transport=httpx.MockTransport(handler),
     )
 
 
@@ -192,6 +195,129 @@ def test_redirect_is_not_followed_and_error_keeps_secrets_out() -> None:
         asyncio.run(adapter(handler).complete(request()))
     assert destinations == [f"{BASE_URL}/chat/completions"]
     assert SECRET not in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", [429, 500, 503])
+def test_retryable_http_response_retries_once_with_the_same_payload(failure: int) -> None:
+    payloads: list[bytes] = []
+
+    def handler(sent: httpx.Request) -> httpx.Response:
+        payloads.append(sent.content)
+        if len(payloads) == 1:
+            return httpx.Response(failure, headers={"Retry-After": "0"})
+        return response({"content": "Recovered."})
+
+    assert asyncio.run(adapter(handler).complete(request())).text == "Recovered."
+    assert len(payloads) == 2 and payloads[0] == payloads[1]
+
+
+@pytest.mark.parametrize("failure", [429, 500, 503, 400, 401, 403, 404, 408])
+def test_retry_limit_and_nonretryable_http_errors(failure: int) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(failure, headers={"Retry-After": "0"}, text=SECRET)
+
+    with pytest.raises(llm.LLMCallError, match=str(failure)) as caught:
+        asyncio.run(adapter(handler).complete(request()))
+    assert SECRET not in str(caught.value)
+    assert calls == (2 if failure == 429 or failure >= 500 else 1)
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ConnectTimeout])
+def test_connection_failure_retries_once_with_default_backoff(
+    monkeypatch: pytest.MonkeyPatch, failure: type[httpx.RequestError],
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        waits.append(delay)
+
+    def handler(sent: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise failure("mock connection failure", request=sent)
+        return response({"content": "Recovered."})
+
+    monkeypatch.setattr(chat.asyncio, "sleep", sleep)
+    assert asyncio.run(adapter(handler).complete(request())).text == "Recovered."
+    assert calls == 2 and waits == [0.5]
+
+
+@pytest.mark.parametrize("date_header", [False, True])
+def test_retry_after_accepts_seconds_and_an_http_date(
+    monkeypatch: pytest.MonkeyPatch, date_header: bool,
+) -> None:
+    delay_s = 20
+    retry_after = format_datetime(
+        datetime.now(UTC) + timedelta(seconds=delay_s), usegmt=True,
+    ) if date_header else str(delay_s)
+    calls = 0
+    waits: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        waits.append(delay)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"Retry-After": retry_after})
+        return response({"content": "Recovered."})
+
+    monkeypatch.setattr(chat.asyncio, "sleep", sleep)
+    assert asyncio.run(adapter(handler).complete(request())).text == "Recovered."
+    assert calls == 2 and len(waits) == 1
+    if date_header:
+        assert 0.5 < waits[0] <= delay_s
+    else:
+        assert waits == [delay_s]
+
+
+def test_retry_after_outside_the_budget_does_not_sleep_or_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def sleep(_: float) -> None:
+        pytest.fail("A Retry-After outside the remaining deadline should never be awaited")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, headers={"Retry-After": "90"})
+
+    monkeypatch.setattr(chat.asyncio, "sleep", sleep)
+    with pytest.raises(llm.LLMCallError, match="429"):
+        asyncio.run(adapter(handler, deadline_s=2).complete(request()))
+    assert calls == 1
+
+
+def test_stalled_retry_is_cancelled_by_the_overall_deadline() -> None:
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503, headers={"Retry-After": "0"})
+        await asyncio.Event().wait()
+        raise AssertionError("Mock request unexpectedly completed")
+
+    async def complete() -> None:
+        provider = ChatCompletionsProvider(
+            SECRET, "gpt-5-mini", base_url=BASE_URL, deadline_s=0.1,
+            transport=httpx.MockTransport(handler),
+        )
+        await asyncio.wait_for(provider.complete(request()), timeout=2)
+
+    with pytest.raises(llm.LLMTimeout):
+        asyncio.run(complete())
+    assert calls == 2
 
 
 API_KEYS = [

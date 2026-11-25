@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Literal
 
 import httpx
@@ -9,6 +11,7 @@ from pydantic import BaseModel, Field, NonNegativeInt, ValidationError
 
 from app.services.agent.llm import (
     CALL_TIMEOUT_S,
+    MAX_RETRIES,
     LLMCallError,
     LLMRequest,
     LLMResponse,
@@ -191,17 +194,13 @@ class ChatCompletionsProvider:
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         payload = self._payload(request)
+        deadline = asyncio.get_running_loop().time() + self.deadline_s
         try:
-            async with asyncio.timeout(self.deadline_s):
+            async with asyncio.timeout_at(deadline):
                 async with httpx.AsyncClient(
                     transport=self.transport, timeout=self.deadline_s, follow_redirects=False,
                 ) as client:
-                    response = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                        json=payload,
-                    )
-                response.raise_for_status()
+                    response = await self._post(client, payload, deadline)
                 return _result(response.json(), self.provider)
         except (TimeoutError, httpx.TimeoutException):
             raise LLMTimeout("provider request timed out") from None
@@ -211,3 +210,48 @@ class ChatCompletionsProvider:
             raise LLMCallError(type(exc).__name__) from None
         except ValueError:
             raise LLMCallError("Provider returned an invalid JSON response") from None
+
+
+    async def _post(
+        self, client: httpx.AsyncClient, payload: dict[str, Any], deadline: float
+    ) -> httpx.Response:
+        loop = asyncio.get_running_loop()
+        for attempt in range(MAX_RETRIES):
+            delay = 0.5 * 2**attempt
+            try:
+                return await self._post_once(client, payload)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if delay >= deadline - loop.time():
+                    raise
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code
+                if code != 429 and not 500 <= code <= 599:
+                    raise
+                delay = _retry_delay(exc.response, delay)
+                if delay >= deadline - loop.time():
+                    raise
+            await asyncio.sleep(delay)
+        return await self._post_once(client, payload)
+
+    async def _post_once(
+        self, client: httpx.AsyncClient, payload: dict[str, Any]
+    ) -> httpx.Response:
+        response = await client.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json=payload,
+        )
+        return response.raise_for_status()
+
+
+def _retry_delay(response: httpx.Response, fallback: float) -> float:
+    value = response.headers.get("Retry-After", "").strip()
+    if value.isascii() and value.isdecimal():
+        return float(value)
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())

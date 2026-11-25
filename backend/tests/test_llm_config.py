@@ -4,6 +4,7 @@ does with them. No network: the client is built but never called."""
 import pytest
 from pydantic import ValidationError
 
+from app import config
 from app.config import Settings
 from app.services.agent import llm
 
@@ -99,6 +100,15 @@ def test_live_provider_and_effort_are_read_from_environment(
     assert settings.llm_provider == "openai_compatible"
     assert settings.llm_effort == "high"
     assert settings.openai_compatible_base_url == "http://localhost:8080/v1"
+
+
+def test_standalone_config_refuses_live_provider_selection_before_adapter_is_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "find_spec", lambda _: None)
+    with pytest.raises(ValidationError, match="does not support the selected live LLM_PROVIDER"):
+        make(llm_mode="live", llm_provider="groq")
+    assert make(llm_mode="live", llm_provider="anthropic").llm_provider == "anthropic"
 
 
 @pytest.mark.parametrize("name", ["claude-sonnet-5-5", "deepseek-chat", "vendor/model:v1.2"])

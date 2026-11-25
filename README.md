@@ -102,16 +102,19 @@ through the process environment. Choose a model that supports function tools.
 For `openai_compatible`, set `OPENAI_COMPATIBLE_BASE_URL` to the API prefix, such as
 `https://host.example/v1`. For a custom Anthropic-compatible endpoint, keep
 `LLM_PROVIDER=anthropic` and set `ANTHROPIC_BASE_URL`. Evidence text is sent to the configured
-provider. Continuing a saved run requires the same provider, model, endpoint and effort.
+provider. Chat Completions retries rate limits, server errors and connection failures once within
+the original call deadline. If a response specifies `Retry-After`, the retry waits at least that
+long or stops if the wait would exceed the deadline. Continuing a saved run requires the same
+provider, model, endpoint and effort.
 Older live checkpoints have no stored configuration. Start a new analysis to use a live provider
 for those cases.
 
 `LLM_EFFORT` accepts `low`, `medium` or `high` on compatible reasoning models. DeepSeek accepts
 `low` or `high` here. When unset, Anthropic keeps its previous `medium` setting and the other
 adapters use their provider defaults. If a model rejects a configured effort, omit it or choose
-a supported option. Fixture mode never calls a live API. Existing recordings must be re-recorded
-with the new fingerprint, which includes message history, model and output limit.
-
+a supported option. Fixture mode never calls a live API. The fingerprint includes message history,
+model and output limit. The repository contains no recorded per-turn fixtures. Only old recordings
+held outside the repository need to be regenerated before replay.
 
 The key is read from the process environment only, never from a file. On the hosted demo with `claude-haiku-5-5`, a run takes about a minute and costs about one US cent; the run page shows an estimate. `RUN_BUDGET_S` (default 180) caps one run.
 
