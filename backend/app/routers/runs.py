@@ -166,6 +166,11 @@ def answer_run(
     pending = runner.paused_question(row)
     if pending is None:
         raise _reasons(status.HTTP_409_CONFLICT, "This run is not waiting for an answer")
+    if not runner.can_resume_with(row, provider):
+        raise _reasons(
+            status.HTTP_409_CONFLICT,
+            "Restore the model configuration used for this run or start a new analysis",
+        )
     text = answer
     hearing = None
     no_hearing = False

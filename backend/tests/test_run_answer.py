@@ -106,6 +106,73 @@ def test_an_answer_resumes_the_run_and_the_agent_gets_it(
     assert [request.fixture_key for request in later] == ["gaps-turn1"]
 
 
+def test_changed_model_cannot_claim_or_modify_a_paused_run(fresh_db, client, session):
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    provider = llm.FixtureProvider(model="first-model", scripted={"timeline-turn1": ask()})
+    row = asyncio.run(runner.execute_run(
+        session, runner.create_run(session, case), provider, InMemoryTextStore(),
+    ))
+    key = row.id
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    before = activity_lines(session)
+    api.dependency_overrides[runs_router.provider_dep] = lambda: llm.FixtureProvider(
+        model="second-model"
+    )
+    try:
+        response = client.post(URL.format(key), json={"answer": "2026-11-21"})
+    finally:
+        api.dependency_overrides.pop(runs_router.provider_dep, None)
+    assert response.status_code == 409, response.text
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    assert hearing(session) is None and activity_lines(session) == before
+
+
+def test_legacy_unbound_pause_cannot_resume_live(fresh_db, client, session):
+    row = paused_run(session)
+    key = row.id
+    before = activity_lines(session)
+    api.dependency_overrides[runs_router.provider_dep] = lambda: llm.AnthropicProvider(
+        "test-key", client=object(), base_url="https://new-provider.example",
+    )
+    try:
+        response = client.post(URL.format(key), json={"answer": "2026-11-21"})
+    finally:
+        api.dependency_overrides.pop(runs_router.provider_dep, None)
+    assert response.status_code == 409, response.text
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    assert hearing(session) is None and activity_lines(session) == before
+
+
+def test_crash_checkpoint_refuses_a_different_model_before_any_call(fresh_db, session):
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    saved_provider = llm.FixtureProvider(
+        model="recorded-model", scripted={"timeline-turn1": ask()},
+    )
+    row = asyncio.run(runner.execute_run(
+        session, runner.create_run(session, case), saved_provider, InMemoryTextStore(),
+    ))
+    key = row.id
+    row.steps = [
+        {
+            **step,
+            "status": "running",
+            "checkpoint": {**step["checkpoint"], "pending": None},
+        }
+        if step["key"] == "timeline" else step
+        for step in row.steps
+    ]
+    row.status = "running"
+    session.add(row)
+    session.commit()
+    with pytest.raises(llm.LLMConfigError, match="different model configuration"):
+        asyncio.run(runner.execute_run(
+            session, row, llm.FixtureProvider(model="new-model"), InMemoryTextStore(),
+        ))
+    assert status_of(session, key) == ("running", "running")
+
+
 def test_the_field_key_is_saved_with_the_pause_and_is_not_a_field_of_the_run(
     fresh_db, client, session: Session
 ) -> None:

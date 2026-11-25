@@ -43,7 +43,7 @@ What keeps the agent honest:
                               (cases, events,   (rate      (originals,
                                sessions, log)    limits)    stripped copies,
                                                             package zips)
-                                    LLM provider: Anthropic API (live) or recorded fixtures (tests)
+                                    LLM provider: live API (server-configured) or recorded fixtures (tests)
 ```
 
 The analysis run is a pipeline of steps: `ingest` (not built), `extract` facts, `timeline`, `rules` (official sources and the received-by deadline), `draft` (missing form fields) and `gaps`. A step can pause for the caseworker (`ask_caseworker`) and resume when they answer. Details: [BUILD_PLAN.md](BUILD_PLAN.md), the endpoints and shapes: [API_CONTRACT.md](API_CONTRACT.md), every deviation: [CONTRACT_CHANGES.md](CONTRACT_CHANGES.md), threats and controls: [SECURITY.md](SECURITY.md).
@@ -51,7 +51,7 @@ The analysis run is a pipeline of steps: `ingest` (not built), `extract` facts, 
 ## Tech stack
 
 - **Backend:** Python 3.12, FastAPI, SQLModel, Alembic, PostgreSQL 16, Redis 7 (rate limits), Argon2 password hashing, slowapi, fpdf2 and pypdf (PDFs), Pillow and pillow-heif (images), RapidFuzz (quote verification), managed with [uv](https://docs.astral.sh/uv/).
-- **Agent:** Anthropic Claude through the official SDK (default model `claude-sonnet-5-5`, any other via `LLM_MODEL`), tool-use loop, prompt caching, per-call and per-run time limits.
+- **Agent:** Anthropic Claude by default (`claude-sonnet-5-5`), with optional Chat Completions providers. The tool loop, citation checks and time limits apply to every provider.
 - **UI:** one plain `web/index.html` (no build step) served by the API; caseworker at `/`, tenant at `/i/{token}`. A mock mode runs it without a backend.
 - **Desktop:** an Electron 45 shell with a locked-down window (`desktop/`).
 - **Quality:** ruff and pyright, about 1,370 pytest tests against real Postgres and Redis, GitHub Actions CI.
@@ -84,6 +84,34 @@ By default `make up` starts with `LLM_MODE=fixture`, which replays recorded mode
 LLM_MODE=live ANTHROPIC_API_KEY=sk-ant-... make up
 # optional: LLM_MODEL=claude-haiku-5-5 (cheaper), ANTHROPIC_BASE_URL=https://... (an Anthropic-compatible API)
 ```
+
+For another provider, set `LLM_PROVIDER` and `LLM_MODEL` on the server and export its API key
+through the process environment. Choose a model that supports function tools.
+
+| `LLM_PROVIDER` | API key environment variable |
+|---|---|
+| `anthropic` (default) | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` |
+| `grok` | `XAI_API_KEY` |
+| `openai_compatible` | `OPENAI_COMPATIBLE_API_KEY` |
+
+For `openai_compatible`, set `OPENAI_COMPATIBLE_BASE_URL` to the API prefix, such as
+`https://host.example/v1`. For a custom Anthropic-compatible endpoint, keep
+`LLM_PROVIDER=anthropic` and set `ANTHROPIC_BASE_URL`. Evidence text is sent to the configured
+provider. Continuing a saved run requires the same provider, model, endpoint and effort.
+Older live checkpoints have no stored configuration. Start a new analysis to use a live provider
+for those cases.
+
+`LLM_EFFORT` accepts `low`, `medium` or `high` on compatible reasoning models. DeepSeek accepts
+`low` or `high` here. When unset, Anthropic keeps its previous `medium` setting and the other
+adapters use their provider defaults. If a model rejects a configured effort, omit it or choose
+a supported option. Fixture mode never calls a live API. Existing recordings must be re-recorded
+with the new fingerprint, which includes message history, model and output limit.
+
 
 The key is read from the process environment only, never from a file. On the hosted demo with `claude-haiku-5-5`, a run takes about a minute and costs about one US cent; the run page shows an estimate. `RUN_BUDGET_S` (default 180) caps one run.
 

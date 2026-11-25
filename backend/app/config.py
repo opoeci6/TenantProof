@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")
@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     llm_mode: Literal["live", "fixture"] = "live"
     # Live model name. Empty means the built-in default (`llm.MODEL`, claude-sonnet-5-5).
     llm_model: str = ""
+    llm_provider: Literal[
+        "anthropic", "openai", "openrouter", "groq", "deepseek", "gemini", "grok",
+        "openai_compatible",
+    ] = "anthropic"
+    # Empty uses the adapter default. Some reasoning models accept only a subset.
+    llm_effort: Literal["", "low", "medium", "high"] = ""
+    openai_compatible_base_url: str = ""
     # Base URL of an Anthropic-compatible API. Empty means Anthropic's own. The API key and all
     # evidence text sent to the model go to this host, so only https (or plain http to
     # localhost, for a local proxy) is accepted.
@@ -62,19 +69,20 @@ class Settings(BaseSettings):
             raise ValueError("LLM_MODEL must be a model name such as claude-sonnet-5-5")
         return value
 
-    @field_validator("anthropic_base_url")
+    @field_validator("anthropic_base_url", "openai_compatible_base_url")
     @classmethod
-    def _base_url(cls, value: str) -> str:
+    def _base_url(cls, value: str, info: ValidationInfo) -> str:
         value = value.strip().rstrip("/")
         if not value:
             return ""
         parts = urlsplit(value)
         secure = parts.scheme == "https" and bool(parts.hostname)
         local = parts.scheme == "http" and parts.hostname in _LOCAL_HOSTS
-        if not (secure or local) or parts.username or parts.password:
+        extras = (parts.username, parts.password, parts.query, parts.fragment)
+        if not (secure or local) or any(extras):
             raise ValueError(
-                "ANTHROPIC_BASE_URL must be an https URL (or http://localhost) without a "
-                "user name or password"
+                f"{str(info.field_name).upper()} must be an https URL (or http://localhost) "
+                "without a user name, password, query or fragment"
             )
         return value
 

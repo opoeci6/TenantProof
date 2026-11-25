@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from app.config import Settings
@@ -36,6 +37,60 @@ def test_request_hash_is_12_chars_and_tracks_system_and_tools() -> None:
     assert a != llm.request_hash(req(system="changed"))
     other_tools = req().model_copy(update={"tools": tool_specs(["finish", "create_gap"])})
     assert a != llm.request_hash(other_tools)
+
+
+def test_fixture_hash_changes_with_messages_model_and_token_budget(tmp_path: Path) -> None:
+    request = req()
+    changed = request.model_copy(update={
+        "messages": [llm.Message(role="user", content="different conversation")],
+    })
+    assert llm.request_hash(changed) != llm.request_hash(request)
+    assert llm.request_hash(request, model="another-model") != llm.request_hash(request)
+    assert llm.request_hash(request.model_copy(update={"max_tokens": 1024})) != (
+        llm.request_hash(request)
+    )
+
+    write_fixture(tmp_path, request)
+    with pytest.raises(llm.FixtureMismatch, match="re-record"):
+        run(llm.FixtureProvider(tmp_path, strict=True, model="another-model").complete(request))
+
+
+def test_fixture_hash_masks_only_the_run_tag_in_nested_messages() -> None:
+    def request(nonce: str, note: str) -> llm.LLMRequest:
+        tag = f"evidence-{nonce}"
+        return req(system_run=f"Evidence tag: {tag}").model_copy(update={
+            "messages": [llm.Message(role="user", content=[{
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": f"<{tag}>{note}</{tag}>",
+            }])],
+        })
+
+    baseline = request("aaaaaa111111", "text evidence-000000")
+    assert llm.request_hash(baseline) == llm.request_hash(
+        request("bbbbbb222222", "text evidence-000000")
+    )
+    assert llm.request_hash(baseline) != llm.request_hash(
+        request("bbbbbb222222", "text evidence-999999")
+    )
+
+
+def test_anthropic_client_does_not_forward_a_redirect(monkeypatch):
+    hosts = []
+
+    def send(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        return httpx.Response(307, headers={"Location": "https://unexpected.example/"})
+
+    make_client = llm.anthropic.DefaultAsyncHttpxClient
+    monkeypatch.setattr(
+        llm.anthropic, "DefaultAsyncHttpxClient",
+        lambda **kwargs: make_client(transport=httpx.MockTransport(send), **kwargs),
+    )
+    provider = llm.AnthropicProvider("test-key", base_url="https://configured.example")
+    with pytest.raises(llm.LLMCallError, match="307"):
+        run(provider.complete(req()))
+    assert hosts == ["configured.example"]
 
 
 def test_request_hash_tracks_a_tool_description_and_schema() -> None:

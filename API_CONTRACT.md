@@ -54,7 +54,7 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | POST | `/cases/{case_id}/runs` | `Run` | Starts analysis, returns immediately with `status: "running"`. |
 | GET | `/cases/{case_id}/runs/latest` | `Run` | 404 if none. |
 | GET | `/runs/{run_id}` | `Run` | UI polls every ~1 s until `status` is not `running`. |
-| POST | `/runs/{run_id}/answer` | `Run` | Body: `{ answer }`, a string of 1 to 500 characters. Resumes a run paused by `ask_caseworker` and returns it with `status: "running"`. 404 for an unknown run or another org's run, 409 when the run is not `needs_input` or this pause was already answered, 422 `{ detail: { reasons } }` when the answer is not a valid date for a date question (the run stays paused). See "Answering a paused run". |
+| POST | `/runs/{run_id}/answer` | `Run` | Body: `{ answer }`, a string of 1 to 500 characters. Resumes a run paused by `ask_caseworker` and returns it with `status: "running"`. 404 for an unknown run or another org's run, 409 when the run is not `needs_input`, this pause was already answered, or the configured model connection differs from the one used for the paused run, 422 `{ detail: { reasons } }` when the answer is not a valid date for a date question (the run stays paused). See "Answering a paused run". |
 | GET | `/cases/{case_id}/timeline` | `TimelineEvent[]` | Sorted by date. |
 | PATCH | `/timeline/{event_id}` | `TimelineEvent` | Body: `{ review_status, title?, description?, date?, caseworker_note? }` |
 | GET | `/cases/{case_id}/gaps` | `Gap[]` | |
