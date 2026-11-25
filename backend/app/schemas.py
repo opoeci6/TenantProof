@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field, model_validator
 
 Language = str
 ApplicantRole = Literal["tenant", "landlord"]
+EvidenceKind = Literal["lease", "photo", "messages", "receipt", "letter", "other"]
+EvidenceProcessing = Literal["queued", "processing", "done", "failed"]
+FormFieldStatus = Literal["auto_filled", "needs_confirmation", "missing", "user_entered"]
+LegalSourceKind = Literal["statute", "policy", "form"]
+LegalVerifyStatus = Literal["unchanged", "changed", "unreachable", "unverified"]
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
@@ -121,7 +126,7 @@ class EvidenceItem(BaseModel):
     id: str
     label: str
     filename: str
-    kind: Literal["lease", "photo", "messages", "receipt", "letter", "other"]
+    kind: EvidenceKind
     mime: str
     size_bytes: int
     sha256: str
@@ -130,7 +135,7 @@ class EvidenceItem(BaseModel):
     format_check: FormatCheck
     metadata: EvidenceMetadata
     metadata_stripped_for_ai: bool
-    processing: Literal["queued", "processing", "done", "failed"]
+    processing: EvidenceProcessing
     error: str | None
     # #97: GET /cases/{case_id}/evidence/{id}/preview serves a copy without EXIF or GPS
     has_preview: bool = False
@@ -255,10 +260,10 @@ class Gap(BaseModel):
 class LegalSource(BaseModel):
     id: str
     title: str
-    kind: Literal["statute", "policy", "form"]
+    kind: LegalSourceKind
     url: str | None
     last_verified_at: str | None
-    verify_status: Literal["unchanged", "changed", "unreachable", "unverified"]
+    verify_status: LegalVerifyStatus
     used_for: str
 
 
@@ -267,7 +272,7 @@ class FormField(BaseModel):
     label: str
     value: str | None
     required: bool
-    status: Literal["auto_filled", "needs_confirmation", "missing", "user_entered"]
+    status: FormFieldStatus
     sources: list[SourceRef]
     note: str | None = None
 
