@@ -66,7 +66,7 @@ The applicant-role request, role-specific restrictions and draft PDF endpoint do
 | POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
 | GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. See [Form J draft fields](#form-j-draft-fields) for the F1–F3 rollout (PR #143). |
-| GET | `/cases/{case_id}/form-draft/pdf` | PDF (`application/pdf`) | Partial unsigned draft for landlord applicants. Signed-in caseworker in the case org only; 409 for tenant applications. Sends `Cache-Control: private, no-store`. |
+| GET | `/cases/{case_id}/form-draft/pdf` | PDF (`application/pdf`) | Partial unsigned draft for landlord applicants. Lists the case’s supporting files by exhibit label, filename and SHA-256. The index identifies originals for reference when preparing filing copies. Signed-in caseworker in the case org only; 409 for tenant applications. Sends `Cache-Control: private, no-store`. |
 | PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body `{ value }`. A nonempty value becomes `user_entered`. An empty value clears the field to `missing` with `value: null`. 404 for keys outside the case’s applicant role. See [Form J draft fields](#form-j-draft-fields) for accepted keys and validation. |
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 for landlord cases, blocking gaps, or missing tenant attestation. |
@@ -111,6 +111,7 @@ type User = { id: string; name: string; role: "caseworker"; org: { id: string; n
 
 type CaseSummary = {
   id: string;
+  applicant_role: "tenant" | "landlord";
   tenant_name: string;
   title: string;
   unit: string;

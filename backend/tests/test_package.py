@@ -113,6 +113,20 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
         saved = client.patch(f"{base}/form-draft/fields/{key}", json={"value": value})
         assert saved.is_success, saved.text
 
+    filename = "Landlord evidence original.txt"
+    evidence = b"Caseworker evidence for the landlord case."
+    upload = client.post(f"{base}/evidence", files=[("file", (filename, evidence, "text/plain"))])
+    assert upload.is_success, upload.text
+    landlord_item, = upload.json()
+
+    other_filename = "Another case evidence.txt"
+    other_evidence = b"Caseworker evidence on a different case in the same organization."
+    upload = client.post(
+        f"/api/cases/{CASE}/evidence",
+        files=[("file", (other_filename, other_evidence, "text/plain"))],
+    )
+    assert upload.is_success, upload.text
+
     draft = client.get(draft_pdf)
     assert draft.is_success, draft.text
     assert draft.headers["content-type"] == "application/pdf"
@@ -120,6 +134,10 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
     assert draft.headers["content-disposition"].endswith('-draft.pdf"')
     text = pdf_text(draft.content)
     assert "Landlord applicant" in text and "Tenant respondent" in text
+    assert "Summary of events" not in text
+    assert "Evidence index" in text
+    assert landlord_item["label"] in text and filename in text and sha(evidence) in text
+    assert other_filename not in text and sha(other_evidence) not in text
     assert "Landlord requests" in text and "Tenant requests" not in text
     assert values["landlord_request_termination_other_reason"] in text
     assert "Unpaid rent" not in text and values["landlord_request_unpaid_rent_reason"] not in text
@@ -133,11 +151,23 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
     assert updated.is_success, updated.text
     text = pdf_text(updated.content)
     assert "Unpaid rent" in text and values["landlord_request_unpaid_rent_reason"] in text
+    assert "Payment of money" in text and "(reason not filled in)" not in text
     assert values["tenant_email"] in text and values["landlord_email"] in text
+
+    saved = client.patch(
+        f"{base}/form-draft/fields/landlord_request_unpaid_rent", json={"value": ""},
+    )
+    assert saved.is_success, saved.text
+    updated = client.get(draft_pdf)
+    assert updated.is_success, updated.text
+    text = pdf_text(updated.content)
+    assert "Payment of money" in text and "(reason not filled in)" in text
+    assert "Unpaid rent" not in text and values["landlord_request_unpaid_rent_reason"] not in text
 
     make_ready(client)
     build(client)
-    assert "application_draft.pdf" in unzip(download(client).content)
+    application = unzip(download(client).content)["application_draft.pdf"]
+    assert "Summary of events" in pdf_text(application)
 
 
 def test_downloaded_application_and_text_evidence_keep_words_intact(fresh_db, client):

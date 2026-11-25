@@ -46,6 +46,8 @@ def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, se
     # in the caller's caseload, openable
     listed = {c["id"]: c for c in client.get(URL).json()}
     assert body["id"] in listed and listed[body["id"]]["has_demo_data"] is True
+    assert listed[body["id"]]["applicant_role"] == "tenant"
+    assert listed["case_demo_001"]["applicant_role"] == "tenant"
 
 
 @pytest.mark.parametrize("role_body", [{}, {"applicant_role": "tenant"}])
@@ -63,6 +65,8 @@ def test_landlord_case_gets_a_scoped_manual_draft(fresh_db, client, session):
     base = f"{URL}/{created['id']}"
     assert created["applicant_role"] == "landlord"
     assert client.get(base).json()["applicant_role"] == "landlord"
+    listed = {item["id"]: item for item in client.get(URL).json()}
+    assert listed[created["id"]]["applicant_role"] == "landlord"
     row = session.get(CaseRow, created["id"])
     assert row is not None and row.applicant_role == "landlord"
     draft = client.get(f"{base}/form-draft").json()

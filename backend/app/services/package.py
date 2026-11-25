@@ -263,13 +263,17 @@ def _write_requests(
         (key, label) for key, label in requests.items()
         if values.get(key) == "yes" and (key not in payment_options or payment_selected)
     ]
+    payment_has_reasoned_option = any(
+        key in payment_options and values.get(f"{key}_reason") for key, _ in selected
+    )
     if selected:
         _write(pdf, f"{applicant_role.title()} requests", bold=True, size=12, gap=2)
         for key, label in selected:
             _write(pdf, label, bold=True, gap=0)
             reason = values.get(f"{key}_reason")
-            if reason or key != "request_payment":
-                _write(pdf, reason or "(reason not filled in)")
+            if not reason and key == payment_key and (not landlord or payment_has_reasoned_option):
+                continue
+            _write(pdf, reason or "(reason not filled in)")
     _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
 
 
@@ -291,8 +295,24 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
         pdf, (field for field in draft.fields if field.key in F2_FIELD_KEYS), values,
     )
     _write_requests(pdf, values, case.applicant_role)
-    _write(pdf, "Summary of events", bold=True, size=12, gap=2)
-    _write(pdf, draft.narrative.text or "(no accepted events)")
+    if case.applicant_role == "landlord":
+        evidence = session.exec(
+            select(EvidenceRow)
+            .where(EvidenceRow.case_id == case.id)
+            .order_by(col(EvidenceRow.position), col(EvidenceRow.id))
+        ).all()
+        if evidence:
+            _write(pdf, "Evidence index", bold=True, size=12, gap=2)
+            _write(
+                pdf, "This index identifies original files. Check formats and remove location "
+                "data from filing copies.", size=9,
+            )
+            for item in evidence:
+                _write(pdf, f"{item.label} · {item.filename}", bold=True, gap=0)
+                _write(pdf, f"SHA-256: {item.sha256}", size=9)
+    else:
+        _write(pdf, "Summary of events", bold=True, size=12, gap=2)
+        _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())
 
 

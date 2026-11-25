@@ -90,7 +90,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
 .panel-pad{padding:18px}
 /* --- new case (#41) --- */
-.new-case{display:grid;gap:12px;max-width:560px;margin:0 0 16px}.new-case label{display:grid;gap:4px;font-weight:600;font-size:13.5px}.nc-actions{display:flex;gap:8px;flex-wrap:wrap}
+.new-case{display:grid;gap:12px;max-width:560px;margin:0 0 16px}.new-case label:not([hidden]){display:grid;gap:4px;font-weight:600;font-size:13.5px}.nc-actions{display:flex;gap:8px;flex-wrap:wrap}
 /* --- end new case --- */
 .note{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--ink-2);background:var(--surface-2);border-radius:var(--r);padding:10px 12px}
 .note b{color:var(--ink)}
@@ -885,9 +885,9 @@ function formFieldCounts(fields) {
     reqMissing: visible.filter(field => field.required && !field.value).length
   };
 }
-function railMeta(st, evidenceCount) {
+function railMeta(st, evidenceCount, landlord = false) {
   return {
-    evidence: `${plural(evidenceCount, "file")} · from tenant`,
+    evidence: `${plural(evidenceCount, "file")} · ${landlord ? "caseworker uploads" : "from tenant"}`,
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
     gaps: st.gaps === 0 ? NOTHING : st.blocking ? `${st.blocking} required open` : st.waiting ? `${st.waiting} waiting for tenant` : plural(st.recommended, "suggestion"),
     form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
@@ -1140,7 +1140,7 @@ function renderChrome() {
     : `<strong>${esc(S.me ? S.me.org.name : "")}</strong><span>${S.me ? `Signed in as ${esc(S.me.name)}, caseworker` : ""}</span>`;
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
-  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length);
+  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length, landlordApplication());
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
@@ -1166,6 +1166,7 @@ const NEW_CASE_LANGS = ["en", "zh", "fr", "es", "ru", "hi"];  // the languages t
 function newCaseForm() {
   const n = S.newCase; if (!n) return "";
   const v = k => esc(n.values[k] || "");
+  const landlord = n.values.applicant_role === "landlord";
   const opts = `<option value="" disabled${n.values.tenant_language ? "" : " selected"}>Choose…</option>` + NEW_CASE_LANGS.map(k => `<option value="${k}"${n.values.tenant_language === k ? " selected" : ""}>${esc(langLabel(k))}</option>`).join("");
   return `<form class="panel panel-pad new-case" data-action="create-case" aria-labelledby="nc-h">
     <h2 class="section-h" id="nc-h">New case</h2>
@@ -1177,7 +1178,7 @@ function newCaseForm() {
       <option value="landlord"${n.values.applicant_role === "landlord" ? " selected" : ""}>Landlord</option>
     </select></label>
     <label>Tenant name<input class="field" name="tenant_name" maxlength="120" required autocomplete="off" value="${v("tenant_name")}"></label>
-    <label>Tenant’s preferred language<select class="field" name="tenant_language" required>${opts}</select></label>
+    <label${landlord ? " hidden" : ""}>Tenant’s preferred language<select class="field" name="tenant_language" required${landlord ? " disabled" : ""}>${opts}</select></label>
     <label>Unit address<input class="field" name="unit" maxlength="200" required autocomplete="off" value="${v("unit")}"></label>
     <label>What is wrong<input class="field" name="title" maxlength="120" required autocomplete="off" placeholder="For example: water leak and mould in the bathroom" value="${v("title")}"></label>
     <div class="nc-actions"><button class="btn primary" type="submit"${n.busy ? " disabled" : ""}>${n.busy ? "Creating…" : "Create case"}</button><button class="btn" type="button" data-action="cancel-new-case"${n.busy ? " disabled" : ""}>Cancel</button></div>
@@ -1185,12 +1186,13 @@ function newCaseForm() {
 }
 async function createCase(form) {
   const fd = new FormData(form);
-  const body = Object.fromEntries(["applicant_role", "tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
-  S.newCase = { values: body, busy: true, error: null }; render();
+  const values = Object.fromEntries(["applicant_role", "tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
+  const body = values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values;
+  S.newCase = { values, busy: true, error: null }; render();
   let made;
   try { made = await request("POST", "/cases", body); }
   catch (err) {
-    S.newCase = { values: body, busy: false, error: err.message }; render();
+    S.newCase = { values, busy: false, error: err.message }; render();
     // The message sits above the fields, so after clicking Create it can be scrolled out of view.
     const note = document.querySelector("form.new-case .note.bad"); if (note) note.scrollIntoView({ block: "center" });
     return;
@@ -1209,7 +1211,7 @@ function mockNewCase(body) {
   const b = body || {}, blank = ["tenant_name", "unit", "title"].filter(k => !String(b[k] || "").trim());
   if (blank.length || !["tenant", "landlord"].includes(b.applicant_role) || !NEW_CASE_LANGS.includes(b.tenant_language)) throw Object.assign(new Error("Fill in every field"), { status: 422 });
   const id = `case_mock_${db.otherCases.length + 1}`;
-  db.otherCases.push({ id, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
+  db.otherCases.push({ id, applicant_role: b.applicant_role, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
   return { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true };
 }
 /* --- end new case --- */
@@ -1228,17 +1230,18 @@ function viewCases() {
   const week = cs.filter(c => c._days !== null && c._days !== undefined && c._days <= 7).length;
   const rows = cs.map(c => {
     const fresh = notAnalysed(c);  // a finished-looking stage with no analysis behind it
+    const landlord = c.applicant_role === "landlord";
     const [stLabel, stCls] = fresh ? ["Not analysed yet", "plain"] : STAGE[c.stage];
     const dl = c.next_deadline ? `<span class="${c._days <= 7 ? "soon" : ""}">${esc(fmtDay(c.next_deadline.date))}</span><small>${esc(deadlineLabel(c.next_deadline.label).replace(/hearing (\d{4}-\d\d-\d\d)/, (_, d) => "hearing " + fmtDay(d)))}</small>` : `<span class="muted">No hearing yet</span>`;
     const open = [c.open_blocking ? `<span style="color:var(--bad)">${c.open_blocking} required open</span>` : "", c.pending_review ? `<span>${plural(c.pending_review, "event")} to review</span>` : ""].filter(Boolean).join("") || `<span class="muted">—</span>`;
     const openable = !!c.has_demo_data, tag = openable ? "button" : "div";
     return `<${tag} class="cl-row p-${c.priority}${openable ? "" : " demo"}" ${openable ? `data-action="open-case" data-id="${c.id}" type="button"` : `role="listitem" aria-disabled="true"`}>
       <span class="cl-stripe"></span>
-      <span class="cl-who"><strong>${esc(c.tenant_name)}${openable ? "" : `<span class="pill plain demo-tag">Demo row</span>`}</strong><span>${esc(c.title)} · ${esc(c.unit)}</span></span>
+      <span class="cl-who"><strong>${esc(c.tenant_name)}${openable ? "" : `<span class="pill plain demo-tag">Demo row</span>`}</strong><span>${landlord ? "Landlord application · " : ""}${esc(c.title)} · ${esc(c.unit)}</span></span>
       <span class="cl-stage"><span class="pill ${stCls}">${stLabel}</span></span>
       <span class="cl-dead">${dl}</span>
       <span class="cl-open">${open}</span>
-      <span class="cl-lang muted">${esc(langLabel(c.tenant_language))}</span>
+      <span class="cl-lang muted">${landlord ? "—" : esc(langLabel(c.tenant_language))}</span>
       <span class="cl-reason">${fresh ? (openable ? "Not analysed yet. Open the case and run the analysis." : "Not analysed yet.") : `${c.priority === "high" ? "High priority: " : ""}${esc(c.priority_reason)}`}</span>
     </${tag}>`;
   }).join("");
@@ -1268,7 +1271,7 @@ function viewEvidence() {
       <dl class="kv">${mdRows}</dl>
       <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span></div></div>`;
   }).join("");
-  return `<div class="view-head"><div><h1>Evidence</h1><p>${landlordApplication() ? "Add supporting files for the landlord application. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time." : "Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model."}</p></div></div>
+  return `<div class="view-head"><div><h1>Evidence</h1><p>${landlordApplication() ? "The draft PDF lists the original supporting files. Review copies separately before filing." : "Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model."}</p></div></div>
     ${landlordApplication() ? "" : `<div class="panel panel-pad intake-panel">
       ${!(S.case.tenant.preferred_language in I18N) ? `<div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span><span class="muted">The tenant page has no ${esc(langLabel(S.case.tenant.preferred_language))} text yet, so no link can be sent or previewed for this case.</span></div>` : `
       <div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span>
@@ -1938,6 +1941,14 @@ document.addEventListener("focusout", guarded(async ev => {
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
+  const newCase = t.closest("form.new-case");
+  if (t.name === "applicant_role" && newCase) {
+    const language = newCase.elements.namedItem("tenant_language");
+    const landlord = t.value === "landlord";
+    language.disabled = landlord;
+    language.closest("label").hidden = landlord;
+    return;
+  }
   if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
   if (t.dataset.action === "field") {
     if (!t.reportValidity()) return;
@@ -1955,7 +1966,7 @@ document.addEventListener("change", guarded(async ev => {
 }));
 async function handleFiles(files) {
   try { await uploadFiles(`${C}/evidence`, [...files]); } catch (err) { toast(err.message); return; } /* WS1: an error toast is not overwritten */
-  toast(`${plural(files.length, "file")} added. Run the analysis again to include them.`);
+  toast(`${plural(files.length, "file")} added. ${landlordApplication() ? "The draft PDF will list them." : "Run the analysis again to include them."}`);
   await refresh(["evidence"]);
 }
 function wireDrop() {

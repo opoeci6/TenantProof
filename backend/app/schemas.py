@@ -45,6 +45,7 @@ class Deadline(BaseModel):
 
 class CaseSummary(BaseModel):
     id: str
+    applicant_role: ApplicantRole = "tenant"
     tenant_name: str
     title: str
     unit: str
