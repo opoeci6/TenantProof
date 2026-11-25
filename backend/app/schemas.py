@@ -80,6 +80,7 @@ class Intake(BaseModel):
 
 class Case(BaseModel):
     id: str
+    applicant_role: ApplicantRole = "tenant"
     dispute_type: Literal["maintenance"]
     title: str
     unit: str
@@ -378,6 +379,12 @@ class CaseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)  # one line: what is wrong
     # Stripped before the length checks, so a whitespace-only value is refused as empty.
     model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ApplicantCaseCreate(CaseCreate):
+    """New case request for the role-aware Form J workflow."""
+
+    applicant_role: ApplicantRole = "tenant"
 
 
 class AttestationsIn(BaseModel):
