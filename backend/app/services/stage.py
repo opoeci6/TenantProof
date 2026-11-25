@@ -18,8 +18,9 @@ def refresh_stage(
     Caller commits."""
     session.flush()
     if case.applicant_role == "landlord":
-        if case.stage != "hearing_scheduled":
-            case.stage = "needs_review"
+        if case.stage in ("needs_review", "hearing_scheduled"):
+            return
+        case.stage = "needs_review"
         case.updated_at = datetime.now(UTC)
         session.add(case)
         return

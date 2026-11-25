@@ -7,7 +7,7 @@ import pytest
 from sqlmodel import Session, select
 
 from app.main import api
-from app.models import ActivityRow, CaseRow, FormFieldRow, RunRow
+from app.models import ActivityRow, CaseRow, FormFieldRow, GapRow, IntakeTokenRow, RunRow
 from app.routers import runs as runs_router
 from app.services import cases as cases_service
 from app.services.agent import llm
@@ -48,32 +48,70 @@ def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, se
     assert body["id"] in listed and listed[body["id"]]["has_demo_data"] is True
 
 
-@pytest.mark.parametrize(("role", "allowed", "excluded"), [
-    ("tenant", "request_repairs", "landlord_request_unpaid_rent"),
-    ("landlord", "landlord_request_unpaid_rent", "request_repairs"),
-])
-def test_explicit_applicant_roles_get_scoped_manual_drafts(
-    fresh_db, client, session, role, allowed, excluded,
-):
-    created = create(client, applicant_role=role)
+@pytest.mark.parametrize("role_body", [{}, {"applicant_role": "tenant"}])
+def test_new_tenant_case_leaves_core_fields_for_analysis(fresh_db, client, session, role_body):
+    created = create(client, **role_body)
+    case_id = created["id"]
+    assert created["applicant_role"] == "tenant"
+    assert client.get(f"{URL}/{case_id}/form-draft").json()["fields"] == []
+    assert session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case_id)).first() is None
+    assert client.post(f"{URL}/{case_id}/intake-link").status_code == 200
+
+
+def test_landlord_case_gets_a_scoped_manual_draft(fresh_db, client, session):
+    created = create(client, applicant_role="landlord")
     base = f"{URL}/{created['id']}"
-    assert created["applicant_role"] == role
-    assert client.get(base).json()["applicant_role"] == role
+    assert created["applicant_role"] == "landlord"
+    assert client.get(base).json()["applicant_role"] == "landlord"
     row = session.get(CaseRow, created["id"])
-    assert row is not None and row.applicant_role == role
+    assert row is not None and row.applicant_role == "landlord"
     draft = client.get(f"{base}/form-draft").json()
     fields = {field["key"]: field for field in draft["fields"]}
     assert fields["tenant_name"]["value"] == BODY["tenant_name"]
     assert fields["rental_address"]["value"] == BODY["unit"]
     assert {"tenant_email", "landlord_email", "move_in_date", "written_lease"} <= fields.keys()
-    assert allowed in fields and f"{allowed}_reason" in fields
-    assert excluded not in fields and f"{excluded}_reason" not in fields
-    assert ("remedy" in fields) == (role == "tenant")
-    assert client.patch(f"{base}/form-draft/fields/{allowed}", json={"value": "yes"}).is_success
+    assert {"landlord_request_unpaid_rent", "landlord_request_unpaid_rent_reason"} <= fields.keys()
+    assert {"remedy", "request_repairs", "request_repairs_reason"}.isdisjoint(fields)
+    key = "landlord_request_unpaid_rent"
+    r = client.patch(f"{base}/form-draft/fields/{key}", json={"value": "yes"})
+    assert r.is_success, r.text
+
+
+def test_landlord_intake_link_refusal_leaves_case_unchanged(fresh_db, client, session):
+    case_id = create(client, applicant_role="landlord")["id"]
+    response = client.post(f"{URL}/{case_id}/intake-link")
+    assert response.status_code == 409, response.text
+    row = session.get(CaseRow, case_id)
+    assert row is not None and row.intake_status == "not_sent" and row.intake_sent_at is None
+    tokens = select(IntakeTokenRow).where(IntakeTokenRow.case_id == case_id)
+    assert session.exec(tokens).first() is None
+    assert cases_service_log(session, case_id) == "Created the case"
+
+
+@pytest.mark.parametrize(("role", "excluded"), [
+    ("tenant", "landlord_request_unpaid_rent"),
+    ("landlord", "request_repairs"),
+])
+def test_form_and_gap_updates_reject_another_roles_field(
+    fresh_db, client, session, role, excluded,
+):
+    case_id = create(client, applicant_role=role)["id"]
     for key in (excluded, f"{excluded}_reason"):
-        r = client.patch(f"{base}/form-draft/fields/{key}", json={"value": "yes"})
+        r = client.patch(f"{URL}/{case_id}/form-draft/fields/{key}", json={"value": "yes"})
         assert r.status_code == 404, r.text
-        assert session.get(FormFieldRow, (created["id"], key)) is None
+        assert session.get(FormFieldRow, (case_id, key)) is None
+
+    gap = GapRow(
+        id="gap_outside_applicant_role", case_id=case_id, severity="blocking",
+        title="Review the request", why="The draft needs review", how_to_fix="Confirm the request",
+        input={"kind": "field", "field_key": excluded},
+    )
+    session.add(gap)
+    session.commit()
+    response = client.patch(f"/api/gaps/{gap.id}", json={"status": "dismissed"})
+    assert response.status_code == 404, response.text
+    session.refresh(gap)
+    assert gap.status == "open"
 
 
 def test_the_form_name_and_disclaimer_are_the_seeded_cases(fresh_db, client, session: Session):

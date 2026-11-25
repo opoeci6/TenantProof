@@ -29,7 +29,7 @@ def download_manual_form_draft(case: CaseDep, session: SessionDep, user: UserDep
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="tenantproof-{case.id}-draft.pdf"',
-            "Cache-Control": "no-store",
+            "Cache-Control": "private, no-store",
         },
     )
 

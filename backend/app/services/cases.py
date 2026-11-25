@@ -10,7 +10,7 @@ import uuid
 from sqlmodel import Session
 
 from app.models import CaseRow, FormFieldRow, UserRow
-from app.schemas import CaseCreate
+from app.schemas import ApplicantCaseCreate, CaseCreate
 from app.services import activity
 from app.services.agent.tools import clean_text
 from app.services.form_fields import field_allowed_for_case
@@ -69,7 +69,7 @@ def problems(body: CaseCreate) -> list[str]:
     return reasons
 
 
-def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
+def create_case(session: Session, user: UserRow, body: ApplicantCaseCreate) -> CaseRow:
     """The new case, in the user's org and assigned to them. Caller checks `problems` first, and
     commits."""
     text = cleaned(body)
@@ -93,7 +93,7 @@ def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
     )
     session.add(case)
     session.flush()  # the activity row's foreign key needs the case row first
-    if "applicant_role" in body.model_fields_set:
+    if landlord_applicant:
         values = {"tenant_name": case.tenant_name, "rental_address": case.unit}
         for position, spec in enumerate(FORM_J_FIELDS):
             if not field_allowed_for_case(case, spec.key):

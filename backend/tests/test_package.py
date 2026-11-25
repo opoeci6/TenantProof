@@ -91,6 +91,7 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
     assert client.post(f"{base}/runs").status_code == 409
     for blocked in (
         client.post(f"{base}/package"),
+        client.post(f"{base}/package", json=ATTESTED),
         client.get(f"{base}/package/download"),
         client.get(f"{base}/package/files/application_draft.pdf"),
     ):
@@ -115,6 +116,7 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
     draft = client.get(draft_pdf)
     assert draft.is_success, draft.text
     assert draft.headers["content-type"] == "application/pdf"
+    assert draft.headers["cache-control"] == "private, no-store"
     assert draft.headers["content-disposition"].endswith('-draft.pdf"')
     text = pdf_text(draft.content)
     assert "Landlord applicant" in text and "Tenant respondent" in text

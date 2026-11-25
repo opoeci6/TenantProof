@@ -372,7 +372,6 @@ class CaseCreate(BaseModel):
     """Request side of POST /cases (CONTRACT_CHANGES #35). The org, the assignee and the stage come
     from the server, never from the body; `dispute_type` is always "maintenance"."""
 
-    applicant_role: ApplicantRole = "tenant"
     tenant_name: str = Field(min_length=1, max_length=120)
     # The languages the tenant page has text for: en, zh, fr, es, ru, hi (no Arabic yet).
     tenant_language: Literal["en", "zh", "fr", "es", "ru", "hi"]
@@ -380,6 +379,12 @@ class CaseCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)  # one line: what is wrong
     # Stripped before the length checks, so a whitespace-only value is refused as empty.
     model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ApplicantCaseCreate(CaseCreate):
+    """New case request for the role-aware Form J workflow."""
+
+    applicant_role: ApplicantRole = "tenant"
 
 
 class AttestationsIn(BaseModel):

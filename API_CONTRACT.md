@@ -39,15 +39,17 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 
 ### Caseworker app
 
+The applicant-role request, role-specific restrictions and draft PDF endpoint documented here take effect when [PR #154](https://github.com/opoeci6/TenantProof/pull/154) ships.
+
 | Method | Path | Returns | Notes |
 |---|---|---|---|
 | POST | `/auth/login` | `User` | Body: `{ email, password }`. Sets the session cookie (httpOnly, SameSite=Lax). 401 `Wrong email or password` for an unknown email and a wrong password alike; 429 when rate limited. |
 | POST | `/auth/logout` | `{ ok }` | Ends the session and clears the cookie. |
 | GET | `/me` | `User` | Signed-in caseworker (401 when signed out). |
 | GET | `/cases` | `CaseSummary[]` | Caseload, already sorted by priority (rule-based). |
-| POST | `/cases` | `Case` | Creates a case in the signed-in caseworker's org, assigned to them. Body: `CaseCreate` `{ applicant_role?, tenant_name, tenant_language, unit, title }`; `tenant_language` is one of `en`, `zh`, `fr`, `es`, `ru`, `hi`. `applicant_role` accepts `tenant` or `landlord` and defaults to `tenant` for callers that omit it. An explicit role prepares a draft immediately. 422 `{ detail: { reasons } }` for invalid or unknown values. |
+| POST | `/cases` | `Case` | Creates a case in the signed-in caseworker's org, assigned to them. Body: `ApplicantCaseCreate` `{ applicant_role?, tenant_name, tenant_language, unit, title }`; `tenant_language` is one of `en`, `zh`, `fr`, `es`, `ru`, `hi`. `applicant_role` accepts `tenant` or `landlord` and defaults to `tenant` for callers that omit it. Landlord cases prepare a manual draft immediately. Tenant cases initialize the core form fields during analysis. 422 `{ detail: { reasons } }` for invalid values or extra fields. See CONTRACT_CHANGES #35. |
 | GET | `/cases/{case_id}` | `Case` | Includes the stored `applicant_role`. |
-| POST | `/cases/{case_id}/intake-link` | `Intake` | Creates or re-sends the tenant link. |
+| POST | `/cases/{case_id}/intake-link` | `Intake` | Creates or re-sends the tenant link. 409 for landlord cases. |
 | GET | `/cases/{case_id}/evidence` | `EvidenceItem[]` | |
 | POST | `/cases/{case_id}/evidence` | `EvidenceItem` | Caseworker upload, `multipart/form-data`, field `file`. |
 | GET | `/cases/{case_id}/evidence/{evidence_id}/preview` | image (`image/jpeg` or `image/png`) | The photo as the caseworker sees it: the copy made at upload without EXIF or GPS, never the original (a HEIC's copy is a JPEG). `Cache-Control: private, no-cache` with `ETag: "<sha256 of the copy>"`, so the browser checks the session on every view and an unchanged copy answers 304 without its bytes. 404 for another org's case, an item in another case, or an item with `has_preview: false`; 401 when not signed in (CONTRACT_CHANGES #97). |
@@ -64,8 +66,8 @@ v0.1 (individual-tenant version) is kept as `API_CONTRACT-v1-individual.md`.
 | POST | `/cases/{case_id}/translate-excerpt` | `{ text_en }` | Body: `{ excerpt, language? }` (excerpt 1–3000 characters; language defaults to the case's tenant language). One model call for a quote not seen before; the result is cached by language + excerpt (`excerpt_translation`) and returned without a model call on a repeat. An ASCII-only excerpt is returned unchanged. 404 for another org's case, 503 `{ detail: { reasons } }` when the model is unavailable. A reading aid only: never cited, filed, or used to check a quote (CONTRACT_CHANGES #96). |
 | GET | `/cases/{case_id}/sources` | `LegalSource[]` | |
 | GET | `/cases/{case_id}/form-draft` | `FormDraft` | Narrative rebuilt from accepted events on every GET. See [Form J draft fields](#form-j-draft-fields) for the F1–F3 rollout (PR #143). |
-| GET | `/cases/{case_id}/form-draft/pdf` | PDF (`application/pdf`) | Partial unsigned draft for landlord applicants. Signed-in caseworker in the case org only; 409 for tenant applications. |
-| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body `{ value }`. A nonempty value becomes `user_entered`. An empty value clears the field to `missing` with `value: null`. See [Form J draft fields](#form-j-draft-fields) for accepted keys and validation. |
+| GET | `/cases/{case_id}/form-draft/pdf` | PDF (`application/pdf`) | Partial unsigned draft for landlord applicants. Signed-in caseworker in the case org only; 409 for tenant applications. Sends `Cache-Control: private, no-store`. |
+| PATCH | `/cases/{case_id}/form-draft/fields/{key}` | `FormField` | Body `{ value }`. A nonempty value becomes `user_entered`. An empty value clears the field to `missing` with `value: null`. 404 for keys outside the case’s applicant role. See [Form J draft fields](#form-j-draft-fields) for accepted keys and validation. |
 | GET | `/cases/{case_id}/activity` | `ActivityEntry[]` | Newest first. |
 | POST | `/cases/{case_id}/package` | `Package` | Body: `{ attestations }`. 409 for landlord cases, blocking gaps, or missing tenant attestation. |
 | GET | `/cases/{case_id}/package/download` | zip (`application/zip`) | Streams a built tenant package. Query `version` (default: the latest); 404 if none is built, 409 for landlord cases. Headers: `Content-Disposition: attachment; filename="tenantproof-<case>-v<version>.zip"` and `X-Package-Sha256` (the zip's SHA-256). Images in the zip have their GPS data removed and a HEIC is filed as a JPG (CONTRACT_CHANGES). |

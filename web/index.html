@@ -1150,7 +1150,7 @@ function renderChrome() {
     { id: "package", name: "Package", meta: latestPackage(S.pkg, S.activity) ? "Built" : "Not built", done: !!latestPackage(S.pkg, S.activity) }
   ];
   $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.filter(it => !landlordApplication() || ["evidence", "form"].includes(it.id)).map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
-    + `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`;
+    + (landlordApplication() ? "" : `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`);
 }
 
 /* --- new case (#41): POST /cases, CONTRACT_CHANGES #35 --- */
@@ -1200,9 +1200,10 @@ async function createCase(form) {
   resetCaseState();
   setCase(made.id);
   await refresh();
-  location.hash = "form";
+  const landlord = made.applicant_role === "landlord";
+  location.hash = landlord ? "form" : "evidence";
   render();
-  toast(made.applicant_role === "landlord" ? "Landlord case created. Complete the Form J draft." : "Tenant case created. Complete the Form J draft.");
+  toast(landlord ? "Landlord case created. Complete the Form J draft." : "Case created. Send the intake link to the tenant.");
 }
 function mockNewCase(body) {
   const b = body || {}, blank = ["tenant_name", "unit", "title"].filter(k => !String(b[k] || "").trim());
@@ -1267,15 +1268,15 @@ function viewEvidence() {
       <dl class="kv">${mdRows}</dl>
       <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span></div></div>`;
   }).join("");
-  return `<div class="view-head"><div><h1>Evidence</h1><p>Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model.</p></div></div>
-    <div class="panel panel-pad intake-panel">
+  return `<div class="view-head"><div><h1>Evidence</h1><p>${landlordApplication() ? "Add supporting files for the landlord application. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time." : "Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model."}</p></div></div>
+    ${landlordApplication() ? "" : `<div class="panel panel-pad intake-panel">
       ${!(S.case.tenant.preferred_language in I18N) ? `<div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span><span class="muted">The tenant page has no ${esc(langLabel(S.case.tenant.preferred_language))} text yet, so no link can be sent or previewed for this case.</span></div>` : `
       <div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span>
         <span class="muted">${ik.status === "not_sent" ? "Not sent yet" : `Sent ${fmtTime(ik.sent_at)}`} · last upload ${fmtTime(ik.last_upload_at)} · ${ik.tenant_attested_genuine ? `<span style="color:var(--ok)">tenant confirmed files are genuine</span>` : "not confirmed yet"}</span>
         ${link ? linkBox(link, qr) : `<span class="muted">The link is shown once, when you send it.${ik.status === "not_sent" ? "" : " Re-send to create a new link (the old one stops working)."}</span>`}</div>
       <div class="btn-row"><a class="btn" href="#intake">Open tenant view</a><button class="btn${ik.status === "not_sent" ? " primary" : ""}" type="button" data-action="resend">${ik.status === "not_sent" ? "Send intake link" : "Re-send link"}</button></div>`}
-    </div>
-    <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>For files the tenant brought to the clinic. JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
+    </div>`}
+    <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>${landlordApplication() ? "" : "For files the tenant brought to the clinic. "}JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
     <div class="panel ev-list">${rows}</div>
     ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
 }
@@ -1668,7 +1669,7 @@ function render() {
   if (S.needLogin) return showLogin();
   if (!TENANT_MODE && !CASE_ID && route() !== "cases") { location.hash = "cases"; return; }  // hashchange re-renders
   const r = route();
-  if (!TENANT_MODE && landlordApplication() && ["run", "timeline", "gaps", "package"].includes(r)) {
+  if (!TENANT_MODE && landlordApplication() && ["run", "timeline", "gaps", "package", "intake"].includes(r)) {
     location.hash = "form";
     return;
   }
@@ -1827,7 +1828,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = landlordApplication() ? "form" : "timeline"; } }
   if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41 */
   if (a === "cancel-new-case") { S.newCase = null; render(); return; }
-  if (a === "resend") { if (!CASE_ID) return; const ik = S.case && S.case.intake;
+  if (a === "resend") { if (!CASE_ID || landlordApplication()) return; const ik = S.case && S.case.intake;
     if (ik && ik.status !== "not_sent" && !confirm(`Make a new intake link for ${S.case.tenant.name}? The link sent earlier stops working.`)) return;
     const r = await request("POST", `${C}/intake-link`); S.lastLink = { caseId: CASE_ID, url: r.url, qr: r.qr_svg }; S.intake.view = null; toast("Intake link created. Copy it now: it is only shown once."); await refresh(["case", "intake"]); }
   if (a === "confirm-field") {
