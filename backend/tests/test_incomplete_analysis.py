@@ -12,7 +12,6 @@ from app.models import CaseRow, EvidencePageRow, FormFieldRow, GapRow, RunRow, T
 from app.services.agent import llm, loop, runner
 from app.services.case_brief import NEEDS
 from app.services.package import (
-    HINDI_NOTE,
     STOPPED_OTHER,
     STOPPED_TIMELINE,
     analysis_warning,
@@ -353,7 +352,7 @@ def test_a_gaps_only_stop_keeps_the_other_wording_with_no_not_run_line(
     assert squash(STOPPED_OTHER) in pdf and squash("Not run:") not in pdf
 
 
-def test_the_warning_comes_before_the_hindi_note(
+def test_a_hindi_case_notes_hold_only_the_warning_lines(
     fresh_db: None, client, session: Session
 ) -> None:
     stop(session, "gaps")
@@ -363,4 +362,4 @@ def test_the_warning_comes_before_the_hindi_note(
     session.add(case)
     session.commit()
     manifest, _ = built_package(client)
-    assert manifest["notes"] == [STOPPED_OTHER, f"Stopped early: {GAPS}", HINDI_NOTE]
+    assert manifest["notes"] == [STOPPED_OTHER, f"Stopped early: {GAPS}"]
