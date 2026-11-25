@@ -159,34 +159,25 @@ def state_reasons(session: Session, case: CaseRow) -> list[str]:
     return [*analysis_reasons(session, case), *reasons]
 
 
-# Hindi cannot be drawn correctly yet: the bundled fonts have the Devanagari glyphs, but fpdf2 only
-# joins consonants and places vowel signs with text shaping (`uharfbuzz`, not a dependency).
-# Unshaped Devanagari reads wrongly ("हिन्दी" comes out "हन्िदी"), which is worse than leaving it
-# out, so for a Hindi case every PDF shows a marker where Devanagari text would be, says so, and
-# the original files carry the text. Issue #68 keeps the real fix.
-HINDI_NOTE = "PDFs are in English; Hindi PDF rendering is not supported yet."
-HINDI_MARK = "[Hindi text, see the original file]"
 _DEVANAGARI = re.compile("[\u0900-\u097f]+")
-
-
-class TenantPdf(FPDF):
-    hindi_unsupported = False
 
 
 def has_devanagari(text: str) -> bool:
     return _DEVANAGARI.search(text) is not None
 
 
-def pdf_text(pdf: FPDF, text: str) -> str:
-    """The text as it goes in this PDF: Devanagari runs become a marker in a Hindi case's PDFs."""
-    if getattr(pdf, "hindi_unsupported", False):
-        return _DEVANAGARI.sub(HINDI_MARK, text)
+def shape_for(pdf: FPDF, text: str) -> str:
+    """Turn text shaping on (script `deva`) for a paragraph with Devanagari, off otherwise;
+    return the text unchanged."""
+    if has_devanagari(text):
+        pdf.set_text_shaping(True, script="deva")
+    else:
+        pdf.set_text_shaping(False)
     return text
 
 
-def new_pdf(language: str = "en") -> FPDF:
-    pdf = TenantPdf(format="Letter")
-    pdf.hindi_unsupported = language == "hi"
+def new_pdf() -> FPDF:
+    pdf = FPDF(format="Letter")
     pdf.add_font("NotoSans", "", FONT_DIR / "NotoSans-Regular.ttf")
     pdf.add_font("NotoSans", "B", FONT_DIR / "NotoSans-Bold.ttf")
     pdf.add_font("NotoSansSC", "", FONT_DIR / "NotoSansSC-Regular.ttf")
@@ -201,7 +192,7 @@ def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: flo
     pdf.set_font("NotoSans", "B" if bold else "", size)
     # Word wrapping still breaks long runs without spaces, including Chinese text.
     pdf.multi_cell(
-        0, size * 0.5 + 1.5, pdf_text(pdf, text),
+        0, size * 0.5 + 1.5, shape_for(pdf, text),
         new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(gap)
@@ -270,7 +261,7 @@ def _write_f3_requests(pdf: FPDF, values: dict[str, str | None]) -> None:
 
 def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at: datetime) -> bytes:
     draft = build_form_draft(session, case)
-    pdf = new_pdf(case.tenant_language)
+    pdf = new_pdf()
     _write(pdf, draft.form_name or "Application draft", bold=True, size=16, gap=3)
     _write(pdf, draft.disclaimer, size=9, gap=4)
     _write(pdf, f"Case: {case.title} ({case.unit})")
@@ -309,7 +300,7 @@ class EvidenceFile:
     location_removed: bool = False  # a copy made with its GPS data taken out
 
 
-def evidence_files(ev: EvidenceRow, language: str = "en") -> list[EvidenceFile]:
+def evidence_files(ev: EvidenceRow) -> list[EvidenceFile]:
     """What goes in the zip for one piece of evidence: the original, plus a PDF made from a TXT.
     A HEIC is never filed: the Program doesn't accept it, so only the JPG made from it goes in
     (nothing at all if it can't be converted). A JPG or PNG with GPS data is filed as a copy
@@ -318,7 +309,7 @@ def evidence_files(ev: EvidenceRow, language: str = "en") -> list[EvidenceFile]:
     name = evidence_zip_name(ev)
     if name is None:
         return []
-    made = _rendition(ev, name.rsplit(".", 1)[0], language)
+    made = _rendition(ev, name.rsplit(".", 1)[0])
     if ev.mime == sniff.HEIC:
         return [made] if made is not None else []
     original = _original(ev, name)
@@ -348,7 +339,7 @@ def _original(ev: EvidenceRow, name: str) -> EvidenceFile | None:
                         data, location_removed=True)
 
 
-def _rendition(ev: EvidenceRow, stem: str, language: str = "en") -> EvidenceFile | None:
+def _rendition(ev: EvidenceRow, stem: str) -> EvidenceFile | None:
     if ev.processing == "failed":
         return None  # couldn't be read at ingest (corrupt, or over the pixel limit): don't decode
     try:
@@ -366,9 +357,7 @@ def _rendition(ev: EvidenceRow, stem: str, language: str = "en") -> EvidenceFile
             decoded = sniff.decode_text(storage.read(ev.sha256))
             if decoded is None:  # not reachable for a file the type check accepted
                 return None
-            if language == "hi" and has_devanagari(decoded):
-                return None  # a PDF of it would be mostly markers; the original is filed as is
-            data = text_to_pdf(ev, decoded, language)
+            data = text_to_pdf(ev, decoded)
             return EvidenceFile(ev.label, f"{stem}.pdf", _sha(data),
                                 f"PDF made from the text file ({ev.filename})", data)
     except Exception as exc:  # the original is still filed; a missing copy must not block
@@ -388,8 +377,8 @@ def heic_to_jpeg(data: bytes) -> bytes:
     return out.getvalue()
 
 
-def text_to_pdf(ev: EvidenceRow, text: str, language: str = "en") -> bytes:
-    pdf = new_pdf(language)
+def text_to_pdf(ev: EvidenceRow, text: str) -> bytes:
+    pdf = new_pdf()
     _write(pdf, f"{ev.label}  {ev.filename}", bold=True, size=12, gap=1)
     _write(pdf, f"Text file, sha256 {ev.sha256}", size=8, gap=4)
     _write(pdf, text or "(empty)", size=9)
@@ -400,14 +389,12 @@ def manifest_pdf(
     evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]],
     warning: list[str],
 ) -> bytes:
-    pdf = new_pdf(case.tenant_language)
+    pdf = new_pdf()
     _write(pdf, "Evidence manifest", bold=True, size=16, gap=3)
-    _write(pdf, f"Case: {case.title}", gap=2 if case.tenant_language != "hi" else 1)
+    _write(pdf, f"Case: {case.title}", gap=2)
     # #127: the receipt time is the time the whole upload arrived, so four files sent together
     # share it. Say so rather than leave it looking like a mistake.
     _write(pdf, "Files uploaded together share one receipt time.", size=8, gap=4)
-    if case.tenant_language == "hi":
-        _write(pdf, HINDI_NOTE, size=9, gap=4)
     for line in warning:
         _write(pdf, line, bold=True)
     if not evidence:
@@ -463,7 +450,7 @@ def build_zip(
         .order_by(col(EvidenceRow.position))
     ).all())
     app_pdf = application_pdf(session, case, prepared_by, built_at)
-    ev_files = {e.id: evidence_files(e, case.tenant_language) for e in evidence}
+    ev_files = {e.id: evidence_files(e) for e in evidence}
     run_steps = latest_run_steps(session, case.id)
     stopped = incomplete_steps(run_steps)
     warning = analysis_warning(run_steps)
@@ -495,9 +482,8 @@ def build_zip(
             for e in evidence
         ],
     }
-    notes = [*warning, *([HINDI_NOTE] if case.tenant_language == "hi" else [])]
-    if notes:
-        manifest["notes"] = notes
+    if warning:
+        manifest["notes"] = list(warning)
     man_json = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
     parts = [
         ("application_draft.pdf", app_pdf, "Application draft", "From the reviewed timeline"),
