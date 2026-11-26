@@ -9,6 +9,12 @@ from pydantic import BaseModel, Field, model_validator
 
 Language = str
 ApplicantRole = Literal["tenant", "landlord"]
+PrivacyAction = Literal["hide", "show"]
+PrivacyRole = Literal["tenant", "landlord", "person", "address", "other"]
+PersonalDetailKind = Literal[
+    "name", "address", "phone", "email", "postal_code", "id_number", "other"
+]
+PersonalDetailSource = Literal["case", "found", "caseworker"]
 EvidenceKind = Literal["lease", "photo", "messages", "receipt", "letter", "other"]
 EvidenceProcessing = Literal["queued", "processing", "done", "failed"]
 FormFieldStatus = Literal["auto_filled", "needs_confirmation", "missing", "user_entered"]
@@ -434,6 +440,53 @@ class ExcerptTranslation(BaseModel):
     """A reading aid for a quoted source. Never cited or filed as evidence."""
 
     text_en: str
+
+
+class PersonalDetail(BaseModel):
+    """One personal detail of a case and the placeholder the model sees instead (issue #60).
+    `source`: from the case record or the Form J draft, found in the evidence by a pattern
+    (phone, email, postal code, street address, ID or card number), or added by a caseworker.
+    `shown` is true when a caseworker chose to let it go to the model as written; `term_id` is
+    that choice (or the caseworker's own `hide` entry), for undoing it."""
+
+    value: str
+    placeholder: str
+    kind: PersonalDetailKind
+    source: PersonalDetailSource
+    count: int  # how often it occurs in the case's evidence text
+    shown: bool = False
+    term_id: str | None = None
+
+
+class PrivacyView(BaseModel):
+    """GET /cases/{case_id}/privacy. `enabled` mirrors the PRIVACY_PLACEHOLDERS setting: when
+    false the model sees the evidence as written and the list is only a preview."""
+
+    enabled: bool
+    details: list[PersonalDetail]
+
+
+class PrivacyTermCreate(BaseModel):
+    """Body of POST /cases/{case_id}/privacy/terms."""
+
+    value: str = Field(min_length=2, max_length=200)
+    action: PrivacyAction
+    role: PrivacyRole = "other"  # what a hidden value is; ignored for `show`
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ModelTextPage(BaseModel):
+    locator: str
+    text: str
+
+
+class EvidenceModelText(BaseModel):
+    """GET /cases/{case_id}/evidence/{evidence_id}/model-text: an evidence item's text as the
+    model receives it, placeholders in place."""
+
+    evidence_id: str
+    label: str
+    pages: list[ModelTextPage]
 
 
 class Ok(BaseModel):

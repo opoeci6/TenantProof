@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import JSON, CheckConstraint, Column, Index, String, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-from app.schemas import ApplicantRole
+from app.schemas import ApplicantRole, PrivacyAction, PrivacyRole
 
 
 def utcnow() -> datetime:
@@ -231,6 +231,31 @@ class FormFieldRow(SQLModel, table=True):
     status: str = "missing"
     sources: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     note: str | None = None
+
+
+class PrivacyTermRow(SQLModel, table=True):
+    """A caseworker's choice about one personal detail of a case (issue #60). `hide` adds a
+    value the finder missed (a name written in another script, a neighbour), so it is swapped
+    for a placeholder before anything goes to the model. `show` lets a value the finder found
+    go to the model as written. One row per value (compared case-insensitively, `value_key`)."""
+
+    __tablename__ = "privacy_term"
+    __table_args__ = (
+        UniqueConstraint("case_id", "value_key"),
+        CheckConstraint("action IN ('hide', 'show')", name="ck_privacy_term_action"),
+        CheckConstraint(
+            "role IN ('tenant', 'landlord', 'person', 'address', 'other')",
+            name="ck_privacy_term_role",
+        ),
+    )
+    id: str = Field(primary_key=True)
+    case_id: str = Field(foreign_key="tenant_case.id", index=True, ondelete="CASCADE")
+    value: str
+    value_key: str  # the value casefolded with its spaces collapsed
+    action: PrivacyAction = Field(sa_column=Column(String(4), nullable=False))
+    role: PrivacyRole = Field(sa_column=Column(String(8), nullable=False))
+    created_by: str  # the caseworker's display name, as in the activity log
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ActivityRow(SQLModel, table=True):
