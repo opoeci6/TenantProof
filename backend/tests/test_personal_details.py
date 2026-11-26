@@ -126,3 +126,32 @@ def test_a_company_name_is_not_personal_data() -> None:
     assert [k.value for k in name_variants("Dr. Priya Nair", "PERSON")] == [
         "Dr. Priya Nair", "Priya", "Nair",
     ]
+
+
+def test_dates_next_to_a_capitalised_word_are_not_addresses() -> None:
+    p = Placeholders()
+    for text in (
+        "On 15 May Dr. Patel saw the mould.",
+        "Hearing set for 3 December Court Room 2.",
+        "Seen on 2 Sept. Road works outside.",
+    ):
+        assert p.hide(text) == text
+    assert p.hide("Moved to 12 Oak Drive on 15 May.") == "Moved to [ADDRESS_1] on 15 May."
+
+
+def test_two_iso_dates_side_by_side_are_not_a_card_number() -> None:
+    p = Placeholders()
+    for start, end in (("2026-08-14", "2026-08-18"), ("2026-01-01", "2026-12-31")):
+        text = f"Lease period: {start} {end} signed"
+        assert p.hide(text) == text
+    assert p.hide("card 4111 1111 1111 1111") == "card [CARD_NUMBER_1]"
+
+
+def test_phone_numbers_without_separators_or_with_a_country_code_are_hidden() -> None:
+    p = Placeholders()
+    assert p.hide("call me 9025550187") == "call me [PHONE_1]"
+    assert p.hide("or 19025550188.") == "or [PHONE_2]."
+    assert p.hide("WeChat +86 138 0013 8000 after 6") == "WeChat [PHONE_3] after 6"
+    assert p.hide("Call +1 902 555 0189") == "Call [PHONE_4]"
+    for text in ("Rent 1200 paid", "receipt 20260925", "at 1732665600", "order 20260801123"):
+        assert p.hide(text) == text
