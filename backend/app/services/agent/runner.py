@@ -420,7 +420,9 @@ def can_resume_with(run: RunRow, provider: LLMProvider) -> bool:
             continue
         stored = step.get("provider_key")
         if stored is None:
-            if getattr(provider, "requires_continuation_key", False):
+            if getattr(provider, "requires_continuation_key", False) and not getattr(
+                provider, "accepts_unkeyed_checkpoints", False
+            ):
                 return False
         elif stored != current:
             return False
