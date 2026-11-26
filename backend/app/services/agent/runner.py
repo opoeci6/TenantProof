@@ -51,7 +51,7 @@ from app.config import get_settings
 from app.models import CaseRow, EvidenceRow, FormFieldRow, RunRow, TimelineEventRow
 from app.schemas import ToolCall
 from app.services import activity
-from app.services.agent import extract, prompts
+from app.services.agent import extract, placeholders, prompts
 from app.services.agent.evidence_text import EvidenceTextStore
 from app.services.agent.llm import (
     LLMConfigError,
@@ -596,6 +596,8 @@ async def execute_run(
         raise ValueError("this run is waiting for the caseworker's answer")
     if not can_resume_with(run, provider):
         raise LLMConfigError("Paused run uses a different model configuration")
+    # Issue #60: one set of placeholders for the whole run (resume builds it again).
+    provider = placeholders.for_case(session, case, texts, provider)
     stored = next((s["nonce"] for s in all_steps if s.get("nonce")), None)
     if nonce is not None and stored is not None and nonce != stored:
         raise ValueError("this run already uses a different evidence nonce")

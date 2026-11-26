@@ -178,6 +178,24 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .modal-card.photo-card{height:auto;max-height:90vh}
 .photo-wrap{flex:1;min-height:0;display:grid;place-items:center;padding:12px;overflow:auto;background:var(--surface-2)}
 .photo-wrap img{max-width:100%;max-height:calc(90vh - 80px);object-fit:contain}
+/* privacy:start (#60): personal details swapped for placeholders before the AI model sees them */
+.privacy-panel h2{margin:0 0 4px;font-size:15.5px}
+.privacy-panel p{margin:0;font-size:13.5px}
+.pv-scroll{overflow-x:auto;margin:12px 0 4px}
+.pv-table{width:100%;border-collapse:collapse;font-size:13px}
+.pv-table th,.pv-table td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:middle}
+.pv-table th{font-weight:600;color:var(--ink-3);border-top:0;white-space:nowrap}
+.pv-table td:first-child{overflow-wrap:anywhere}
+.pv-table .btn{white-space:nowrap}
+.pv-table code,mark.ph{font-family:var(--font-mono);font-size:12px;background:var(--accent-soft);color:var(--ink);padding:1px 5px;border-radius:4px;white-space:nowrap}
+.pv-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+.pv-add label{width:100%;font-weight:600;font-size:13.5px}
+.pv-add input{flex:1 1 220px;min-width:0}
+.mt-body{flex:1;min-height:0;overflow:auto;padding:14px}
+.mt-page{margin:0 0 14px}
+.mt-page h3{font-size:12.5px;margin:0 0 4px;color:var(--ink-3);font-weight:600}
+.mt-page pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--font-ui);font-size:13.5px;line-height:1.5;margin:0;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+/* privacy:end */
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;font-size:12.5px;min-width:0;margin:0}
 .kv dt{color:var(--ink-3)} .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
 .ev-checks{display:flex;flex-direction:column;gap:6px;align-items:flex-start;font-size:12.5px}
@@ -482,7 +500,7 @@ async function uploadFiles(path, files) {
 
 const ENDPOINTS = {
   cases: ["GET /me", "GET /cases", "POST /cases"],
-  evidence: ["GET /cases/{id}/evidence", "POST /cases/{id}/evidence (multipart)", "POST /cases/{id}/intake-link"],
+  evidence: ["GET /cases/{id}/evidence", "POST /cases/{id}/evidence (multipart)", "POST /cases/{id}/intake-link", "GET /cases/{id}/privacy", "POST /cases/{id}/privacy/terms", "DELETE /cases/{id}/privacy/terms/{term_id}", "GET /cases/{id}/evidence/{evidence_id}/model-text"],
   run: ["POST /cases/{id}/runs", "GET /cases/{id}/runs/latest", "GET /runs/{run_id}  (poll)", "POST /runs/{run_id}/answer"],
   timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
   gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "POST /cases/{id}/translate-excerpt", "GET /cases/{id}/sources"],
@@ -719,6 +737,44 @@ function buildNarrative() {
   return { text: ev.map(e => `${fmtDate(e.date, true)}: ${e.description} [${[...new Set(e.sources.map(s => lab(s.evidence_id)))].join(", ")}]`).join("\n"), event_ids: ev.map(e => e.id) };
 }
 
+/* privacy:start (#60): the demo case's personal details and the placeholders the model sees */
+const MOCK_DETAILS = [
+  { value: "Jordan Lee", placeholder: "[TENANT_NAME]", kind: "name", source: "case", count: 2 },
+  { value: "Jordan", placeholder: "[TENANT_FIRST_NAME]", kind: "name", source: "case", count: 5 },
+  { value: "Unit 4B, 100 Example Street", placeholder: "[RENTAL_ADDRESS]", kind: "address", source: "case", count: 3 },
+  { value: "902-555-0143", placeholder: "[PHONE_1]", kind: "phone", source: "found", count: 1 }
+];
+const MOCK_MODEL_TEXT = [  // E-04, the chat export, as the model gets it
+  { locator: "message 1", text: "[2026-08-15 08:02] [TENANT_FIRST_NAME]: Hi, water has been dripping from the bathroom ceiling since last night. Can someone come look at it?" },
+  { locator: "message 2", text: "[2026-08-16 10:30] Landlord: Thanks for letting us know. We'll send someone next week." },
+  { locator: "message 3", text: "[2026-09-02 19:45] [TENANT_FIRST_NAME]: No one has come yet and the stain is getting bigger. You can call me at [PHONE_1]." },
+  { locator: "message 4", text: "[2026-09-03 09:10] Landlord: A contractor is booked. Please be patient." },
+  { locator: "message 5", text: "[2026-10-01 21:15] [TENANT_FIRST_NAME]: There is now mould on the ceiling and around the fan at [RENTAL_ADDRESS]. Please fix this as soon as possible." }
+];
+function mockPrivacy(method, path, body) {
+  let m;
+  db.privacyTerms = db.privacyTerms || [];
+  if (method === "POST") {
+    const value = String(body.value || "").trim();
+    if (value.length < 2) throw Object.assign(new Error("Enter 2 to 200 characters"), { status: 422 });
+    db.privacyTerms = db.privacyTerms.filter(t => t.value.toLowerCase() !== value.toLowerCase());
+    db.privacyTerms.push({ id: "pt_" + Date.now().toString(36), value, action: body.action, role: body.role || "other" });
+    log("caseworker", body.action === "hide" ? "Hid a personal detail from the AI model" : "Let a personal detail go to the AI model as written");
+  } else if (method === "DELETE" && (m = path.match(/\/terms\/(pt_\w+)$/))) {
+    db.privacyTerms = db.privacyTerms.filter(t => t.id !== m[1]);
+    log("caseworker", "Undid a personal-detail choice");
+  } else if (method === "GET" && (m = path.match(/\/evidence\/(ev_\w+)\/model-text$/))) {
+    const e = db.evidence.find(x => x.id === m[1]) || { id: m[1], label: m[1] };
+    return { evidence_id: e.id, label: e.label, pages: e.id === "ev_04" ? MOCK_MODEL_TEXT : [] };
+  }
+  const shown = new Map(db.privacyTerms.filter(t => t.action === "show").map(t => [t.value.toLowerCase(), t]));
+  const details = MOCK_DETAILS.map(d => { const t = shown.get(d.value.toLowerCase()); return { ...d, shown: !!t, term_id: t ? t.id : null }; });
+  const stems = { tenant: "TENANT_NAME", landlord: "LANDLORD_NAME", person: "PERSON", address: "ADDRESS", other: "DETAIL" };
+  db.privacyTerms.filter(t => t.action === "hide").forEach((t, i) => details.push({ value: t.value, placeholder: `[${stems[t.role] || "DETAIL"}_${i + 2}]`, kind: t.role === "address" ? "address" : t.role === "other" ? "other" : "name", source: "caseworker", count: 0, shown: false, term_id: t.id }));
+  return { enabled: true, details };
+}
+/* privacy:end */
+
 function mockRoute(method, path, body) {
   let m; const clone = x => JSON.parse(JSON.stringify(x));
   const C = `/cases/${CASE_ID}`;
@@ -728,6 +784,7 @@ function mockRoute(method, path, body) {
   if (method === "GET" && path === C) return clone(db.case);
   if (method === "POST" && path === `${C}/intake-link`) { db.case.intake.sent_at = new Date().toISOString(); log("caseworker", "Re-sent the intake link in Chinese (中文)"); return clone(db.case.intake); }
   if (method === "GET" && path === `${C}/evidence`) return clone(db.evidence);
+  if (path.startsWith(`${C}/privacy`) || /\/model-text$/.test(path)) return mockPrivacy(method, path, body);  /* #60 */
   if (method === "POST" && path === `${C}/runs`) { const r = makeRun(false); db.latestRun = r.id; log("caseworker", `Started ${r.id}`); return clone(r); }
   if (method === "GET" && path === `${C}/runs/latest`) return clone(db.runs[db.latestRun]);
   if (method === "GET" && (m = path.match(/^\/runs\/(run_\d+)$/))) return clone(db.runs[m[1]]);
@@ -1158,6 +1215,7 @@ function renderChrome() {
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
   clearInterval(poller);
+  S.privacy = null;
   S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
   S.editing = null; S.drafting = null; S.draftEdit = null; S.draftError = ""; S.askError = ""; S.askDraft = "";
@@ -1254,6 +1312,53 @@ function viewCases() {
 }
 
 /* ---------- case views ---------- */
+/* privacy:start (#60) */
+const privacyOn = () => !!(S.privacy && S.privacy.enabled) && !landlordApplication();
+const DETAIL_KIND = { name: "Name", address: "Address", phone: "Phone", email: "Email", postal_code: "Postal code", id_number: "ID or card number", other: "Other" };
+const DETAIL_SOURCE = { case: "From the case", found: "Found in the evidence", caseworker: "Added by you" };
+function privacyPanel() {
+  if (!privacyOn()) return "";
+  const action = d => d.shown ? `<button class="btn small" type="button" data-action="privacy-undo" data-id="${esc(d.term_id)}">Hide again</button>`
+    : d.source === "caseworker" ? `<button class="btn small" type="button" data-action="privacy-undo" data-id="${esc(d.term_id)}">Remove</button>`
+    : `<button class="btn small" type="button" data-action="privacy-show" data-value="${esc(d.value)}">Send as written</button>`;
+  const rows = S.privacy.details.map(d => `<tr>
+      <td>${esc(d.value)}</td>
+      <td>${d.shown ? `<span class="pill warn">Sent as written</span>` : `<code>${esc(d.placeholder)}</code>`}</td>
+      <td>${esc(DETAIL_KIND[d.kind] || d.kind)}</td>
+      <td class="muted">${esc(DETAIL_SOURCE[d.source] || d.source)}${d.count ? ` · ${plural(d.count, "time")}` : ""}</td>
+      <td>${action(d)}</td></tr>`).join("");
+  return `<section class="panel panel-pad privacy-panel" aria-labelledby="pv-title">
+    <h2 id="pv-title">Personal details the AI model does not see</h2>
+    <p class="muted">Before any evidence goes to the AI model, these are swapped for placeholders. The model works with the placeholders; you, the timeline and the filing see the real text. Finding them is never complete: check this list before you run the analysis, and add anything it missed, such as a name written in another language.</p>
+    ${rows ? `<div class="pv-scroll"><table class="pv-table"><thead><tr><th scope="col">In the evidence</th><th scope="col">The AI model sees</th><th scope="col">What it is</th><th scope="col">Where it came from</th><th scope="col"><span aria-hidden="true"></span></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p>No personal details found yet.</p>`}
+    <form class="pv-add" data-action="privacy-add" novalidate>
+      <label for="pv-value">Hide something else</label>
+      <input class="field" id="pv-value" name="value" type="text" minlength="2" maxlength="200" autocomplete="off" placeholder="A name, address or number, as it is written">
+      <select class="field" name="role" aria-label="What it is"><option value="tenant">Tenant's name</option><option value="landlord">Landlord's name</option><option value="person">Another person</option><option value="address">Address</option><option value="other">Something else</option></select>
+      <button class="btn primary" type="submit">Hide</button>
+    </form></section>`;
+}
+async function showModelText(id) {
+  const r = await request("GET", `${C}/evidence/${id}/model-text`);
+  closeModelText();
+  const mark = t => esc(t).replace(/\[[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*\]/g, m => `<mark class="ph">${m}</mark>`);
+  const pages = r.pages.length ? r.pages.map(p => `<div class="mt-page"><h3>${esc(p.locator)}</h3><pre>${mark(p.text)}</pre></div>`).join("")
+    : `<p class="muted">No text from this file goes to the AI model. For a photo it gets the capture time and device, never the picture.</p>`;
+  const d = document.createElement("div");
+  d.id = "modelTextModal"; d.className = "modal";
+  d.setAttribute("role", "dialog"); d.setAttribute("aria-modal", "true"); d.setAttribute("aria-label", `What the AI model sees of ${r.label}`);
+  d.innerHTML = `<div class="modal-card"><div class="modal-bar"><strong>${esc(r.label)} · what the AI model sees</strong><span class="btn-row"><span class="muted">Highlighted: placeholders</span><button class="btn small" type="button" data-action="close-model-text">Close</button></span></div><div class="mt-body">${pages}</div></div>`;
+  document.body.appendChild(d);
+  d.querySelector("button").focus();
+}
+function closeModelText() { const d = $("#modelTextModal"); if (d) d.remove(); }
+async function savePrivacyTerm(body, message) {
+  S.privacy = await request("POST", `${C}/privacy/terms`, body);
+  toast(message + (S.run ? " Run the analysis again to use it." : ""));
+  render();
+}
+/* privacy:end */
+
 function viewEvidence() {
   const ik = S.case.intake, link = ik.url || sessionLink(S.lastLink, CASE_ID), qr = sessionQr(S.lastLink, CASE_ID);
   const rows = S.evidence.map(e => {
@@ -1270,7 +1375,7 @@ function viewEvidence() {
       <div class="ev-name">${thumb}<div><span class="exhibit">${esc(e.label)}</span></div><span class="fn">${esc(e.filename)}</span><span class="sub">${e.uploaded_by === "tenant" ? "Uploaded by tenant" : "Added by caseworker"} · received <time datetime="${esc(e.received_at)}" title="Server receipt time: ${esc(e.received_at)}">${esc(fmtTimeZone(e.received_at))}</time></span>
         <span class="hash mono" title="${esc(e.sha256)}">SHA-256 ${esc(e.sha256.slice(0, 12))}…<button class="copy" type="button" data-action="copy" data-text="${esc(e.sha256)}">Copy</button></span></div>
       <dl class="kv">${mdRows}</dl>
-      <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span></div></div>`;
+      <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span>${privacyOn() && e.processing === "done" ? `<button class="btn small" type="button" data-action="model-text" data-id="${esc(e.id)}">What the AI sees</button>` : ""}</div></div>`;
   }).join("");
   return `<div class="view-head"><div><h1>Evidence</h1><p>${landlordApplication() ? "The draft PDF lists the original supporting files. Review copies separately before filing." : "Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model."}</p></div></div>
     ${landlordApplication() ? "" : `<div class="panel panel-pad intake-panel">
@@ -1282,6 +1387,7 @@ function viewEvidence() {
     </div>`}
     <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>${landlordApplication() ? "" : "For files the tenant brought to the clinic. "}JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
     <div class="panel ev-list">${rows}</div>
+    ${privacyPanel()}
     ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
 }
 
@@ -1713,6 +1819,7 @@ const LOADERS = {
   cases: () => request("GET", "/cases").then(d => { S.cases = prioritizeClient(d); S.casesLoaded = true; }),
   case: () => request("GET", C).then(d => S.case = d),
   evidence: () => request("GET", `${C}/evidence`).then(d => S.evidence = d),
+  privacy: () => request("GET", `${C}/privacy`).then(d => S.privacy = d).catch(() => S.privacy = null),  /* #60 */
   run: () => request("GET", `${C}/runs/latest`).then(d => S.run = d).catch(() => S.run = null),
   timeline: () => request("GET", `${C}/timeline`).then(d => S.timeline = d),
   gaps: () => request("GET", `${C}/gaps`).then(d => S.gaps = d),
@@ -1730,7 +1837,7 @@ function prioritizeClient(list) { return list.map(c => ({ ...c, _days: c.next_de
 const CASELESS_LOADERS = ["me", "cases"];
 // If the selected case is gone (404), forget it and go back to the caseload instead of an empty shell.
 async function dropCase(why) {
-  CASE_ID = null; C = ""; writeCaseToUrl(null); S.case = null; S.evidence = []; S.run = null; S.timeline = []; S.gaps = []; S.sources = []; S.form = null; S.activity = []; S.pkg = null;
+  CASE_ID = null; C = ""; writeCaseToUrl(null); S.case = null; S.evidence = []; S.privacy = null; S.run = null; S.timeline = []; S.gaps = []; S.sources = []; S.form = null; S.activity = []; S.pkg = null;
   S.intake.view = null; S.lastLink = null;
   location.hash = "cases";
   toast(why || "That case isn't available. Back to your caseload.");
@@ -1909,7 +2016,7 @@ function showPhoto(id) {
   d.querySelector("button").focus();
 }
 function closePhoto() { const d = $("#photoModal"); if (d) d.remove(); }
-document.addEventListener("keydown", ev => { if (ev.key === "Escape") { closeBrief(); closePhoto(); } });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") { closeBrief(); closePhoto(); closeModelText(); } });
 
 // Fix #38: when the clipboard is blocked (some embedded browsers), select the link so Ctrl+C copies it.
 function copyFallback(b) {
@@ -1934,6 +2041,10 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "close-brief") return closeBrief();
   if (a === "photo") return showPhoto(id);  /* #97 */
   if (a === "close-photo") return closePhoto();
+  if (a === "model-text") return showModelText(id);  /* #60 */
+  if (a === "close-model-text") return closeModelText();
+  if (a === "privacy-show") return savePrivacyTerm({ value: b.dataset.value, action: "show" }, "It will go to the AI model as written.");
+  if (a === "privacy-undo") { S.privacy = await request("DELETE", `${C}/privacy/terms/${id}`); toast("Done." + (S.run ? " Run the analysis again to use it." : "")); render(); return; }
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { copyFallback(b); } }
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = landlordApplication() ? "form" : "timeline"; } }
   if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41 */
@@ -1983,7 +2094,7 @@ document.addEventListener("click", guarded(async ev => {
       const answers = Object.entries(S.intake.answers || {})
         .map(([request_id, text]) => ({ request_id, text: text.trim() })).filter(a => a.text);
       await request("POST", `/intake/${intakeTok()}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language, answers });
-      S.intake.sent = true; S.intake.answers = {}; await refresh(["evidence", "case"]);
+      S.intake.sent = true; S.intake.answers = {}; await refresh(["evidence", "case", "privacy"]);
     } catch (err) { toast(err.message); }
   }
   if (a === "answer-none") return sendAnswer("none");
@@ -2010,6 +2121,13 @@ document.addEventListener("submit", guarded(async ev => {
   const f = ev.target; if (!f.dataset.action) return; ev.preventDefault();
   const id = f.dataset.id, a = f.dataset.action;
   if (a === "create-case") return createCase(f);  /* #41 */
+  if (a === "privacy-add") {  /* #60 */
+    const fd = new FormData(f), value = String(fd.get("value") || "").trim();
+    if (value.length < 2) { toast("Type at least 2 characters."); return; }
+    await savePrivacyTerm({ value, action: "hide", role: fd.get("role") }, "Hidden from the AI model.");
+    const el = document.getElementById("pv-value"); if (el) el.focus();
+    return;
+  }
   if (a === "login") {
     const fd = new FormData(f);
     try { S.me = await request("POST", "/auth/login", { email: fd.get("email"), password: fd.get("password") }); S.needLogin = false; await ensureCase(); await refresh(); location.hash = "cases"; }
@@ -2082,7 +2200,7 @@ document.addEventListener("change", guarded(async ev => {
 async function handleFiles(files) {
   try { await uploadFiles(`${C}/evidence`, [...files]); } catch (err) { toast(err.message); return; } /* WS1: an error toast is not overwritten */
   toast(`${plural(files.length, "file")} added. ${landlordApplication() ? "The draft PDF will list them." : "Run the analysis again to include them."}`);
-  await refresh(["evidence"]);
+  await refresh(["evidence", "privacy"]);
 }
 function wireDrop() {
   const d = $("#drop"); if (!d) return;

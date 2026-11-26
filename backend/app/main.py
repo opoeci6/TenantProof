@@ -30,6 +30,7 @@ from app.routers import (
     intake,
     me,
     package,
+    privacy,
     runs,
     sources,
     timeline,
@@ -127,7 +128,7 @@ api.add_middleware(UploadBodyLimit)  # WS1: caps upload bodies before FastAPI re
 
 for module in (
     auth, me, cases, package, brief, evidence, runs, timeline, gaps, sources, form, activity,
-    intake, translation,
+    intake, translation, privacy,
 ):
     api.include_router(module.router)
 app.mount("/api", api)
