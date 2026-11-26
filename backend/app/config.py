@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # evidence text sent to the model go to this host, so only https (or plain http to
     # localhost, for a local proxy) is accepted.
     anthropic_base_url: str = ""
+    # Issue #60: before each model call, swap personal details (names, addresses, phone numbers,
+    # emails, ID and card numbers) for placeholders such as [TENANT_NAME], and swap the real
+    # values back into what the model returns. Detection is never complete: the caseworker
+    # checks the list on the Evidence page. Off by default.
+    privacy_placeholders: bool = False
     # Seconds one analysis run may take, all steps together. When it passes, the step in progress
     # ends with what it has and the later steps do not run. One model call stays capped at 60 s.
     run_budget_s: float = Field(default=180.0, ge=10, le=900)

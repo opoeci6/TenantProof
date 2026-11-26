@@ -52,6 +52,10 @@ The applicant-role request, role-specific restrictions and draft PDF endpoint do
 | POST | `/cases/{case_id}/intake-link` | `Intake` | Creates or re-sends the tenant link. 409 for landlord cases. |
 | GET | `/cases/{case_id}/evidence` | `EvidenceItem[]` | |
 | POST | `/cases/{case_id}/evidence` | `EvidenceItem` | Caseworker upload, `multipart/form-data`, field `file`. |
+| GET | `/cases/{case_id}/privacy` | `PrivacyView` | The personal details of the case and the placeholder the AI model sees for each (issue #60). See "Personal details and the AI model". |
+| POST | `/cases/{case_id}/privacy/terms` | `PrivacyView` | Body `PrivacyTermCreate` `{ value, action, role? }`: `hide` a value the finder missed, or `show` (send as written) a value it found. A second choice for the same value (any case or spacing) replaces the first. 422 `{ detail: { reasons } }` for a bad body. Logged without the value. |
+| DELETE | `/cases/{case_id}/privacy/terms/{term_id}` | `PrivacyView` | Undoes a choice. 404 for a term of another case or org. Logged. |
+| GET | `/cases/{case_id}/evidence/{evidence_id}/model-text` | `EvidenceModelText` | The item's text pages as the model receives them: with placeholders when `PRIVACY_PLACEHOLDERS` is on, as written when it is off. 404 for an item of another case or org. |
 | GET | `/cases/{case_id}/evidence/{evidence_id}/preview` | image (`image/jpeg` or `image/png`) | The photo as the caseworker sees it: the copy made at upload without EXIF or GPS, never the original (a HEIC's copy is a JPEG). `Cache-Control: private, no-cache` with `ETag: "<sha256 of the copy>"`, so the browser checks the session on every view and an unchanged copy answers 304 without its bytes. 404 for another org's case, an item in another case, or an item with `has_preview: false`; 401 when not signed in (CONTRACT_CHANGES #97). |
 | POST | `/cases/{case_id}/runs` | `Run` | Starts tenant case analysis and returns immediately with `status: "running"`. Landlord cases return 409 and use the manual draft. |
 | GET | `/cases/{case_id}/runs/latest` | `Run` | 404 if none. |
@@ -87,6 +91,14 @@ When the agent needs something only a person knows, a step becomes `needs_input`
   - An answer that does not parse is a 422 with a plain reason (`Enter the date like 2026-11-21 or Nov 21, 2026`). The run stays paused and the same question can be answered again.
   - For any other key, or none, the answer is kept as text and goes only to the agent. It is not written to the case.
 - **What setting the date changes.** Besides `Case.hearing_date`, the server sets `Case.stage` to `hearing_scheduled` and `Case.next_deadline` to `{ date: the hearing date minus 5 days, label: "Must be received by · hearing <hearing date>" }` (evidence must be *received* at least 5 days before the hearing, Evidence Policy #42 and Regulations s. 25A(2); the date is a receipt date, not a send-by date: registered mail, express post or courier counts as received on the 3rd day after it is sent and e-mail sent at or after 4 p.m. the next day, s. 25A(3B), (3C); the label uses the ISO date like the seeded cases; the label uses the ISO date like the seeded cases). The caseload priority then follows the existing rules. The activity entry names both dates. An answer to a question with any other key changes nothing on the case.
+
+### Personal details and the AI model
+
+With the setting `PRIVACY_PLACEHOLDERS=true` (default false), every model call for a case (the analysis steps, the request translation and the quote translation) gets placeholders such as `[TENANT_NAME]`, `[RENTAL_ADDRESS]` or `[PHONE_1]` instead of the case's personal details, and the real values are put back into what the model returns before any tool, check or person sees it. Quotes are checked against the real evidence text as before; saved events, gaps, form fields and requests hold the real values.
+
+- **What is hidden:** the tenant's name (in full, and the first and last name on their own) and the rental unit's street address from the case; the names, street addresses, phones and emails in the Form J draft; email addresses, phone numbers, postal codes, street addresses, and SIN and card numbers (with a valid check digit) found in the evidence; and whatever the caseworker adds. A company landlord's name, the city and province, dates and amounts stay as written.
+- **Placeholders:** each distinct spelling has its own placeholder, so swapping back is exact. Spellings of one person share a stem (`[TENANT_NAME]`, `[TENANT_NAME_2]`). The case's own spelling gets the plain placeholder; found and added values are numbered in exhibit order, so a run and the Evidence page give the same numbers.
+- **Not complete:** detection is patterns and known values, not name recognition. The Evidence page shows the list so the caseworker can add what was missed (a name in another script, a neighbour) or send a value as written.
 
 ### Tenant intake (no account; access by link token)
 
