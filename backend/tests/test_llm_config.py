@@ -4,6 +4,7 @@ does with them. No network: the client is built but never called."""
 import pytest
 from pydantic import ValidationError
 
+from app import config
 from app.config import Settings
 from app.services.agent import llm
 
@@ -11,7 +12,10 @@ from app.services.agent import llm
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Some machines set these already; the tests set what they need."""
-    for name in ("LLM_MODEL", "ANTHROPIC_BASE_URL", "RUN_BUDGET_S"):
+    for name in (
+        "LLM_MODEL", "LLM_PROVIDER", "LLM_EFFORT", "ANTHROPIC_BASE_URL",
+        "OPENAI_COMPATIBLE_BASE_URL", "RUN_BUDGET_S",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
 
@@ -73,6 +77,38 @@ def test_https_or_local_http_urls_are_accepted(url: str) -> None:
 def test_anything_else_is_refused_so_the_key_and_evidence_cannot_leave_in_clear(url: str) -> None:
     with pytest.raises(ValidationError):
         make(anthropic_base_url=url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://api.example.test/v1",
+    "https://user:secret@api.example.test/v1",
+    "https://api.example.test/v1?target=/other",
+    "https://api.example.test/v1#other",
+])
+def test_insecure_or_ambiguous_compatible_api_urls_are_refused(url: str) -> None:
+    with pytest.raises(ValidationError, match="openai_compatible_base_url"):
+        make(openai_compatible_base_url=url)
+
+
+def test_live_provider_and_effort_are_read_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("LLM_EFFORT", "high")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:8080/v1/")
+    settings = make()
+    assert settings.llm_provider == "openai_compatible"
+    assert settings.llm_effort == "high"
+    assert settings.openai_compatible_base_url == "http://localhost:8080/v1"
+
+
+def test_standalone_config_refuses_live_provider_selection_before_adapter_is_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "find_spec", lambda _: None)
+    with pytest.raises(ValidationError, match="does not support the selected live LLM_PROVIDER"):
+        make(llm_mode="live", llm_provider="groq")
+    assert make(llm_mode="live", llm_provider="anthropic").llm_provider == "anthropic"
 
 
 @pytest.mark.parametrize("name", ["claude-sonnet-5-5", "deepseek-chat", "vendor/model:v1.2"])

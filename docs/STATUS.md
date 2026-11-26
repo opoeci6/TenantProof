@@ -74,7 +74,7 @@ Open PRs (2026-11-18), all into `dev`: this one (`opoeci6/fix-97-photo-preview`)
 Open issues:
 - **#54 (closed, PR #66):** Lameda12 confirmed Form J (the full title line, edition 2024-01) and Regulations s. 25A(2) on 2026-11-17, so all five sources are confirmed. The Form J confirmation covers the title and URL only. The draft remains partial; see #67 for coverage of tenant pages F1–F3. leozhang5867 also checked 25A(3B) and (3C): the app's "mail" and "after 4 p.m." wording is fixed in #73.
 - **#74 (done on `opoeci6/fix-74-intake-token-logs`):** intake tokens are masked in uvicorn's access log, `/i/<token>` sends `Referrer-Policy: no-referrer`, and `docs/DEPLOY.md` documents masking paths and `Referer` in nginx.
-- **#4:** WS3 follow-ups from the PR #2 review.
+- **#4:** Fixture fingerprints include messages, model and output limit. Evidence reads document the first-page default. API and tool enum definitions are shared, and live providers and supported effort levels are configurable on the server. Chat Completions retries eligible transient failures once within the call deadline. Mocked HTTP tests cover vendor contracts and retries. Live provider verification is pending.
 - **#68 (done on `opoeci6/feat-68-hindi-pdf`):** Hindi PDF text shaping is in (`uharfbuzz` with fpdf2 `set_text_shaping`, schema `opoeci6/schema-68-hindi-pdf`), completing #68. Russian (#69) is done and closed.
 - **#60:** remove personal details from evidence text before it goes to the model (to discuss).
 - **#61 (OCR part built, see Done):** after the MVP: let the model see photos and scanned pages, with content checks first (malware, known illegal images, graphic content).

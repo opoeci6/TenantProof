@@ -54,9 +54,11 @@ from app.services import activity
 from app.services.agent import extract, prompts
 from app.services.agent.evidence_text import EvidenceTextStore
 from app.services.agent.llm import (
+    LLMConfigError,
     LLMProvider,
     Message,
     Usage,
+    continuation_key,
     estimate_cost_usd,
     model_name,
 )
@@ -411,6 +413,20 @@ def _paused_step(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def can_resume_with(run: RunRow, provider: LLMProvider) -> bool:
+    current = continuation_key(provider)
+    for step in run.steps:
+        if not step.get("checkpoint"):
+            continue
+        stored = step.get("provider_key")
+        if stored is None:
+            if getattr(provider, "requires_continuation_key", False):
+                return False
+        elif stored != current:
+            return False
+    return True
+
+
 def paused_question(run: RunRow) -> dict[str, Any] | None:
     """The saved pause of a run waiting for the caseworker: the ask_caseworker tool_use id, the
     other calls' results and the question's field key (or None). None when nothing the runner
@@ -578,6 +594,8 @@ async def execute_run(
     waiting = any(_step(all_steps, k)["status"] == "needs_input" for k in steps)
     if waiting and answer is None:
         raise ValueError("this run is waiting for the caseworker's answer")
+    if not can_resume_with(run, provider):
+        raise LLMConfigError("Paused run uses a different model configuration")
     stored = next((s["nonce"] for s in all_steps if s.get("nonce")), None)
     if nonce is not None and stored is not None and nonce != stored:
         raise ValueError("this run already uses a different evidence nonce")
@@ -596,6 +614,7 @@ async def execute_run(
     run.finished_at = None
     session.add(run)
 
+    profile_key = continuation_key(provider)
     current: tuple[dict[str, Any], StepState] | None = None
     try:
         async with asyncio.timeout(remaining):
@@ -603,6 +622,8 @@ async def execute_run(
                 step = _step(all_steps, key)
                 if step["status"] in STEP_OVER:
                     continue  # a resume skips finished steps
+                if profile_key is not None:
+                    step["provider_key"] = profile_key
                 if key == "extract":
                     state = StepState(messages=[])
                     current = (step, state)
