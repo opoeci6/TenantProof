@@ -1,0 +1,244 @@
+"""Issue #60 end to end: with PRIVACY_PLACEHOLDERS on, the model gets placeholders instead of the
+seeded demo case's personal details, and what it proposes comes back with the real values and
+passes the same quote check. Scripted FixtureProvider only; no network."""
+
+import json
+from typing import Any
+
+import pytest
+from sqlmodel import Session, select
+
+from app.config import get_settings
+from app.models import ActivityRow, CaseRow, RunRow, TimelineEventRow
+from app.services.agent import llm, placeholders, runner
+from app.services.agent.evidence_text import InMemoryTextStore, Page
+from tests.agent_support import (
+    CASE,
+    MSG1,
+    RecordingProvider,
+    demo_store,
+    run,
+    thinking,
+    tool_use,
+    turn,
+)
+
+pytestmark = pytest.mark.usefixtures("hearing_known")
+
+N = "0123456789abcdef"
+LETTER = (
+    "To: Jordan Lee, Unit 4B, 100 Example Street, Halifax, NS. From the landlord at "
+    "22 Placeholder Road. Call 902-555-0187 or email jordan.lee@example.test.\nSigned,\nJordan\nLee"
+)  # the signature splits the name over two lines: JSON writes it as Jordan\nLee
+# What the seeded case calls its tenant and unit, as they appear in LETTER and MSG1.
+PERSONAL = ("Jordan", "Lee", "Example Street", "Unit 4B", "Placeholder Road", "902-555-0187",
+            "jordan.lee@example.test")  # fmt: skip
+QUOTE = "[TENANT_FIRST_NAME]: Hi, there is water leaking from the bathroom ceiling."
+REAL_QUOTE = "Jordan: Hi, there is water leaking from the bathroom ceiling."
+
+
+@pytest.fixture
+def on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", True)
+
+
+def store() -> InMemoryTextStore:
+    s = demo_store()
+    s.add_pages(CASE, "ev_02", [Page("page 1", LETTER)])
+    return s
+
+
+def leak(source: dict[str, str], tool_id: str, title: str = "Tenant reports the leak") -> dict:
+    return tool_use(
+        "propose_event", tool_id, title=title,
+        description="[TENANT_NAME] told [LANDLORD_FIRST_NAME] about the leak.",
+        actor="tenant", sources=[source],
+        date_candidates=[{"value": "2026-08-15", "precision": "day",
+                          "basis": "message_timestamp"}],
+    )  # fmt: skip
+
+
+def script() -> dict[str, llm.LLMResponse]:
+    return {
+        "timeline-turn1": turn(
+            thinking("read"), tool_use("read_evidence", "u1", evidence_id="ev_04", page=1),
+            tool_use("read_evidence", "u2", evidence_id="ev_02"),
+        ),
+        "timeline-turn2": turn(
+            leak({"evidence_id": "ev_04", "locator": "message 1", "excerpt": QUOTE}, "u3"),
+            leak({"evidence_id": "ev_04", "locator": "message 1",
+                  "excerpt": "[TENANT_FIRST_NAME]: The landlord admits it."}, "u4", "Invented"),
+        ),
+        "timeline-turn3": turn(tool_use("finish", "u5", summary="[TENANT_NAME]'s leak, 1 event.")),
+    }
+
+
+def execute(session: Session, provider: llm.LLMProvider) -> RunRow:
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    row = runner.create_run(session, case)
+    return run(runner.execute_run(session, row, provider, store(), nonce=N, steps=("timeline",)))
+
+
+def strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [s for v in value for s in strings(v)]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in strings(v)]
+    return []
+
+
+def sent_text(provider: RecordingProvider) -> str:
+    return "\n".join(
+        s for r in provider.requests for m in r.messages for s in strings(m.model_dump()["content"])
+    )
+
+
+def new_events(session: Session) -> list[TimelineEventRow]:
+    session.expire_all()
+    rows = session.exec(select(TimelineEventRow).where(TimelineEventRow.case_id == CASE))
+    return [e for e in rows if len(e.id) == 13]
+
+
+# --- a run
+
+
+def test_the_model_never_sees_the_cases_personal_details(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    provider = RecordingProvider(script())
+    execute(session, provider)
+    sent = sent_text(provider)
+    assert "[TENANT_FIRST_NAME]: Hi, there is water leaking" in sent
+    assert "[TENANT_NAME], [RENTAL_ADDRESS], Halifax, NS" in sent
+    for value in PERSONAL:
+        assert value not in sent, value
+    assert all(placeholders.LEGEND in r.system_run for r in provider.requests)
+
+
+def test_what_the_model_proposes_is_saved_with_the_real_values(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    row = execute(session, RecordingProvider(script()))
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["summary"].startswith("Jordan Lee's leak, 1 event.")
+    [event] = new_events(session)  # the invented quote is still rejected
+    assert event.sources[0]["excerpt"] == REAL_QUOTE
+    # A placeholder the model was never given stays as the model wrote it.
+    assert event.description == "Jordan Lee told [LANDLORD_FIRST_NAME] about the leak."
+    calls = [c for c in step["tool_calls"] if c["tool"] == "propose_event"]
+    assert "Jordan: Hi" in calls[0]["input"] and "[TENANT_FIRST_NAME]" not in calls[0]["input"]
+    assert "citation rejected" in calls[1]["output"]
+
+
+def test_thinking_comes_back_unchanged_and_the_history_is_resent_with_placeholders(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    provider = RecordingProvider(script())
+    execute(session, provider)
+    second = provider.requests[1].messages
+    assert second[1].content == script()["timeline-turn1"].content  # as the model wrote it
+    results = json.dumps(second[2].model_dump()["content"], ensure_ascii=False)
+    assert "[TENANT_FIRST_NAME]: Hi" in results and "Jordan" not in results
+
+
+def test_with_the_setting_off_the_evidence_goes_as_written(
+    fresh_db: None, session: Session
+) -> None:
+    provider = RecordingProvider(script())
+    execute(session, provider)
+    sent = sent_text(provider)
+    # (The scripted replies themselves carry placeholders; the evidence sent does not.)
+    assert MSG1 in sent and "[RENTAL_ADDRESS]" not in sent
+    assert all(placeholders.LEGEND not in r.system_run for r in provider.requests)
+
+
+def test_the_wrapper_keeps_the_model_name_and_paused_run_profile() -> None:
+    inner = llm.FixtureProvider(model="claude-haiku-5-5")
+    wrapped = placeholders.PlaceholderProvider(inner, placeholders.Placeholders())
+    assert llm.model_name(wrapped) == "claude-haiku-5-5"
+    assert llm.continuation_key(wrapped) == llm.continuation_key(inner)
+
+
+# --- the caseworker's list
+
+
+def privacy(client) -> dict:
+    r = client.get(f"/api/cases/{CASE}/privacy")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_list_shows_the_cases_details_and_where_they_came_from(
+    fresh_db: None, client, on: None
+) -> None:
+    view = privacy(client)
+    assert view["enabled"] is True
+    by_value = {d["value"]: d for d in view["details"]}
+    assert by_value["Jordan Lee"]["placeholder"] == "[TENANT_NAME]"
+    assert by_value["Jordan Lee"]["source"] == "case"
+    assert by_value["Unit 4B, 100 Example Street"]["placeholder"] == "[RENTAL_ADDRESS]"
+    assert "Sample Property Management Ltd." not in by_value  # a company is kept
+
+
+def test_a_hidden_name_is_listed_and_logged_without_its_value(
+    fresh_db: None, client, session: Session, on: None
+) -> None:
+    r = client.post(f"/api/cases/{CASE}/privacy/terms",
+                    json={"value": "约旦", "action": "hide", "role": "tenant"})  # fmt: skip
+    assert r.status_code == 200, r.text
+    added = next(d for d in r.json()["details"] if d["value"] == "约旦")
+    assert (added["placeholder"], added["source"]) == ("[TENANT_NAME_2]", "caseworker")
+    logged = session.exec(select(ActivityRow).where(ActivityRow.case_id == CASE)).all()
+    assert any(a.action == "Hid a personal detail from the AI model" for a in logged)
+    assert not any("约旦" in a.action for a in logged)
+
+
+def test_a_value_let_through_is_sent_as_written_and_can_be_undone(
+    fresh_db: None, client, on: None
+) -> None:
+    r = client.post(f"/api/cases/{CASE}/privacy/terms",
+                    json={"value": "jordan lee", "action": "show"})  # fmt: skip
+    shown = next(d for d in r.json()["details"] if d["shown"])
+    assert (shown["value"], shown["placeholder"]) == ("Jordan Lee", "[TENANT_NAME]")
+    r = client.delete(f"/api/cases/{CASE}/privacy/terms/{shown['term_id']}")
+    assert r.status_code == 200
+    assert not any(d["shown"] for d in r.json()["details"])
+
+
+def test_a_bad_entry_is_refused_with_a_plain_reason(fresh_db: None, client) -> None:
+    for body in ({"value": "x", "action": "hide"}, {"value": "Jordan", "action": "delete"},
+                 {"value": "Jordan", "action": "hide", "role": "pet"}, None):
+        r = client.post(f"/api/cases/{CASE}/privacy/terms", json=body)
+        assert r.status_code == 422 and r.json()["detail"]["reasons"]
+
+
+def test_another_orgs_case_and_terms_are_404(fresh_db: None, client, other_org_client) -> None:
+    assert other_org_client.get(f"/api/cases/{CASE}/privacy").status_code == 404
+    r = other_org_client.post(f"/api/cases/{CASE}/privacy/terms",
+                              json={"value": "Jordan", "action": "hide"})  # fmt: skip
+    assert r.status_code == 404
+    r = client.post(f"/api/cases/{CASE}/privacy/terms", json={"value": "Lee", "action": "show"})
+    term = next(d["term_id"] for d in r.json()["details"] if d["shown"])
+    assert other_org_client.delete(f"/api/cases/{CASE}/privacy/terms/{term}").status_code == 404
+    assert client.delete(f"/api/cases/{CASE}/privacy/terms/pt_missing").status_code == 404
+
+
+def test_model_text_shows_placeholders_only_when_the_setting_is_on(
+    fresh_db: None, client, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.models import EvidencePageRow
+
+    session.add(EvidencePageRow(case_id=CASE, evidence_id="ev_04", position=0,
+                                locator="message 1", text=MSG1))  # fmt: skip
+    session.commit()
+    path = f"/api/cases/{CASE}/evidence/ev_04/model-text"
+    assert client.get(path).json()["pages"][0]["text"] == MSG1
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", True)
+    body = client.get(path).json()
+    assert body["label"] and body["pages"][0]["text"].startswith(
+        "[2026-08-15 09:12] [TENANT_FIRST_NAME]: Hi"
+    )
+    assert client.get(f"/api/cases/{CASE}/evidence/ev_missing/model-text").status_code == 404

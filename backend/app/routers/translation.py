@@ -19,7 +19,8 @@ from app.models import ExcerptTranslationRow
 from app.ratelimit import limiter
 from app.schemas import ExcerptTranslation, ExcerptTranslationRequest
 from app.services import activity, excerpt_translation
-from app.services.agent import llm, prompts
+from app.services.agent import llm, placeholders, prompts
+from app.services.agent.evidence_text import SqlTextStore
 
 router = APIRouter()
 
@@ -73,6 +74,7 @@ def translate_excerpt(
     text_en = excerpt_translation.cached(session, language, payload.excerpt)
     if text_en is not None:
         return ExcerptTranslation(text_en=text_en)
+    provider = placeholders.for_case(session, case, SqlTextStore(session), provider)  # issue #60
     # Give the connection back while the model runs: a slow call must not hold a DB connection.
     session.commit()
     text_en = asyncio.run(excerpt_translation.translate(provider, language, payload.excerpt))
