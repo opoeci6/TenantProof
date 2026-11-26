@@ -30,15 +30,18 @@ from PIL import Image
 from sqlmodel import Session, col, select
 
 from app.models import CaseRow, EvidenceRow, FormFieldRow, GapRow, PackageRow, UserRow
-from app.schemas import Attestations, FormField, Package, PackageFile
+from app.schemas import ApplicantRole, Attestations, FormField, Package, PackageFile
 from app.services import activity, storage
 from app.services.evidence import gps, sniff  # also registers the HEIC opener
 from app.services.form_fields import (
+    EMAIL_CONSENT_LABEL,
     F1_ADDRESS_GROUPS,
     F1_CONTACT_GROUPS,
     F2_FIELD_KEYS,
     F3_PAYMENT_REQUESTS,
     F3_REQUESTS,
+    F4_PAYMENT_REQUESTS,
+    F4_REQUESTS,
     MANUAL_FIELDS_BY_KEY,
     covered_legacy_fields,
     is_required,
@@ -198,7 +201,9 @@ def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: flo
     pdf.ln(gap)
 
 
-def _write_f1_details(pdf: FPDF, values: dict[str, str | None]) -> None:
+def _write_f1_details(
+    pdf: FPDF, values: dict[str, str | None], applicant_role: ApplicantRole,
+) -> None:
     for prefix, label in F1_ADDRESS_GROUPS.items():
         street = values.get(f"{prefix}_street")
         apartment = values.get(f"{prefix}_apartment")
@@ -212,15 +217,18 @@ def _write_f1_details(pdf: FPDF, values: dict[str, str | None]) -> None:
             _write(pdf, label, bold=True, gap=0)
             _write(pdf, "\n".join(line for line in lines if line))
 
-    applicant_email_allowed = values.get("applicant_email_consent") == "yes"
+    consent = values.get("applicant_email_consent") or ""
+    rendered_consent = FORM_CHOICES["applicant_email_consent"].get(consent)
+    applicant_email_key = f"{applicant_role}_email"
     for label, fields in F1_CONTACT_GROUPS.items():
         details = []
         for key, field_label in fields.items():
             value = values.get(key)
-            if not value or (key == "tenant_email" and not applicant_email_allowed):
+            if not value or (key == applicant_email_key and consent != "yes"):
                 continue
-            rendered = FORM_CHOICES.get(key, {}).get(value, value)
-            details.append(f"{field_label}  {rendered}")
+            details.append(f"{field_label}  {value}")
+        if applicant_email_key in fields and rendered_consent:
+            details.append(f"{EMAIL_CONSENT_LABEL}  {rendered_consent}")
         if details:
             _write(pdf, label, bold=True, gap=0)
             _write(pdf, "\n".join(details))
@@ -243,19 +251,29 @@ def _write_form_fields(
         _write(pdf, value)
 
 
-def _write_f3_requests(pdf: FPDF, values: dict[str, str | None]) -> None:
-    payment_selected = values.get("request_payment") == "yes"
+def _write_requests(
+    pdf: FPDF, values: dict[str, str | None], applicant_role: ApplicantRole,
+) -> None:
+    landlord = applicant_role == "landlord"
+    requests = F4_REQUESTS if landlord else F3_REQUESTS
+    payment_options = F4_PAYMENT_REQUESTS if landlord else F3_PAYMENT_REQUESTS
+    payment_key = "landlord_request_payment" if landlord else "request_payment"
+    payment_selected = values.get(payment_key) == "yes"
     selected = [
-        (key, label) for key, label in F3_REQUESTS.items()
-        if values.get(key) == "yes" and (key not in F3_PAYMENT_REQUESTS or payment_selected)
+        (key, label) for key, label in requests.items()
+        if values.get(key) == "yes" and (key not in payment_options or payment_selected)
     ]
+    payment_has_reasoned_option = any(
+        key in payment_options and values.get(f"{key}_reason") for key, _ in selected
+    )
     if selected:
-        _write(pdf, "Tenant requests", bold=True, size=12, gap=2)
+        _write(pdf, f"{applicant_role.title()} requests", bold=True, size=12, gap=2)
         for key, label in selected:
             _write(pdf, label, bold=True, gap=0)
             reason = values.get(f"{key}_reason")
-            if reason or key != "request_payment":
-                _write(pdf, reason or "(reason not filled in)")
+            if not reason and key == payment_key and (not landlord or payment_has_reasoned_option):
+                continue
+            _write(pdf, reason or "(reason not filled in)")
     _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
 
 
@@ -265,18 +283,36 @@ def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at:
     _write(pdf, draft.form_name or "Application draft", bold=True, size=16, gap=3)
     _write(pdf, draft.disclaimer, size=9, gap=4)
     _write(pdf, f"Case: {case.title} ({case.unit})")
+    if case.applicant_role == "landlord":
+        _write(pdf, "Landlord applicant · Tenant respondent")
     _write(pdf, f"Prepared by {prepared_by} on {built_at:%Y-%m-%d %H:%M} UTC", gap=4)
     values = {field.key: field.value for field in draft.fields}
     _write_form_fields(
         pdf, (field for field in draft.fields if field.key not in MANUAL_FIELDS_BY_KEY), values,
     )
-    _write_f1_details(pdf, values)
+    _write_f1_details(pdf, values, case.applicant_role)
     _write_form_fields(
         pdf, (field for field in draft.fields if field.key in F2_FIELD_KEYS), values,
     )
-    _write_f3_requests(pdf, values)
-    _write(pdf, "Summary of events", bold=True, size=12, gap=2)
-    _write(pdf, draft.narrative.text or "(no accepted events)")
+    _write_requests(pdf, values, case.applicant_role)
+    if case.applicant_role == "landlord":
+        evidence = session.exec(
+            select(EvidenceRow)
+            .where(EvidenceRow.case_id == case.id)
+            .order_by(col(EvidenceRow.position), col(EvidenceRow.id))
+        ).all()
+        if evidence:
+            _write(pdf, "Evidence index", bold=True, size=12, gap=2)
+            _write(
+                pdf, "This index identifies original files. Check formats and remove location "
+                "data from filing copies.", size=9,
+            )
+            for item in evidence:
+                _write(pdf, f"{item.label} · {item.filename}", bold=True, gap=0)
+                _write(pdf, f"SHA-256: {item.sha256}", size=9)
+    else:
+        _write(pdf, "Summary of events", bold=True, size=12, gap=2)
+        _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())
 
 

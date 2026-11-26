@@ -180,6 +180,7 @@ def to_summary(
     summary = CaseSummary.model_validate(
         {
             "id": case.id,
+            "applicant_role": case.applicant_role,
             "tenant_name": case.tenant_name,
             "title": case.title,
             "unit": case.unit,
@@ -203,6 +204,7 @@ def to_case(case: CaseRow, assignee_name: str) -> Case:
     return Case.model_validate(
         {
             "id": case.id,
+            "applicant_role": case.applicant_role,
             "dispute_type": case.dispute_type,
             "title": case.title,
             "unit": case.unit,

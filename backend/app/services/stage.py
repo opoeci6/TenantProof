@@ -17,6 +17,13 @@ def refresh_stage(
     tenant just answered; None keeps waiting_tenant only while a request is still outstanding.
     Caller commits."""
     session.flush()
+    if case.applicant_role == "landlord":
+        if case.stage in ("needs_review", "hearing_scheduled"):
+            return
+        case.stage = "needs_review"
+        case.updated_at = datetime.now(UTC)
+        session.add(case)
+        return
     if waiting_on_tenant is None:
         waiting_on_tenant = case.stage == "waiting_tenant" and session.exec(
             select(GapRow).where(GapRow.case_id == case.id, GapRow.status == "waiting_tenant")

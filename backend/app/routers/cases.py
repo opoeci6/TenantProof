@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from app.config import Settings, get_settings
 from app.deps import CaseDep, SessionDep, UserDep
 from app.models import UserRow
-from app.schemas import Case, CaseCreate, CaseSummary, Intake
+from app.schemas import ApplicantCaseCreate, Case, CaseSummary, Intake
 from app.services import activity
 from app.services import cases as cases_service
 from app.services.intake_token import issue_token
@@ -61,7 +61,7 @@ def create_case(
     body is validated here, not by FastAPI, so a bad one answers 422 `{ detail: { reasons } }`
     like the other forms the UI shows errors for."""
     try:
-        parsed = CaseCreate.model_validate(body)
+        parsed = ApplicantCaseCreate.model_validate(body)
     except ValidationError as exc:
         reasons = list(dict.fromkeys(_plain(err) for err in exc.errors()))
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, {"reasons": reasons}) from None
@@ -95,6 +95,10 @@ def send_intake_link(
 ) -> Intake:
     """Create (or re-send) the tenant link. The raw URL is returned only here; earlier links
     are revoked. Only a hash is stored."""
+    if case.applicant_role == "landlord":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Intake links are only for tenant applications."
+        )
     first_send = case.intake_status == "not_sent"
     token = issue_token(session, case.id, settings.intake_token_ttl_days)
     case.intake_sent_at = datetime.now(UTC)

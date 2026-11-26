@@ -1,6 +1,6 @@
 """Additional Form J fields that the caseworker completes directly."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, select
@@ -43,12 +43,12 @@ F1_ADDRESS_PARTS = {
     "province": "Province or territory",
     "postal_code": "Postal code",
 }
+EMAIL_CONSENT_LABEL = "Consent to email from Service Nova Scotia"
 F1_CONTACT_GROUPS = {
     "Tenant contact details": {
         "tenant_home_phone": "Home phone",
         "tenant_other_phone": "Business or other phone",
         "tenant_email": "Email",
-        "applicant_email_consent": "Consent to email from Service Nova Scotia",
     },
     "Landlord contact details": {
         "landlord_home_phone": "Home phone",
@@ -61,6 +61,7 @@ F1_FIELDS = (
       for prefix, group in F1_ADDRESS_GROUPS.items() for part, label in F1_ADDRESS_PARTS.items()),
     *(FormFieldSpec(key, f"{group} · {label}", required=False)
       for group, fields in F1_CONTACT_GROUPS.items() for key, label in fields.items()),
+    FormFieldSpec("applicant_email_consent", EMAIL_CONSENT_LABEL, required=False),
 )
 F2_FIELD_KEYS = frozenset(field.key for field in F2_FIELDS)
 F3_REQUESTS = {
@@ -75,15 +76,42 @@ F3_REQUESTS = {
     "request_other": "Other",
 }
 F3_PAYMENT_REQUESTS = frozenset({"request_rent_relief", "request_expense_compensation"})
-F3_FIELDS = tuple(
-    field
-    for key, label in F3_REQUESTS.items()
-    for field in (
-        FormFieldSpec(key, label, required=False),
-        FormFieldSpec(f"{key}_reason", f"Reason for {label.lower()}", required=False),
+F4_REQUESTS = {
+    "landlord_request_termination_renovations": (
+        "Termination and vacant possession for renovations, repairs or demolition"
+    ),
+    "landlord_request_termination_other": "Termination and vacant possession for another reason",
+    "landlord_request_payment": "Payment of money",
+    "landlord_request_unpaid_rent": "Unpaid rent",
+    "landlord_request_property_damage": "Damages to property",
+    "landlord_request_other_payment": "Other payment",
+    "landlord_request_compliance": "Compliance with a lease or the Act",
+    "landlord_request_application_fee": "Award of the application fee",
+    "landlord_request_other": "Other",
+}
+F4_PAYMENT_REQUESTS = frozenset({
+    "landlord_request_unpaid_rent", "landlord_request_property_damage",
+    "landlord_request_other_payment",
+})
+
+
+def _request_fields(requests: Mapping[str, str]) -> tuple[FormFieldSpec, ...]:
+    return tuple(
+        field
+        for key, label in requests.items()
+        for field in (
+            FormFieldSpec(key, label, required=False),
+            FormFieldSpec(f"{key}_reason", f"Reason for {label.lower()}", required=False),
+        )
     )
-)
-MANUAL_FIELDS = (*F2_FIELDS, *F1_FIELDS, *F3_FIELDS)
+
+
+F3_FIELDS = _request_fields(F3_REQUESTS)
+F4_FIELDS = _request_fields(F4_REQUESTS)
+REQUEST_SELECTION_KEYS = frozenset((*F3_REQUESTS, *F4_REQUESTS))
+_F3_FIELD_KEYS = frozenset(field.key for field in F3_FIELDS)
+_F4_FIELD_KEYS = frozenset(field.key for field in F4_FIELDS)
+MANUAL_FIELDS = (*F2_FIELDS, *F1_FIELDS, *F3_FIELDS, *F4_FIELDS)
 MANUAL_FIELDS_BY_KEY = {field.key: field for field in MANUAL_FIELDS}
 _MANUAL_POSITIONS = {
     field.key: i for i, field in enumerate(MANUAL_FIELDS, start=len(FORM_J_FIELDS))
@@ -99,12 +127,19 @@ def _optional_field(case_id: str, spec: FormFieldSpec) -> FormFieldRow:
     )
 
 
+def field_allowed_for_case(case: CaseRow, key: str) -> bool:
+    if case.applicant_role == "landlord":
+        return key not in _F3_FIELD_KEYS and key != "remedy"
+    return key not in _F4_FIELD_KEYS
+
+
 def with_optional_fields(case: CaseRow, fields: Sequence[FormFieldRow]) -> list[FormFieldRow]:
     existing = {field.key: field for field in fields}
     return [
-        *(field for field in fields if field.key not in MANUAL_FIELDS_BY_KEY),
+        *(field for field in fields
+          if field.key not in MANUAL_FIELDS_BY_KEY and field_allowed_for_case(case, field.key)),
         *(existing[spec.key] if spec.key in existing else _optional_field(case.id, spec)
-          for spec in MANUAL_FIELDS),
+          for spec in MANUAL_FIELDS if field_allowed_for_case(case, spec.key)),
     ]
 
 

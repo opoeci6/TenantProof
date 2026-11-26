@@ -90,7 +90,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
 .panel-pad{padding:18px}
 /* --- new case (#41) --- */
-.new-case{display:grid;gap:12px;max-width:560px;margin:0 0 16px}.new-case label{display:grid;gap:4px;font-weight:600;font-size:13.5px}.nc-actions{display:flex;gap:8px;flex-wrap:wrap}
+.new-case{display:grid;gap:12px;max-width:560px;margin:0 0 16px}.new-case label:not([hidden]){display:grid;gap:4px;font-weight:600;font-size:13.5px}.nc-actions{display:flex;gap:8px;flex-wrap:wrap}
 /* --- end new case --- */
 .note{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--ink-2);background:var(--surface-2);border-radius:var(--r);padding:10px 12px}
 .note b{color:var(--ink)}
@@ -486,7 +486,7 @@ const ENDPOINTS = {
   run: ["POST /cases/{id}/runs", "GET /cases/{id}/runs/latest", "GET /runs/{run_id}  (poll)", "POST /runs/{run_id}/answer"],
   timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
   gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "POST /cases/{id}/translate-excerpt", "GET /cases/{id}/sources"],
-  form: ["GET /cases/{id}/form-draft", "PATCH /cases/{id}/form-draft/fields/{key}"],
+  form: ["GET /cases/{id}/form-draft", "PATCH /cases/{id}/form-draft/fields/{key}", "GET /cases/{id}/form-draft/pdf"],
   package: ["POST /cases/{id}/package", "GET /cases/{id}/activity"],
   intake: ["GET /intake/{token}", "POST /intake/{token}/files (multipart)", "POST /intake/{token}/submit"]
 };
@@ -634,15 +634,33 @@ const paymentRequests = {
   rent_relief: "Relief from rent owing",
   expense_compensation: "Compensation for expenses"
 };
+const landlordRequests = {
+  termination_renovations: "Termination and vacant possession for renovations, repairs or demolition",
+  termination_other: "Termination and vacant possession for another reason",
+  payment: "Payment of money",
+  compliance: "Compliance with a lease or the Act",
+  application_fee: "Award of the application fee",
+  other: "Other"
+};
+const landlordPaymentRequests = {
+  unpaid_rent: "Unpaid rent",
+  property_damage: "Damages to property",
+  other_payment: "Other payment"
+};
 const requestFields = {};
-for (const [key, label] of Object.entries({...tenantRequests, ...paymentRequests})) {
-  requestFields[`request_${key}`] = { label };
-  requestFields[`request_${key}_reason`] = { label: `Reason for ${label.toLowerCase()}` };
+for (const [prefix, categories] of [
+  ["request", {...tenantRequests, ...paymentRequests}],
+  ["landlord_request", {...landlordRequests, ...landlordPaymentRequests}]
+]) {
+  for (const [key, label] of Object.entries(categories)) {
+    requestFields[`${prefix}_${key}`] = { label };
+    requestFields[`${prefix}_${key}_reason`] = { label: `Reason for ${label.toLowerCase()}` };
+  }
 }
 const fieldControls = { ...leaseFields, ...partyFields, ...requestFields };
 const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
-  if (field.label) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
+  if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
 db.runs = {}; db.intakeRequests = []; let runCounter = 0;
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
@@ -867,9 +885,9 @@ function formFieldCounts(fields) {
     reqMissing: visible.filter(field => field.required && !field.value).length
   };
 }
-function railMeta(st, evidenceCount) {
+function railMeta(st, evidenceCount, landlord = false) {
   return {
-    evidence: `${plural(evidenceCount, "file")} · from tenant`,
+    evidence: `${plural(evidenceCount, "file")} · ${landlord ? "caseworker uploads" : "from tenant"}`,
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
     gaps: st.gaps === 0 ? NOTHING : st.blocking ? `${st.blocking} required open` : st.waiting ? `${st.waiting} waiting for tenant` : plural(st.recommended, "suggestion"),
     form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
@@ -1109,6 +1127,8 @@ async function ensureCase() {
 async function logout() { try { await request("POST", "/auth/logout"); } catch {} writeCaseToUrl(null); location.reload(); }
 
 /* ---------- chrome ---------- */
+const landlordApplication = () => S.case?.applicant_role === "landlord";
+
 function renderChrome() {
   const r = route(), inCase = !TENANT_MODE && IN_CASE.includes(r);  // the tenant's own page has no case rail
   $("#layout").classList.toggle("single", !inCase);
@@ -1116,11 +1136,11 @@ function renderChrome() {
   if (TENANT_MODE) { $("#topnav").innerHTML = ""; $("#ctx").innerHTML = `<strong>${esc((S.intake.view && S.intake.view.org_name) || "")}</strong><span></span>`; $("#rail").innerHTML = ""; return; }
   $("#topnav").innerHTML = `<a href="#cases" ${r === "cases" || inCase ? 'aria-current="page"' : ""}>Caseload</a>`;
   const c = S.case;
-  $("#ctx").innerHTML = inCase && c ? `<strong>${esc(c.tenant.name)} · ${esc(c.title)}</strong><span>${esc(c.unit)} · Maintenance dispute</span>`
+  $("#ctx").innerHTML = inCase && c ? `<strong>${landlordApplication() ? "Tenant: " : ""}${esc(c.tenant.name)} · ${esc(c.title)}</strong><span>${esc(c.unit)} · ${landlordApplication() ? "Landlord application" : "Maintenance dispute"}</span>`
     : `<strong>${esc(S.me ? S.me.org.name : "")}</strong><span>${S.me ? `Signed in as ${esc(S.me.name)}, caseworker` : ""}</span>`;
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
-  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length);
+  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length, landlordApplication());
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
@@ -1129,8 +1149,8 @@ function renderChrome() {
     { id: "form", name: "Form draft", meta: rm.form, done: rm.doneForm, attn: st.reqMissing > 0 },
     { id: "package", name: "Package", meta: latestPackage(S.pkg, S.activity) ? "Built" : "Not built", done: !!latestPackage(S.pkg, S.activity) }
   ];
-  $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
-    + `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`;
+  $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.filter(it => !landlordApplication() || ["evidence", "form"].includes(it.id)).map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
+    + (landlordApplication() ? "" : `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`);
 }
 
 /* --- new case (#41): POST /cases, CONTRACT_CHANGES #35 --- */
@@ -1138,6 +1158,7 @@ function renderChrome() {
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
   clearInterval(poller);
+  S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
   S.editing = null; S.drafting = null; S.draftEdit = null; S.draftError = ""; S.askError = ""; S.askDraft = "";
   S.attest = { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false };
@@ -1146,13 +1167,19 @@ const NEW_CASE_LANGS = ["en", "zh", "fr", "es", "ru", "hi"];  // the languages t
 function newCaseForm() {
   const n = S.newCase; if (!n) return "";
   const v = k => esc(n.values[k] || "");
+  const landlord = n.values.applicant_role === "landlord";
   const opts = `<option value="" disabled${n.values.tenant_language ? "" : " selected"}>Choose…</option>` + NEW_CASE_LANGS.map(k => `<option value="${k}"${n.values.tenant_language === k ? " selected" : ""}>${esc(langLabel(k))}</option>`).join("");
   return `<form class="panel panel-pad new-case" data-action="create-case" aria-labelledby="nc-h">
     <h2 class="section-h" id="nc-h">New case</h2>
     <p class="muted">This is a shared demo: use invented names and addresses.</p>
     ${n.error ? `<div class="note bad" role="alert"><span class="note-ico">×</span><span>${esc(n.error)}</span></div>` : ""}
+    <label>Who is applying?<select class="field" name="applicant_role" required>
+      <option value="" disabled${n.values.applicant_role ? "" : " selected"}>Choose an applicant role</option>
+      <option value="tenant"${n.values.applicant_role === "tenant" ? " selected" : ""}>Tenant</option>
+      <option value="landlord"${n.values.applicant_role === "landlord" ? " selected" : ""}>Landlord</option>
+    </select></label>
     <label>Tenant name<input class="field" name="tenant_name" maxlength="120" required autocomplete="off" value="${v("tenant_name")}"></label>
-    <label>Preferred language<select class="field" name="tenant_language" required>${opts}</select></label>
+    <label${landlord ? " hidden" : ""}>Tenant’s preferred language<select class="field" name="tenant_language" required${landlord ? " disabled" : ""}>${opts}</select></label>
     <label>Unit address<input class="field" name="unit" maxlength="200" required autocomplete="off" value="${v("unit")}"></label>
     <label>What is wrong<input class="field" name="title" maxlength="120" required autocomplete="off" placeholder="For example: water leak and mould in the bathroom" value="${v("title")}"></label>
     <div class="nc-actions"><button class="btn primary" type="submit"${n.busy ? " disabled" : ""}>${n.busy ? "Creating…" : "Create case"}</button><button class="btn" type="button" data-action="cancel-new-case"${n.busy ? " disabled" : ""}>Cancel</button></div>
@@ -1160,27 +1187,33 @@ function newCaseForm() {
 }
 async function createCase(form) {
   const fd = new FormData(form);
-  const body = Object.fromEntries(["tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
-  S.newCase = { values: body, busy: true, error: null }; render();
+  const values = Object.fromEntries(["applicant_role", "tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
+  const body = values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values;
+  S.newCase = { values, busy: true, error: null }; render();
   let made;
   try { made = await request("POST", "/cases", body); }
   catch (err) {
-    S.newCase = { values: body, busy: false, error: err.message }; render();
+    S.newCase = { values, busy: false, error: err.message }; render();
     // The message sits above the fields, so after clicking Create it can be scrolled out of view.
     const note = document.querySelector("form.new-case .note.bad"); if (note) note.scrollIntoView({ block: "center" });
     return;
   }
   S.newCase = null;
   if (USE_MOCK) { await refresh(["cases"]); render(); toast("Case added to the caseload. Mock mode has one case view, so it shows as a demo row."); return; }
-  resetCaseState(); setCase(made.id); await refresh(); location.hash = "evidence"; render();
-  toast("Case created. Send the intake link to the tenant.");
+  resetCaseState();
+  setCase(made.id);
+  await refresh();
+  const landlord = made.applicant_role === "landlord";
+  location.hash = landlord ? "form" : "evidence";
+  render();
+  toast(landlord ? "Landlord case created. Complete the Form J draft." : "Case created. Send the intake link to the tenant.");
 }
 function mockNewCase(body) {
   const b = body || {}, blank = ["tenant_name", "unit", "title"].filter(k => !String(b[k] || "").trim());
-  if (blank.length || !NEW_CASE_LANGS.includes(b.tenant_language)) throw Object.assign(new Error("Fill in every field"), { status: 422 });
+  if (blank.length || !["tenant", "landlord"].includes(b.applicant_role) || !NEW_CASE_LANGS.includes(b.tenant_language)) throw Object.assign(new Error("Fill in every field"), { status: 422 });
   const id = `case_mock_${db.otherCases.length + 1}`;
-  db.otherCases.push({ id, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
-  return { id, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true };
+  db.otherCases.push({ id, applicant_role: b.applicant_role, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
+  return { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true };
 }
 /* --- end new case --- */
 
@@ -1198,17 +1231,18 @@ function viewCases() {
   const week = cs.filter(c => c._days !== null && c._days !== undefined && c._days <= 7).length;
   const rows = cs.map(c => {
     const fresh = notAnalysed(c);  // a finished-looking stage with no analysis behind it
+    const landlord = c.applicant_role === "landlord";
     const [stLabel, stCls] = fresh ? ["Not analysed yet", "plain"] : STAGE[c.stage];
     const dl = c.next_deadline ? `<span class="${c._days <= 7 ? "soon" : ""}">${esc(fmtDay(c.next_deadline.date))}</span><small>${esc(deadlineLabel(c.next_deadline.label).replace(/hearing (\d{4}-\d\d-\d\d)/, (_, d) => "hearing " + fmtDay(d)))}</small>` : `<span class="muted">No hearing yet</span>`;
     const open = [c.open_blocking ? `<span style="color:var(--bad)">${c.open_blocking} required open</span>` : "", c.pending_review ? `<span>${plural(c.pending_review, "event")} to review</span>` : ""].filter(Boolean).join("") || `<span class="muted">—</span>`;
     const openable = !!c.has_demo_data, tag = openable ? "button" : "div";
     return `<${tag} class="cl-row p-${c.priority}${openable ? "" : " demo"}" ${openable ? `data-action="open-case" data-id="${c.id}" type="button"` : `role="listitem" aria-disabled="true"`}>
       <span class="cl-stripe"></span>
-      <span class="cl-who"><strong>${esc(c.tenant_name)}${openable ? "" : `<span class="pill plain demo-tag">Demo row</span>`}</strong><span>${esc(c.title)} · ${esc(c.unit)}</span></span>
+      <span class="cl-who"><strong>${esc(c.tenant_name)}${openable ? "" : `<span class="pill plain demo-tag">Demo row</span>`}</strong><span>${landlord ? "Landlord application · " : ""}${esc(c.title)} · ${esc(c.unit)}</span></span>
       <span class="cl-stage"><span class="pill ${stCls}">${stLabel}</span></span>
       <span class="cl-dead">${dl}</span>
       <span class="cl-open">${open}</span>
-      <span class="cl-lang muted">${esc(langLabel(c.tenant_language))}</span>
+      <span class="cl-lang muted">${landlord ? "—" : esc(langLabel(c.tenant_language))}</span>
       <span class="cl-reason">${fresh ? (openable ? "Not analysed yet. Open the case and run the analysis." : "Not analysed yet.") : `${c.priority === "high" ? "High priority: " : ""}${esc(c.priority_reason)}`}</span>
     </${tag}>`;
   }).join("");
@@ -1238,15 +1272,15 @@ function viewEvidence() {
       <dl class="kv">${mdRows}</dl>
       <div class="ev-checks">${fcPill}${proc}<span style="color:${failed ? "var(--bad)" : "var(--ink-3)"}">${esc(failed ? `${e.error || "This file could not be read."} Its contents are not used in the analysis.` : fc.note)}</span></div></div>`;
   }).join("");
-  return `<div class="view-head"><div><h1>Evidence</h1><p>Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model.</p></div></div>
-    <div class="panel panel-pad intake-panel">
+  return `<div class="view-head"><div><h1>Evidence</h1><p>${landlordApplication() ? "The draft PDF lists the original supporting files. Review copies separately before filing." : "Files come from the tenant's intake link or from you. Each gets an exhibit label, a SHA-256 fingerprint and a server receipt time. Location and device data are removed before anything goes to the AI model."}</p></div></div>
+    ${landlordApplication() ? "" : `<div class="panel panel-pad intake-panel">
       ${!(S.case.tenant.preferred_language in I18N) ? `<div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span><span class="muted">The tenant page has no ${esc(langLabel(S.case.tenant.preferred_language))} text yet, so no link can be sent or previewed for this case.</span></div>` : `
       <div class="ip-main"><span class="ip-title">Tenant intake link · ${esc(langLabel(S.case.tenant.preferred_language))}</span>
         <span class="muted">${ik.status === "not_sent" ? "Not sent yet" : `Sent ${fmtTime(ik.sent_at)}`} · last upload ${fmtTime(ik.last_upload_at)} · ${ik.tenant_attested_genuine ? `<span style="color:var(--ok)">tenant confirmed files are genuine</span>` : "not confirmed yet"}</span>
         ${link ? linkBox(link, qr) : `<span class="muted">The link is shown once, when you send it.${ik.status === "not_sent" ? "" : " Re-send to create a new link (the old one stops working)."}</span>`}</div>
       <div class="btn-row"><a class="btn" href="#intake">Open tenant view</a><button class="btn${ik.status === "not_sent" ? " primary" : ""}" type="button" data-action="resend">${ik.status === "not_sent" ? "Send intake link" : "Re-send link"}</button></div>`}
-    </div>
-    <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>For files the tenant brought to the clinic. JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
+    </div>`}
+    <label class="drop" id="drop" for="fileIn"><input class="file-in" type="file" id="fileIn" multiple accept="${UPLOAD_ACCEPT}"><div><strong>Add files yourself</strong><p>${landlordApplication() ? "" : "For files the tenant brought to the clinic. "}JPG, PNG, HEIC, PDF or TXT, up to 25 MB each.</p></div><span class="btn primary">Choose files</span></label>
     <div class="panel ev-list">${rows}</div>
     ${contract("evidence", { intake: ik, evidence: S.evidence })}`;
 }
@@ -1442,26 +1476,36 @@ function viewForm() {
       <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
   };
   const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
-  const partySections = partyGroups.map(([title, keys]) => {
+  const landlord = landlordApplication();
+  const groups = landlord ? [
+    ["Landlord applicant", [...partyGroups[2][1], "applicant_email_consent"]],
+    partyGroups[3],
+    ["Tenant respondent", partyGroups[0][1].filter(key => key !== "applicant_email_consent")],
+    partyGroups[1],
+    partyGroups[4]
+  ] : partyGroups;
+  const partySections = groups.map(([title, keys]) => {
     const group = keys.filter(key => fieldsByKey.has(key)).map(key => renderField(fieldsByKey.get(key))).join("");
     return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
   }).join("");
   const rows = f.fields.filter(field => !partyKeys.has(field.key) &&
     !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key))
     .map(renderField).join("");
+  const prefix = landlord ? "landlord_request" : "request";
+  const paymentOptions = landlord ? landlordPaymentRequests : paymentRequests;
   const renderRequest = ([key, title]) => {
-    const selection = fieldsByKey.get(`request_${key}`);
-    const reason = fieldsByKey.get(`request_${key}_reason`);
+    const selection = fieldsByKey.get(`${prefix}_${key}`);
+    const reason = fieldsByKey.get(`${prefix}_${key}_reason`);
     if (!selection || !reason) return "";
     const selected = selection.value === "yes";
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
       ${selected ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
         <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
-      ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentRequests).map(renderRequest).join("")}</div>` : ""}
+      ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
-  const requestRows = Object.entries(tenantRequests).map(renderRequest).join("");
+  const requestRows = Object.entries(landlord ? landlordRequests : tenantRequests).map(renderRequest).join("");
   const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
     if (!fieldsByKey.has(key)) return false;
     if (!definition.when) return true;
@@ -1471,18 +1515,20 @@ function viewForm() {
   }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
-  return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Check every field against the official form with the tenant before filing.</p></div></div>
+  return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
+    ${landlord && !USE_MOCK ? `<button class="btn" type="button" data-action="download-form-draft"${S.draftSaves?.downloading ? " disabled" : ""}>Download draft PDF</button>` : ""}
+    </div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
     ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
     ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
       <div class="panel form-grid">${leaseRows}</div>` : ""}
-    ${rows || requestRows ? `<h2 class="section-h">Tenant requests (Form J F3)</h2>` : ""}
+    ${rows || requestRows ? `<h2 class="section-h">${landlord ? "Landlord requests (Form J F4)" : "Tenant requests (Form J F3)"}</h2>` : ""}
     ${rows ? `<div class="panel form-grid">${rows}</div>` : ""}
-    ${requestRows ? `<p class="muted">Select all requests that apply and explain each one. The applicant signs and dates the official Form J. Form J F4 is for landlord applicants.</p>
+    ${requestRows ? `<p class="muted">Select all requests that apply and explain each one. The applicant signs and dates the official Form J.</p>
       <div class="panel form-grid">${requestRows}</div>` : ""}
-    <h2 class="section-h">Details of the problem</h2>
+    ${landlord ? "" : `<h2 class="section-h">Details of the problem</h2>
     <div class="panel panel-pad" style="display:grid;gap:10px">${f.narrative.text ? `<p class="narr">${narrHtml}</p>` : `<p class="narr">No accepted events yet.</p>`}
-      <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>
+      <span class="muted">Built from ${f.narrative.event_ids.length} accepted events. Caseworker notes are never included. ${left ? `<a href="#timeline">${left} ${left === 1 ? "event still needs" : "events still need"} review</a> and are left out.` : "All events reviewed."}</span></div>`}
     ${contract("form", f)}`;
 }
 
@@ -1626,11 +1672,23 @@ const VIEWS = { cases: viewCases, intake: viewIntake, evidence: viewEvidence, ru
 function render() {
   if (S.needLogin) return showLogin();
   if (!TENANT_MODE && !CASE_ID && route() !== "cases") { location.hash = "cases"; return; }  // hashchange re-renders
-  renderChrome();
   const r = route();
+  if (!TENANT_MODE && landlordApplication() && ["run", "timeline", "gaps", "package", "intake"].includes(r)) {
+    location.hash = "form";
+    return;
+  }
+  renderChrome();
   const here = S.cases.find(x => x.id === CASE_ID);
-  const banner = CASE_ROUTES.includes(r) && here && here.analysed === false ? `<div class="note warn" role="status"><span class="note-ico">!</span><span><b>Not analysed yet.</b> No analysis has been completed and no events are reviewed, so nothing here is ready to file. <a href="#run">Run the analysis</a></span></div>` : "";
-  $("#view").innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
+  const banner = !landlordApplication() && CASE_ROUTES.includes(r) && here && here.analysed === false ? `<div class="note warn" role="status"><span class="note-ico">!</span><span><b>Not analysed yet.</b> No analysis has been completed and no events are reviewed, so nothing here is ready to file. <a href="#run">Run the analysis</a></span></div>` : "";
+  const view = $("#view");
+  if (r === "form" && landlordApplication() && view.querySelector('[data-action="download-form-draft"]')) {
+    const active = document.activeElement;
+    const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
+    // Refresh the data without replacing a control the caseworker is still editing or correcting.
+    const saves = S.draftSaves;
+    if (editing || saves?.downloading || saves?.pending.size || saves?.failed.size || saves?.invalid.size) return;
+  }
+  view.innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
   if (r === "evidence") wireDrop();
 }
 
@@ -1722,6 +1780,99 @@ function pollRun() {
 }
 
 /* ---------- events ---------- */
+/* ---------- Form J draft saves and download ---------- */
+function draftSaveState() {
+  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), downloading: false };
+}
+
+async function saveDraftField(key, value) {
+  const path = `${C}/form-draft/fields/${key}`;
+  if (!landlordApplication()) {
+    await request("PATCH", path, { value });
+    await refresh(["form", "gaps"]);
+    return;
+  }
+
+  const state = draftSaveState();
+  const previous = state.pending.get(key);
+  const save = (async () => {
+    // Preserve edit order if the same field is changed again while a save is pending.
+    if (previous) await previous.promise.catch(() => {});
+    await request("PATCH", path, { value });
+  })();
+  const entry = { value, promise: save };
+  state.pending.set(key, entry);
+  try {
+    await save;
+    state.confirmed.set(key, value);
+    if (state.pending.get(key) === entry) state.failed.delete(key);
+  } catch (error) {
+    if (state.pending.get(key) === entry) state.failed.add(key);
+    throw error;
+  } finally {
+    if (state.pending.get(key) === entry) state.pending.delete(key);
+  }
+  if (S.draftSaves === state) await refresh(["form", "gaps"]);
+}
+
+async function saveDraftControl(input) {
+  const { key } = input.dataset;
+  const value = input.type === "checkbox" ? (input.checked ? input.value : "") : input.value.trim();
+  const saved = S.form.fields.find(field => field.key === key)?.value;
+  const state = landlordApplication() ? draftSaveState() : null;
+  if (!input.reportValidity() || !validCaseField(key, value, saved)) {
+    state?.invalid.add(key);
+    return;
+  }
+  state?.invalid.delete(key);
+  await saveDraftField(key, value);
+}
+
+async function downloadFormDraft(button) {
+  const state = draftSaveState();
+  if (state.downloading) return;
+  const caseId = CASE_ID;
+  const path = `${API_BASE}${C}/form-draft/pdf`;
+  state.downloading = true;
+  try {
+    const editing = document.activeElement;
+    if (editing?.matches('[data-action="field"], [data-action="date-field"]')) editing.blur();
+    button.disabled = true;
+    while (state.pending.size) {
+      await Promise.allSettled([...state.pending.values()].map(entry => entry.promise));
+    }
+    if (S.draftSaves !== state || route() !== "form") return;
+    if (state.invalid.size || state.failed.size) {
+      const key = (state.invalid.size ? state.invalid : state.failed).values().next().value;
+      const label = S.form.fields.find(field => field.key === key)?.label || "Form field";
+      toast(`Save ${label} before downloading the draft.`, 6000);
+      document.getElementById(`fld-${key}`)?.focus();
+      return;
+    }
+
+    const response = await fetch(path, { credentials: "include" });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(errorMessage(data, response)), { status: response.status });
+    }
+    const pdf = await response.blob();
+    if (S.draftSaves !== state || route() !== "form") return;
+    const url = URL.createObjectURL(pdf);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `tenantproof-${caseId}-draft.pdf`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    state.downloading = false;
+    if (S.draftSaves === state) {
+      const current = document.querySelector('[data-action="download-form-draft"]');
+      if (current) current.disabled = false;
+      if (route() === "form") render();
+    }
+  }
+}
+
 /* ---------- case brief (PDF) ---------- */
 const briefButton = () => USE_MOCK ? "" : `<button class="btn" type="button" data-action="brief">Case brief (PDF)</button>`;
 async function openBrief() {
@@ -1768,21 +1919,26 @@ function copyFallback(b) {
   range.selectNodeContents(code); sel.removeAllRanges(); sel.addRange(range);
   toast("Couldn't copy automatically. The link is selected: press Ctrl+C (⌘C on a Mac).");
 }
+// Keep focus in the field until the download handler can commit it before starting a GET.
+document.addEventListener("pointerdown", ev => {
+  if (ev.target.closest('[data-action="download-form-draft"]')) ev.preventDefault();
+});
 document.addEventListener("click", guarded(async ev => {
   const b = ev.target.closest("[data-action]");
   if (!b || b.tagName === "FORM" || b.tagName === "INPUT") return;
   const a = b.dataset.action, id = b.dataset.id;
   if (a === "logout") return logout();
   if (a === "reload") return location.reload();
+  if (a === "download-form-draft") return downloadFormDraft(b);
   if (a === "brief") return openBrief();
   if (a === "close-brief") return closeBrief();
   if (a === "photo") return showPhoto(id);  /* #97 */
   if (a === "close-photo") return closePhoto();
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { copyFallback(b); } }
-  if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = "timeline"; } }
-  if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=tenant_name]"); if (first) first.focus(); return; }  /* #41 */
+  if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = landlordApplication() ? "form" : "timeline"; } }
+  if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41 */
   if (a === "cancel-new-case") { S.newCase = null; render(); return; }
-  if (a === "resend") { if (!CASE_ID) return; const ik = S.case && S.case.intake;
+  if (a === "resend") { if (!CASE_ID || landlordApplication()) return; const ik = S.case && S.case.intake;
     if (ik && ik.status !== "not_sent" && !confirm(`Make a new intake link for ${S.case.tenant.name}? The link sent earlier stops working.`)) return;
     const r = await request("POST", `${C}/intake-link`); S.lastLink = { caseId: CASE_ID, url: r.url, qr: r.qr_svg }; S.intake.view = null; toast("Intake link created. Copy it now: it is only shown once."); await refresh(["case", "intake"]); }
   if (a === "confirm-field") {
@@ -1795,9 +1951,7 @@ document.addEventListener("click", guarded(async ev => {
     const value = input.type === "date" ? saved : input.value.trim();
     if (!value) return;
     if (!validCaseField(key, value, saved)) return;
-    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
-    await refresh(["form", "gaps"]);
-    return;
+    return saveDraftField(key, value);
   }
   if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
@@ -1885,22 +2039,40 @@ document.addEventListener("input", ev => {
 /* A native date emits change while the user is still editing its individual segments. */
 document.addEventListener("focusout", guarded(async ev => {
   const input = ev.target;
-  if (input.dataset.action !== "date-field" || input.contains(ev.relatedTarget)) return;
-  if (!input.reportValidity() || input.value === input.defaultValue) return;
-  await request("PATCH", `${C}/form-draft/fields/${input.dataset.key}`, { value: input.value });
-  await refresh(["form", "gaps"]);
+  const { action, key } = input.dataset;
+  if (input.contains(ev.relatedTarget)) return;
+  const state = landlordApplication() ? S.draftSaves : null;
+  if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
+      && !state.pending.has(key)) {
+    return saveDraftControl(input);
+  }
+  if (action !== "date-field") return;
+  const dateState = landlordApplication() ? draftSaveState() : null;
+  if (!input.reportValidity()) {
+    dateState?.invalid.add(key);
+    return;
+  }
+  dateState?.invalid.delete(key);
+  const pending = dateState?.pending.get(key);
+  const saved = pending?.value ?? dateState?.confirmed.get(key) ?? input.defaultValue;
+  if (input.value === saved) {
+    if (!pending) dateState?.failed.delete(key);
+    return;
+  }
+  await saveDraftField(key, input.value);
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
-  if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
-  if (t.dataset.action === "field") {
-    if (!t.reportValidity()) return;
-    const { key } = t.dataset;
-    const value = t.type === "checkbox" ? (t.checked ? t.value : "") : t.value.trim();
-    if (!validCaseField(key, value, S.form.fields.find(field => field.key === key)?.value)) return;
-    await request("PATCH", `${C}/form-draft/fields/${key}`, { value });
-    await refresh(["form", "gaps"]);
+  const newCase = t.closest("form.new-case");
+  if (t.name === "applicant_role" && newCase) {
+    const language = newCase.elements.namedItem("tenant_language");
+    const landlord = t.value === "landlord";
+    language.disabled = landlord;
+    language.closest("label").hidden = landlord;
+    return;
   }
+  if (t.id === "devToggle") { document.body.classList.toggle("dev", t.checked); try { localStorage.setItem("tp-dev", t.checked ? "1" : "0"); } catch {} return; }
+  if (t.dataset.action === "field") return saveDraftControl(t);
   if (t.closest("form[data-action=attest]")) { S.attest[t.name] = t.checked; S.pkgError = null; render(); }
   if (t.closest("form[data-action=intake-attest]")) { S.intake[t.name] = t.checked; render(); }
   if (t.id === "intakeLang") { S.intake.lang = t.value; if (TENANT_MODE) try { localStorage.setItem("tp-intake-lang", t.value); } catch {} render(); }  // bug 8: kept after a reload
@@ -1909,7 +2081,7 @@ document.addEventListener("change", guarded(async ev => {
 }));
 async function handleFiles(files) {
   try { await uploadFiles(`${C}/evidence`, [...files]); } catch (err) { toast(err.message); return; } /* WS1: an error toast is not overwritten */
-  toast(`${plural(files.length, "file")} added. Run the analysis again to include them.`);
+  toast(`${plural(files.length, "file")} added. ${landlordApplication() ? "The draft PDF will list them." : "Run the analysis again to include them."}`);
   await refresh(["evidence"]);
 }
 function wireDrop() {

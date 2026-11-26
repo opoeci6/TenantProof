@@ -12,9 +12,10 @@ from app.services import activity
 from app.services.agent.tools import CLEARED_NOTE, DRAFTED_NOTE
 from app.services.form_fields import (
     F2_ALTERNATIVES,
-    F3_REQUESTS,
     LEGACY_ALTERNATIVES,
+    REQUEST_SELECTION_KEYS,
     covered_legacy_field_for_case,
+    field_allowed_for_case,
     lock_alternative_fields,
     materialize_optional_field,
 )
@@ -103,7 +104,7 @@ def save_field_value(field: FormFieldRow, value: str) -> None:
     if value != (field.value or ""):
         # Existing verbatim drafts can still be confirmed, and an empty value clears the field.
         if value:
-            if field.key in F3_REQUESTS and value != "yes":
+            if field.key in REQUEST_SELECTION_KEYS and value != "yes":
                 raise _bad("Select the request or leave it unchecked")
             if field.key in EMAIL_KEYS and not is_email_address(value):
                 raise _bad("Enter a valid email address")
@@ -154,6 +155,8 @@ def patch_gap(
     session: Session, case: CaseRow, gap: GapRow, patch: GapPatch, user: UserRow
 ) -> GapRow:
     key = (gap.input or {}).get("field_key")
+    if key and not field_allowed_for_case(case, key):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
     if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
         lock_alternative_fields(session, case.id)
         session.refresh(gap)
@@ -213,6 +216,8 @@ def request_from_tenant(session: Session, case: CaseRow, gap: GapRow, user: User
 def patch_field(
     session: Session, case: CaseRow, key: str, patch: FieldPatch, user: UserRow
 ) -> FormFieldRow:
+    if not field_allowed_for_case(case, key):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
     if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
         lock_alternative_fields(session, case.id)
     field = session.get(FormFieldRow, (case.id, key))

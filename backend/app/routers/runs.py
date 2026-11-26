@@ -118,6 +118,11 @@ def start_run(
 ) -> Run:
     """Starts the analysis and returns at once with `status: "running"`; the UI polls
     `GET /runs/{id}`. The case comes from the path and the caseworker's org, never a body."""
+    if case.applicant_role == "landlord":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {"reasons": ["Landlord applications are drafted manually in Form draft"]},
+        )
     # Lock the case row so two clicks cannot both pass the "already running" check.
     session.exec(select(CaseRow).where(CaseRow.id == case.id).with_for_update()).one()
     # Before the check: a pause answered first is "running" by then, and blocks this run. If the
