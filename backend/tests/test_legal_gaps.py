@@ -1,12 +1,23 @@
 """The gaps step: the deterministic checks first, then the agent that drafts requests to the
 tenant. Fixture providers only, so nothing reaches the network."""
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlmodel import Session, col, select
 
-from app.models import ActivityRow, CaseRow, EvidencePageRow, FormFieldRow, GapRow, LegalSourceRow
+from app.models import (
+    ActivityRow,
+    CaseRow,
+    EvidencePageRow,
+    EvidenceRow,
+    FormFieldRow,
+    GapRow,
+    LegalSourceRow,
+)
 from app.services.agent import llm, loop, runner
 from app.services.agent import tools as t
+from app.services.evidence.ingest import OCR_SKIPPED, PHOTO_OCR_LOCATOR
 from app.services.form_fields import F3_REQUESTS, remedy_input
 from app.services.legal import gaps
 from app.services.legal.gap_checks import REMEDY_HOW_TO_FIX, UNATTESTED_TITLE
@@ -573,3 +584,151 @@ def test_landlord_case_never_gets_a_remedy_gap(fresh_db, client, session) -> Non
     prepared = prepare(session, bare.id)
     assert prepared.fields_added == 6
     assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, bare.id))
+
+
+# --- #173: screenshots with OCR text skip "Original photo" ----------------------------------
+
+
+def test_screenshot_photo_checks_in_gap_checks() -> None:
+    from app.services.legal.gap_checks import CaseFacts, EvidenceFact, specs
+
+    found = specs(
+        CaseFacts(
+            attested=True,
+            fields=(),
+            evidence=(
+                EvidenceFact("e1", "E-01", "photo", no_metadata=True, screenshot=True),
+                EvidenceFact("e2", "E-02", "photo", no_metadata=True, screenshot=False),
+                EvidenceFact("e3", "E-03", "photo", no_metadata=True, edited=True, screenshot=True),
+            ),
+        )
+    )
+    titles_found = {spec.title for spec in found}
+    assert "Original photo for E-01" not in titles_found
+    assert "Original photo for E-02" in titles_found
+    assert "Original photo for E-03" not in titles_found
+    assert "Unedited version of E-03" in titles_found
+
+
+def _add_photo(
+    session: Session,
+    ev_id: str,
+    label: str,
+    *,
+    captured_at: str | None = None,
+    device: str | None = None,
+    software: str | None = None,
+    ocr_text: str | None = None,
+    error: str | None = None,
+) -> None:
+    session.add(
+        EvidenceRow(
+            id=ev_id,
+            case_id=LIVE,
+            position=int(label.split("-")[1]),
+            label=label,
+            filename=f"{ev_id}.png",
+            kind="photo",
+            mime="image/png",
+            size_bytes=1234,
+            sha256=ev_id.ljust(64, "0"),
+            received_at=datetime.now(UTC),
+            uploaded_by="tenant",
+            format_check={"accepted": True, "action": "none", "note": "PNG is an accepted format."},
+            metadata_={
+                "captured_at": captured_at,
+                "gps_present": False,
+                "device": device,
+                "software": software,
+            },
+            metadata_stripped_for_ai=True,
+            processing="done",
+            error=error,
+        )
+    )
+    session.flush()
+    if ocr_text is not None:
+        session.add(
+            EvidencePageRow(
+                evidence_id=ev_id,
+                locator=PHOTO_OCR_LOCATOR,
+                case_id=LIVE,
+                position=1,
+                text=ocr_text,
+            )
+        )
+
+
+def test_screenshot_vs_camera_photo_vs_edited_photo_gaps(fresh_db, session) -> None:
+    _add_photo(
+        session,
+        "ev_shot",
+        "E-01",
+        ocr_text="Bonjour, notre plombier passera mardi matin pour reparer le mur.",
+    )
+    _add_photo(session, "ev_cam", "E-02")
+    _add_photo(
+        session,
+        "ev_edited",
+        "E-03",
+        software="Adobe Photoshop",
+        ocr_text="Votre loyer reste du le 1er du mois sans exception.",
+    )
+    _add_photo(
+        session,
+        "ev_short_ocr",
+        "E-04",
+        ocr_text="Trop court",
+    )
+    _add_photo(
+        session,
+        "ev_device",
+        "E-05",
+        device="Apple iPhone 15",
+        ocr_text="Avis affiche sur la porte d'entree du logement.",
+    )
+    _add_photo(
+        session,
+        "ev_sign_cam",
+        "E-06",
+        captured_at="2026-09-10T14:20:00",
+        ocr_text="Avis affiche sur la porte d'entree du logement.",
+    )
+    _add_photo(
+        session,
+        "ev_ocr_skipped_err",
+        "E-07",
+        ocr_text="Texte present mais marque OCR_SKIPPED sur l'item.",
+        error=OCR_SKIPPED,
+    )
+    _add_photo(
+        session,
+        "ev_ocr_skipped_text",
+        "E-08",
+        ocr_text=OCR_SKIPPED,
+    )
+    session.commit()
+
+    case = session.get(CaseRow, LIVE)
+    assert case is not None
+    facts = {f.evidence_id: f for f in gaps.case_facts(session, case).evidence}
+    assert facts["ev_shot"].screenshot is True
+    assert facts["ev_cam"].screenshot is False
+    assert facts["ev_edited"].screenshot is True
+    assert facts["ev_short_ocr"].screenshot is False
+    assert facts["ev_device"].screenshot is False
+    assert facts["ev_sign_cam"].screenshot is False
+    assert facts["ev_ocr_skipped_err"].screenshot is False
+    assert facts["ev_ocr_skipped_text"].screenshot is False
+
+    prepare(session, LIVE)
+    found = titles(session, LIVE)
+    assert "Original photo for E-01" not in found
+    assert "Original photo for E-02" in found
+    assert "Original photo for E-03" not in found
+    assert "Unedited version of E-03" in found
+    assert "Original photo for E-04" in found
+    assert "Original photo for E-05" in found
+    assert "Original photo for E-06" not in found
+    assert "Original photo for E-07" in found
+    assert "Original photo for E-08" in found
