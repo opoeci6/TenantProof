@@ -18,7 +18,7 @@ compares real text with real text. Spellings of one person share a stem: `[TENAN
 
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # A known value starts and ends at a letter or digit only where the text has no ASCII letter or
 # digit next to it. ASCII only on purpose: "Mei Chen您好" still matches "Mei Chen".
@@ -231,13 +231,21 @@ class Placeholders:
 
     def __post_init__(self) -> None:
         self._shown = {normalize(v) for v in self.shown}
-        seen: set[str] = set()
+        first: dict[str, int] = {}
         for k in self.known:
             key = normalize(k.value)
-            if len(key) < 2 or key in seen:
+            if len(key) < 2:
                 continue
-            seen.add(key)
-            self._known.append((k, _known_regex(k)))
+            i = first.get(key)
+            if i is None:
+                first[key] = len(self._known)
+                self._known.append((k, _known_regex(k)))
+            elif k.term_id is not None and self._known[i][0].term_id is None:
+                # The caseworker hid a value the case already hides (issue #166): their term
+                # goes on the case's value, so the list shows it and Remove undoes it. How the
+                # value is matched, and its placeholder, stay the case's.
+                kept, regex = self._known[i]
+                self._known[i] = (replace(kept, source=k.source, term_id=k.term_id), regex)
         for k, _ in self._known:  # the case's own spelling gets the plain placeholder
             if normalize(k.value) not in self._shown and not k.part:
                 self._token(k.value, k.stem, k.kind, k.source, k.numbered, k.part, k.term_id)
@@ -308,8 +316,22 @@ class Placeholders:
 
     def entries(self) -> list[Entry]:
         """Every placeholder handed out so far, in order. Pieces of a longer value (a first name
-        on its own) are listed only where they occurred."""
-        return [e for e in self._entries.values() if not e.part or e.count]
+        on its own) are listed only where they occurred, or when the caseworker hid them."""
+        listed = [e for e in self._entries.values() if not e.part or e.count or e.term_id]
+        terms = {e.term_id for e in listed}
+        for k, _ in self._known:  # a piece the caseworker hid that never occurred on its own
+            if k.term_id is not None and k.term_id not in terms:
+                listed.append(Entry(k.value, self._unseen_placeholder(k), k.kind, k.source,
+                                    k.part, k.term_id))  # fmt: skip
+        return listed
+
+    def _unseen_placeholder(self, known: Known) -> str:
+        """The placeholder of a value no text has shown yet, when nothing read later can change
+        it: one word matched only as written, the only value of its stem, no number handed out.
+        Else "": which number it gets depends on what is read first."""
+        alone = sum(k.stem == known.stem for k, _ in self._known) == 1
+        sure = known.exact_case and not known.numbered and len(known.value.split()) == 1
+        return f"[{known.stem}]" if sure and alone and known.stem not in self._next else ""
 
 
 # A caseworker's own entry: what it is decides its placeholder. A person or an address the
