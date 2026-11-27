@@ -91,10 +91,8 @@ def test_allowed_date_pairs_and_blanks_pass(
 
 
 def test_unchanged_legacy_reversed_date_remains_confirmable() -> None:
-    assert (
-        date_order("move_out_date", "2026-04-01", {"move_in_date": "2026-04-03"}, saved="2026-04-01")
-        is None
-    )
+    values = {"move_in_date": "2026-04-03"}
+    assert date_order("move_out_date", "2026-04-01", values, saved="2026-04-01") is None
 
 
 def test_date_order_messages_match_backend_form_values() -> None:
@@ -107,7 +105,9 @@ def test_date_order_messages_match_backend_form_values() -> None:
 
 def test_field_error_helpers_resolve_live_node_and_clear_before_refresh() -> None:
     source = INDEX.read_text(encoding="utf-8")
-    helpers = source[source.index("const fieldNode = "):source.index("async function saveDraftControl(")]
+    helpers = source[
+        source.index("const fieldNode = "):source.index("async function saveDraftControl(")
+    ]
     assert "input && input.isConnected ? input : document.getElementById(`fld-${key}`)" in helpers
     assert helpers.count("const el = fieldNode(key, input);") == 2
     assert helpers.count("document.getElementById(`err-${key}`)") == 2
