@@ -1024,7 +1024,7 @@ function sentBeforeText(t, record, lang) {
 /* =====================================================================
    UI
    ===================================================================== */
-const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null,
+const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null, missingCase: null,
   attest: { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false }, pkgError: null,
   intake: { view: null, lang: null, files: [], answers: {}, attest: false, consent: false, sent: false } };
 const RESUMABLE = ["extract", "timeline", "gaps"];  // steps the runner can resume after an answer (the others' needs_input is not a question)
@@ -1429,10 +1429,16 @@ async function ensureCase() {
   if (CASE_ID) return;
   const list = await request("GET", "/cases");
   const wanted = caseInUrl();  // the case open before a refresh, if this user can still see it
-  const pick = (wanted && list.find(c => c.id === wanted)) || list.find(c => c.has_demo_data) || list[0];
-  if (pick) setCase(pick.id);
+  const { id, missing } = pickInitialCase(list, wanted);
+  S.missingCase = missing;
+  if (id) setCase(id);
 }
-async function logout() { try { await request("POST", "/auth/logout"); } catch {} writeCaseToUrl(null); location.reload(); }
+async function logout() {
+  try { await request("POST", "/auth/logout"); } catch {}
+  S.missingCase = null;
+  if (!USE_MOCK && !TENANT_MODE) history.replaceState(null, "", signOutUrl(location.href));
+  location.reload();
+}
 
 /* ---------- chrome ---------- */
 const landlordApplication = () => S.case?.applicant_role === "landlord";
@@ -1547,7 +1553,10 @@ function mockNewCase(body) {
 const notAnalysed = c => !!c && c.analysed === false && c.stage === "ready_to_file";
 function viewCases() {
   const cs = S.cases;
-  if (!cs.length) return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases appear here.</p></div><button class="btn" data-action="new-case">New case</button></div>${newCaseForm()}
+  // #217: an id the URL asked for that this caseload does not have is reported here, and the
+  // page does not quietly open a different case.
+  const missingNote = S.missingCase ? `<div class="note bad" role="alert"><span class="note-ico">×</span><span>That case was not found or you do not have access. Choose a case from your caseload below.</span></div>` : "";
+  if (!cs.length) return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases appear here.</p></div><button class="btn" data-action="new-case">New case</button></div>${missingNote}${newCaseForm()}
     <div class="panel panel-pad"><strong>No cases yet</strong><p class="muted">Cases assigned to you will show up here. Nothing is shared with you from other organizations.</p></div>`;
   // Events waiting for review count whatever the stage: a case with a hearing date stays
   // "hearing_scheduled" (gating.compute_stage) while its events still need review.
@@ -1570,7 +1579,7 @@ function viewCases() {
       <span class="cl-reason">${fresh ? (openable ? "Not analysed yet. Open the case and run the analysis." : "Not analysed yet.") : `${c.priority === "high" ? "High priority: " : ""}${esc(c.priority_reason)}`}</span>
     </${tag}>`;
   }).join("");
-  return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases. The order follows fixed rules (received-by dates first, then required items), so you can always see why a case is on top.</p></div><button class="btn" data-action="new-case">New case</button></div>${newCaseForm()}
+  return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases. The order follows fixed rules (received-by dates first, then required items), so you can always see why a case is on top.</p></div><button class="btn" data-action="new-case">New case</button></div>${missingNote}${newCaseForm()}
     <div class="summary-row"><span><b>${cs.length}</b>open ${cs.length === 1 ? "case" : "cases"}</span><span><b>${review}</b>${review === 1 ? "needs" : "need"} your review</span><span><b>${week}</b>${week === 1 ? "case" : "cases"} due within 7 days</span></div>
     <div class="panel cl" role="list"><div class="cl-head"><span></span><span>Tenant · issue</span><span>Stage</span><span>Next deadline</span><span>Open items</span><span>Language</span></div>${rows}</div>
     <div class="note"><span class="note-ico">i</span><span>Rows marked <b>Demo row</b> show what a caseload looks like. They have no case view and cannot be opened.</span></div>
@@ -2181,10 +2190,28 @@ function writeCaseToUrl(id) {
   if (id) url.searchParams.set("case", id); else url.searchParams.delete("case");
   if (url.href !== location.href) history.replaceState(history.state, "", url);
 }
+/* #217: which case to open on load. An id the caller asked for is never swapped for another
+   case: it either exists in this caseload or it is reported as missing. */
+function pickInitialCase(list, wanted) {
+  if (wanted) {
+    const match = list.find(c => c.id === wanted) || null;
+    return { id: match ? match.id : null, missing: match ? null : wanted };
+  }
+  const fallback = list.find(c => c.has_demo_data) || list[0] || null;
+  return { id: fallback ? fallback.id : null, missing: null };
+}
+/* #219: where signing out lands: the same page without ?case= and without the view hash. */
+function signOutUrl(href) {
+  const u = new URL(href);
+  u.searchParams.delete("case");
+  u.hash = "";
+  return u.pathname + u.search;
+}
 /* caseInUrl:end */
 const setCase = id => {
   CASE_ID = id;
   C = `/cases/${id}`;
+  S.missingCase = null;
   S.draftSaves = tenantDraftSavesByCase.get(id) ?? null;
   tenantDraftSavesByCase.delete(id);
   writeCaseToUrl(id);
