@@ -730,6 +730,7 @@ for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
 db.runs = {}; db.intakeRequests = []; db.packages = []; let runCounter = 0;  // #200: built packages, newest last
+db.caseByKey = {};  // #202: the case each submission key made, so a retry returns it
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
 const RUN_SCRIPT = [
@@ -1494,6 +1495,20 @@ function resetCaseState() {
   S.attest = { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false };
 }
 const NEW_CASE_LANGS = ["en", "zh", "fr", "es", "ru", "hi"];  // the languages the tenant page has text for
+/* #202: one key per submission. A retry after a lost response carries the same key, so the
+   server answers with the case the first attempt made instead of creating a second one. */
+function newSubmissionKey() {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const b = c.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;  // version 4
+    b[8] = (b[8] & 0x3f) | 0x80;  // variant 10
+    const hex = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `k${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 function newCaseForm() {
   const n = S.newCase; if (!n) return "";
   const v = k => esc(n.values[k] || "");
@@ -1518,12 +1533,16 @@ function newCaseForm() {
 async function createCase(form) {
   const fd = new FormData(form);
   const values = Object.fromEntries(["applicant_role", "tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
-  const body = values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values;
-  S.newCase = { values, busy: true, error: null }; render();
+  // #202: the key is minted once and kept while this form is open, so Create case again after a
+  // lost response returns the case the first attempt made. A deliberate new submission starts
+  // from New case, which has no key.
+  const key = S.newCase?.key || newSubmissionKey();
+  const body = { ...(values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values), idempotency_key: key };
+  S.newCase = { values, key, busy: true, error: null }; render();
   let made;
   try { made = await request("POST", "/cases", body); }
   catch (err) {
-    S.newCase = { values, busy: false, error: err.message }; render();
+    S.newCase = { values, key, busy: false, error: err.message }; render();
     // The message sits above the fields, so after clicking Create it can be scrolled out of view.
     const note = document.querySelector("form.new-case .note.bad"); if (note) note.scrollIntoView({ block: "center" });
     return;
@@ -1540,10 +1559,16 @@ async function createCase(form) {
 }
 function mockNewCase(body) {
   const b = body || {}, blank = ["tenant_name", "unit", "title"].filter(k => !String(b[k] || "").trim());
+  // #202: the checks come first, so a refused body never binds its key; then the same key
+  // returns the case the first attempt saved instead of adding a second one.
   if (blank.length || !["tenant", "landlord"].includes(b.applicant_role) || !NEW_CASE_LANGS.includes(b.tenant_language)) throw Object.assign(new Error("Fill in every field"), { status: 422 });
+  const key = String(b.idempotency_key || "");
+  if (key && db.caseByKey[key]) return JSON.parse(JSON.stringify(db.caseByKey[key]));
   const id = `case_mock_${db.otherCases.length + 1}`;
   db.otherCases.push({ id, applicant_role: b.applicant_role, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
-  return { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true };
+  const made = { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true, has_run: false, has_package: false };
+  if (key) db.caseByKey[key] = made;
+  return made;
 }
 /* --- end new case --- */
 
@@ -2674,7 +2699,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "privacy-undo") { S.privacy = await request("DELETE", `${C}/privacy/terms/${id}`); toast("Done." + (S.run ? " Run the analysis again to use it." : "")); render(); return; }
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { copyFallback(b); } }
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = landlordApplication() ? "form" : "timeline"; } }
-  if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41 */
+  if (a === "new-case") { S.newCase = S.newCase || { values: {}, key: null }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41, #202 */
   if (a === "cancel-new-case") { S.newCase = null; render(); return; }
   if (a === "resend") { if (!CASE_ID || landlordApplication()) return; const ik = S.case && S.case.intake;
     if (ik && ik.status !== "not_sent" && !confirm(`Make a new intake link for ${S.case.tenant.name}? The link sent earlier stops working.`)) return;

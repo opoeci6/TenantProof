@@ -5,6 +5,7 @@ from typing import Annotated, Any
 import segno
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.config import Settings, get_settings
@@ -60,7 +61,10 @@ def create_case(
 ) -> Case:
     """Create a case in the caseworker's own org, assigned to them (CONTRACT_CHANGES #35). The
     body is validated here, not by FastAPI, so a bad one answers 422 `{ detail: { reasons } }`
-    like the other forms the UI shows errors for."""
+    like the other forms the UI shows errors for. A body that passes but still cannot be saved
+    (a "<", nothing visible) is refused before anything is written, so a refused attempt never
+    binds its `idempotency_key`; a retry that carries a key this org already used returns the
+    case that key made (CONTRACT_CHANGES #49, #202)."""
     try:
         parsed = ApplicantCaseCreate.model_validate(body)
     except ValidationError as exc:
@@ -69,8 +73,24 @@ def create_case(
     refused = cases_service.problems(parsed)
     if refused:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, {"reasons": refused})
-    case = cases_service.create_case(session, user, parsed)
-    session.commit()
+    existing = cases_service.find_by_idempotency_key(
+        session, user.org_id, parsed.idempotency_key
+    )
+    if existing is not None:
+        return _case_out(session, existing)
+    try:
+        case = cases_service.create_case(session, user, parsed)
+        session.commit()
+    except IntegrityError:
+        # Two requests with one key at the same time: the partial unique index lets one through
+        # and the other answers with the case the winner committed, not an error.
+        session.rollback()
+        existing = cases_service.find_by_idempotency_key(
+            session, user.org_id, parsed.idempotency_key
+        )
+        if existing is None:
+            raise
+        return _case_out(session, existing)
     session.refresh(case)
     return _case_out(session, case)
 

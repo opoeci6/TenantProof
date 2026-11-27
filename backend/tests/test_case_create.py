@@ -257,6 +257,102 @@ def test_every_page_of_an_empty_case_answers(fresh_db, client):
     assert client.get(base + "/runs/latest").status_code == 404  # API_CONTRACT: 404 if none
 
 
+def test_a_retried_create_returns_the_first_case_and_logs_it_once(fresh_db, client, session):
+    """#202: the retry after a lost response opens the case the first attempt made."""
+    first = create(client, idempotency_key="retry-1")
+    again = create(client, idempotency_key="retry-1")
+    assert again["id"] == first["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "retry-1")).all()
+    assert [row.id for row in rows] == [first["id"]]
+    assert cases_service_log(session, first["id"]) == "Created the case"
+    assert len([
+        c for c in client.get(URL).json() if c["tenant_name"] == BODY["tenant_name"]
+    ]) == 1
+
+
+def test_a_retried_landlord_create_does_not_duplicate_its_form_fields(fresh_db, client, session):
+    first = create(client, applicant_role="landlord", idempotency_key="retry-landlord")
+    again = create(client, applicant_role="landlord", idempotency_key="retry-landlord")
+    assert again["id"] == first["id"]
+    other = create(client, applicant_role="landlord", idempotency_key="retry-landlord-2")
+    counted = {
+        case_id: len(session.exec(
+            select(FormFieldRow).where(FormFieldRow.case_id == case_id)
+        ).all())
+        for case_id in (first["id"], other["id"])
+    }
+    assert counted[first["id"]] == counted[other["id"]] > 0
+    assert cases_service_log(session, first["id"]) == "Created the case"
+
+
+def test_two_deliberate_submissions_are_two_cases(fresh_db, client, session):
+    first = create(client, idempotency_key="one")
+    second = create(client, idempotency_key="two")
+    third = create(client)  # no key at all, as a caller that does not send one
+    assert len({first["id"], second["id"], third["id"]}) == 3
+    assert len(session.exec(select(CaseRow).where(CaseRow.id == third["id"])).all()) == 1
+
+
+def test_another_org_using_the_same_key_creates_its_own_case(
+    fresh_db, client, other_org_client, session: Session,
+):
+    """Keys are scoped per org: the same string in another org is a different submission."""
+    mine = create(client, idempotency_key="shared-key")
+    theirs = create(other_org_client, idempotency_key="shared-key")
+    assert theirs["id"] != mine["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "shared-key")).all()
+    assert len({row.org_id for row in rows}) == 2
+
+
+@pytest.mark.parametrize(("key", "reason"), [
+    ("", "Submission key: enter some text"),
+    ("   ", "Submission key: enter some text"),
+    ("x" * 65, "Submission key: at most 64 characters"),
+    ("<bad>", "Submission key: not valid"),
+])
+def test_a_bad_submission_key_is_422_and_binds_nothing(fresh_db, client, session, key, reason):
+    before = len(session.exec(select(CaseRow)).all())
+    r = client.post(URL, json={**BODY, "idempotency_key": key})
+    assert r.status_code == 422
+    assert r.json()["detail"]["reasons"] == [reason]
+    session.expire_all()
+    assert len(session.exec(select(CaseRow)).all()) == before
+
+
+def test_a_refused_body_does_not_bind_its_key(fresh_db, client, session):
+    """The 422 comes before the lookup or the write, so the key is free for the corrected retry."""
+    refused = client.post(
+        URL, json={**BODY, "title": "Heat < 15C", "idempotency_key": "after-refusal"}
+    )
+    assert refused.status_code == 422
+    assert session.exec(
+        select(CaseRow).where(CaseRow.idempotency_key == "after-refusal")
+    ).first() is None
+    made = create(client, idempotency_key="after-refusal")
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "after-refusal")).all()
+    assert [row.id for row in rows] == [made["id"]]
+
+
+def test_a_key_race_returns_the_case_that_won(fresh_db, client, session, monkeypatch):
+    """Two requests with one key: the index refuses the second insert and the handler answers
+    with the case the winner committed, not a 500."""
+    first = create(client, idempotency_key="race-key")
+    real = cases_service.find_by_idempotency_key
+    calls = {"n": 0}
+
+    def racing(session_: Session, org_id: str, key: str | None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real(session_, org_id, key)
+
+    monkeypatch.setattr(cases_service, "find_by_idempotency_key", racing)
+    again = client.post(URL, json={**BODY, "idempotency_key": "race-key"})
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == first["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "race-key")).all()
+    assert [row.id for row in rows] == [first["id"]]
+    assert cases_service_log(session, first["id"]) == "Created the case"
+
+
 def test_the_case_says_whether_it_has_a_run_and_a_package(fresh_db, client, session: Session):
     """#218: the page reads these flags instead of asking for a run and a package it has not got.
     The two endpoints keep their 404 answers for a caller that does ask."""
