@@ -188,7 +188,10 @@ def test_the_model_is_sent_on_every_request() -> None:
 
 def test_fixture_mode_ignores_both_settings() -> None:
     s = make(llm_mode="fixture", llm_model="x", anthropic_base_url="https://a.example")
-    assert isinstance(llm.get_provider(s), llm.FixtureProvider)
+    provider = llm.get_provider(s)
+    assert isinstance(provider, llm.FixtureProvider)
+    # The hash covers the model, so a stray LLM_MODEL must not leak into fixture mode.
+    assert provider.model == llm.MODEL
 
 
 def test_the_key_never_appears_in_the_provider_error_for_a_bad_base_url() -> None:

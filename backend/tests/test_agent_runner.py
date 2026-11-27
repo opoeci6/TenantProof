@@ -218,6 +218,35 @@ def test_recorded_fixtures_replay_whatever_the_nonce_and_a_changed_prompt_is_cau
     assert step["status"] == "failed" and "re-record" in step["summary"]
 
 
+def test_recorded_fixtures_replay_a_write_step_without_duplicating_the_event(
+    fresh_db: None, session: Session, tmp_path: Path
+) -> None:
+    """The replay of a propose_event step gets a new row id, and must still match the fixture.
+
+    The old version of the test above covered only reads, so a write step could stop replaying
+    (its tool result carries the generated id) and the duplicate-event check was lost.
+    """
+    script = {
+        "timeline-turn1": turn(propose("u1")),
+        "timeline-turn2": turn(tool_use("finish", "u2", summary="One event proposed.")),
+    }
+    recorder = RecordingProvider(script)
+    execute(session, new_run(session), recorder)
+    first = new_events(session)
+    assert [e.title for e in first] == ["Tenancy starts"]
+
+    for request, key in zip(recorder.requests, script, strict=True):
+        doc = llm.fixture_document(request, script[key])
+        (tmp_path / f"{key}.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    session.rollback()
+    row = execute(session, new_run(session), llm.FixtureProvider(tmp_path, strict=True))
+    assert next(s for s in row.steps if s["key"] == "timeline")["status"] == "done"
+    events = new_events(session)
+    assert [e.title for e in events] == ["Tenancy starts"]  # replaced, not duplicated
+    assert events[0].id != first[0].id  # a fresh id: the hash really ignored the old one
+
+
 # --- tool errors keep the loop going
 
 
