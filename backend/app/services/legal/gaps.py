@@ -26,7 +26,13 @@ from app.models import (
 )
 from app.services import activity
 from app.services.agent.tools import clean_text, strip_text
-from app.services.form_fields import MANUAL_FIELDS_BY_KEY, covered_legacy_fields, is_required
+from app.services.form_fields import (
+    MANUAL_FIELDS_BY_KEY,
+    covered_legacy_fields,
+    field_allowed_for_case,
+    is_required,
+    remedy_input,
+)
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
 from app.services.review import request_sent_line, sync_attestation_gap
@@ -58,7 +64,8 @@ def case_facts(session: Session, case: CaseRow) -> CaseFacts:
     fields = tuple(
         FieldFact(key=row.key, label=row.label, required=is_required(row, covered_fields),
                   status=row.status)
-        for row in rows if row.key not in MANUAL_FIELDS_BY_KEY
+        for row in rows
+        if row.key not in MANUAL_FIELDS_BY_KEY and field_allowed_for_case(case, row.key)
     )
     evidence = tuple(
         _evidence_fact(row)
@@ -110,16 +117,19 @@ def ensure_form_fields(session: Session, case: CaseRow) -> int:
     if any(field.key not in MANUAL_FIELDS_BY_KEY for field in existing):
         return 0
     form = next(entry for entry in corpus.CORPUS if entry.kind == "form")
-    for position, field in enumerate(form.form_fields):
+    added = [
+        field for field in form.form_fields if field_allowed_for_case(case, field.key)
+    ]
+    for position, field in enumerate(added):
         session.add(FormFieldRow(
             case_id=case.id, key=field.key, position=position, label=field.label,
             required=field.required, status="missing",
         ))  # fmt: skip
     activity.log(
         session, case.id, "agent", ACTOR_NAME,
-        f"Added the {len(form.form_fields)} Form J fields to the form",
+        f"Added the {len(added)} Form J fields to the form",
     )  # fmt: skip
-    return len(form.form_fields)
+    return len(added)
 
 
 def write_gaps(session: Session, case: CaseRow, specs: list[GapSpec]) -> list[GapRow]:
@@ -146,8 +156,11 @@ def write_gaps(session: Session, case: CaseRow, specs: list[GapSpec]) -> list[Ga
             severity=spec.severity, title=spec.title, why=spec.why, how_to_fix=spec.how_to_fix,
             source_id=sources.get(spec.source) if spec.source else None,
             input=(
-                {"type": "text", "field_key": spec.field_key, "placeholder": ""}
-                if spec.field_key is not None else None
+                remedy_input()
+                if spec.field_key == "remedy"
+                else {"type": "text", "field_key": spec.field_key, "placeholder": ""}
+                if spec.field_key is not None
+                else None
             ),
             status="open",
         )  # fmt: skip

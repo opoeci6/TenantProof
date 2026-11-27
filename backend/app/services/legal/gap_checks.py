@@ -20,6 +20,7 @@ Severity = Literal["blocking", "recommended"]
 
 # The gap the intake page closes: services/review.py keeps it in step with the case's flag.
 UNATTESTED_TITLE = "The tenant must confirm their files"
+REMEDY_HOW_TO_FIX = "Discuss the options with the tenant and record their choice."
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,11 @@ def _missing_fields(facts: CaseFacts) -> list[GapSpec]:
                 f"The application asks for {field.label.lower()}. It is empty on the form, and "
                 "the package cannot be filed with a required field missing."
             ),
-            how_to_fix="Ask the tenant, or take it from the lease and the messages.",
+            how_to_fix=(
+                REMEDY_HOW_TO_FIX
+                if field.key == "remedy"
+                else "Ask the tenant, or take it from the lease and the messages."
+            ),
             field_key=field.key,
             source=FORM_J,
         )

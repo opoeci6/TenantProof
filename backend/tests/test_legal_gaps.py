@@ -7,8 +7,9 @@ from sqlmodel import Session, col, select
 from app.models import ActivityRow, CaseRow, EvidencePageRow, FormFieldRow, GapRow, LegalSourceRow
 from app.services.agent import llm, loop, runner
 from app.services.agent import tools as t
+from app.services.form_fields import F3_REQUESTS, remedy_input
 from app.services.legal import gaps
-from app.services.legal.gap_checks import UNATTESTED_TITLE
+from app.services.legal.gap_checks import REMEDY_HOW_TO_FIX, UNATTESTED_TITLE
 from tests.agent_support import (
     CASE,
     RecordingProvider,
@@ -101,13 +102,22 @@ def test_an_empty_case_gets_the_form_and_a_blocking_gap_per_missing_field(fresh_
 
 def test_a_field_gap_points_at_the_form_and_its_field(fresh_db, session):
     prepare(session, LIVE)
-    gap = next(
-        g for g in gaps_of(session, LIVE)
-        if g.input and g.input.get("field_key") == "remedy"
-    )
-    assert gap.input == {"type": "text", "field_key": "remedy", "placeholder": ""}
-    source = session.get(LegalSourceRow, gap.source_id)
+    found = gaps_of(session, LIVE)
+    remedy = next(g for g in found if g.input and g.input.get("field_key") == "remedy")
+    assert remedy.input == {
+        "type": "choice",
+        "field_key": "remedy",
+        "options": list(F3_REQUESTS.values()),
+    }
+    assert remedy.input == remedy_input()
+    assert remedy.how_to_fix == REMEDY_HOW_TO_FIX
+    source = session.get(LegalSourceRow, remedy.source_id)
     assert source is not None and source.kind == "form"
+
+    address = next(
+        g for g in found if g.input and g.input.get("field_key") == "landlord_address"
+    )
+    assert address.input == {"type": "text", "field_key": "landlord_address", "placeholder": ""}
 
 
 def test_a_dismissed_gap_does_not_come_back(fresh_db, session):
@@ -426,3 +436,140 @@ def test_the_kickoff_gives_each_open_gap_its_id_and_field(fresh_db, session):
     line = next(x for x in prepared.open_gaps if "Monthly rent" in x)
     assert line.startswith(f"- {rent.id} [blocking] ")
     assert "(field monthly_rent)" in line and line.endswith("(no draft yet)")
+
+
+# --- #172: remedy gap uses Form J F3 choices -------------------------------------------------
+
+
+def test_create_gap_uses_f3_choices_for_remedy_and_deduplicates_before_rules(
+    fresh_db, session
+) -> None:
+    gaps.ensure_form_fields(session, session.get(CaseRow, LIVE))  # type: ignore[arg-type]
+    session.commit()
+    res = call(
+        "create_gap",
+        make_ctx(session, case_id=LIVE),
+        {
+            "severity": "blocking",
+            "title": "Confirm what the tenant is asking for",
+            "why": "The application needs the outcome the tenant wants.",
+            "how_to_fix": REMEDY_HOW_TO_FIX,
+            "field_key": "remedy",
+        },
+    )
+    assert isinstance(res, t.CreateGapOutput)
+    session.commit()
+    created = session.get(GapRow, res.gap_id)
+    assert created is not None and created.input == remedy_input()
+
+    prepare(session, LIVE)
+    remedy_gaps = [
+        g for g in gaps_of(session, LIVE) if (g.input or {}).get("field_key") == "remedy"
+    ]
+    assert len(remedy_gaps) == 1 and remedy_gaps[0].id == res.gap_id
+
+    other = call(
+        "create_gap",
+        make_ctx(session, case_id=LIVE),
+        {
+            "severity": "blocking",
+            "title": "Landlord address needed",
+            "why": "w",
+            "how_to_fix": "h",
+            "field_key": "landlord_address",
+        },
+    )
+    assert isinstance(other, t.CreateGapOutput)
+    session.commit()
+    other_row = session.get(GapRow, other.gap_id)
+    assert other_row is not None and other_row.input == {
+        "type": "text",
+        "field_key": "landlord_address",
+        "placeholder": "",
+    }
+
+
+def test_fixture_gaps_run_creates_choice_remedy_gap_and_saving_choices_fills_remedy(
+    fresh_db, client, session
+) -> None:
+    done = run_gaps(
+        session,
+        {"gaps-turn1": turn(tool_use("finish", "g1", summary="Done."))},
+        case_id=LIVE,
+    )
+    assert done.status == "needs_review"
+    remedy_gap = next(
+        g for g in gaps_of(session, LIVE) if (g.input or {}).get("field_key") == "remedy"
+    )
+    assert remedy_gap.input == remedy_input()
+
+    chosen = f"{F3_REQUESTS['request_repairs']}; {F3_REQUESTS['request_rent_relief']}"
+    saved = client.patch(
+        f"/api/gaps/{remedy_gap.id}",
+        json={
+            "status": "resolved",
+            "value": chosen,
+            "resolution_note": f"Tenant's choice: {chosen}",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["status"] == "resolved"
+    form = client.get(f"/api/cases/{LIVE}/form-draft").json()
+    remedy_field = next(f for f in form["fields"] if f["key"] == "remedy")
+    assert remedy_field["value"] == chosen
+    assert remedy_field["status"] == "user_entered"
+
+
+def test_landlord_case_never_gets_a_remedy_gap(fresh_db, client, session) -> None:
+    created = client.post(
+        "/api/cases",
+        json={
+            "applicant_role": "landlord",
+            "tenant_name": "Jordan Lee",
+            "tenant_language": "fr",
+            "unit": "1444 Hollis St, Unit 2",
+            "title": "Unpaid rent",
+        },
+    )
+    assert created.status_code == 200
+    case_id = created.json()["id"]
+
+    prepare(session, case_id)
+    found = gaps_of(session, case_id)
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in found)
+
+    refused = call(
+        "create_gap",
+        make_ctx(session, case_id=case_id),
+        {
+            "severity": "blocking",
+            "title": "What the tenant is asking for",
+            "why": "w",
+            "how_to_fix": REMEDY_HOW_TO_FIX,
+            "field_key": "remedy",
+        },
+    )
+    assert isinstance(refused, t.ToolError) and refused.kind == "invalid_input"
+
+    template = session.get(CaseRow, CASE)
+    assert template is not None
+    bare = CaseRow(
+        id="case_landlord_bare",
+        org_id=template.org_id,
+        assigned_to_id=template.assigned_to_id,
+        dispute_type="maintenance",
+        title="Unpaid rent",
+        unit="100 Main St",
+        tenant_name="Alex",
+        tenant_language="en",
+        applicant_role="landlord",
+        stage="needs_review",
+        form_name="Partial Form J draft",
+        form_disclaimer="Draft.",
+        intake_status="not_sent",
+    )
+    session.add(bare)
+    session.commit()
+    prepared = prepare(session, bare.id)
+    assert prepared.fields_added == 6
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, bare.id))
