@@ -942,20 +942,26 @@ function formFieldCounts(fields) {
     reqMissing: visible.filter(field => field.required && !field.value).length
   };
 }
+// #177: a blocking gap the tenant was asked about is still blocking, but it is not also "still
+// open": the page counts those two apart so one gap is never counted twice.
+const openBlocking = st => st.blocking - (st.blockingWaiting || 0);
 function railMeta(st, evidenceCount, landlord = false) {
   return {
     evidence: `${plural(evidenceCount, "file")} · ${landlord ? "caseworker uploads" : "from tenant"}`,
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
-    gaps: st.gaps === 0 ? NOTHING : st.blocking ? `${st.blocking} required open` : st.waiting ? `${st.waiting} waiting for tenant` : plural(st.recommended, "suggestion"),
+    gaps: st.gaps === 0 ? NOTHING : openBlocking(st) ? `${openBlocking(st)} required open` : st.blockingWaiting ? `${st.blockingWaiting} waiting for tenant` : plural(st.recommended, "suggestion"),
     form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
     doneGaps: st.gaps > 0 && !st.blocking, doneForm: st.fieldsTotal > 0 && !st.reqMissing,
     doneTimeline: st.total > 0 && st.reviewed === st.total,
   };
 }
 function packageChecks(st) {
+  const waiting = st.blockingWaiting || 0;
+  // "1 still open, 1 waiting for tenant", never "1 still open, 1 waiting" for the same gap.
+  const openText = [openBlocking(st) ? `${openBlocking(st)} still open` : "", waiting ? `${waiting} waiting for tenant` : ""].filter(Boolean).join(", ");
   return {
     missing: st.gaps === 0 ? { state: "none", text: NOTHING }
-      : st.blocking ? { state: "no", href: "#gaps", text: `${st.blocking} still open${st.waiting ? `, ${st.waiting} waiting for tenant` : ""}` }
+      : st.blocking ? { state: "no", href: "#gaps", text: openText }
       : { state: "yes", text: "all resolved" },
     fields: st.fieldsTotal === 0 ? { state: "none", text: NOTHING }
       : st.reqMissing ? { state: "no", href: "#form", text: `${st.reqMissing} empty` }
@@ -1157,9 +1163,10 @@ function srcChips(sources) {
 function stats() {
   const reviewed = S.timeline.filter(e => e.review_status !== "pending").length;
   const blocking = S.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
+  const blockingWaiting = S.gaps.filter(g => g.severity === "blocking" && g.status === "waiting_tenant").length;
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, blockingWaiting, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
 }
 
 /* ---------- login (M1) ---------- */
