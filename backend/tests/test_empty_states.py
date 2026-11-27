@@ -1,7 +1,7 @@
-"""Counts and empty states on the case pages (`railMeta`, `packageChecks` and `plural` in
-web/index.html, pure functions run under node). With no gaps, no form fields or no events there is
-nothing to be "done", so the check is neutral grey "Nothing yet", not a green tick; and counts say
-"1 file", not "1 files"."""
+"""Counts and empty states on the case pages (`railMeta`, `evidenceMeta`, `packageChecks` and
+`plural` in web/index.html, pure functions run under node). With no gaps, no form fields or no
+events there is nothing to be "done", so the check is neutral grey "Nothing yet", not a green tick;
+counts say "1 file", not "1 files"; and the Evidence rail says where the files came from (#198)."""
 
 import json
 import re
@@ -32,8 +32,13 @@ def js(expr: str) -> object:
     return node_json(script)
 
 
-def rail(st: dict, files: int = 0) -> dict:
-    return js(f"railMeta({json.dumps(st)}, {files})")  # type: ignore[return-value]
+def evidence(count: int, uploader: str = "tenant") -> list[dict]:
+    """`count` evidence items from one uploader, as `GET /cases/{id}/evidence` returns them."""
+    return [{"id": f"ev_{uploader}_{i:02d}", "uploaded_by": uploader} for i in range(1, count + 1)]
+
+
+def rail(st: dict, files: int | list[dict] = 0, landlord: bool = False) -> dict:
+    return js(f"railMeta({json.dumps(st)}, {json.dumps(files)}, {json.dumps(landlord)})")  # type: ignore[return-value]
 
 
 def checks(st: dict) -> dict:
@@ -54,8 +59,41 @@ def test_plural_takes_an_irregular_form() -> None:
 
 
 def test_the_rail_says_one_file_not_one_files() -> None:
-    assert rail(stats(), 1)["evidence"] == "1 file · from tenant"
-    assert rail(stats(), 3)["evidence"] == "3 files · from tenant"
+    assert rail(stats(), evidence(1))["evidence"] == "1 file · from tenant"
+    assert rail(stats(), evidence(3))["evidence"] == "3 files · from tenant"
+
+
+# --------------------------------------------------------------------------- #198: file sources
+
+
+def test_a_case_with_no_files_says_zero_files() -> None:
+    """An empty tenant case is not "0 files · from tenant": there is no "from" anyone yet."""
+    assert rail(stats(), [])["evidence"] == "0 files"
+    assert rail(stats(), 0)["evidence"] == "0 files"
+
+
+def test_caseworker_only_files_say_so() -> None:
+    assert rail(stats(), evidence(2, "caseworker"))["evidence"] == "2 files · added by caseworker"
+    assert rail(stats(), evidence(1, "caseworker"))["evidence"] == "1 file · added by caseworker"
+
+
+def test_a_mixed_case_counts_the_files_from_each_side() -> None:
+    both = evidence(3) + evidence(1, "caseworker")
+    assert rail(stats(), both)["evidence"] == "4 files · 3 tenant, 1 caseworker"
+    mostly_caseworker = evidence(1) + evidence(2, "caseworker")
+    assert rail(stats(), mostly_caseworker)["evidence"] == "3 files · 1 tenant, 2 caseworker"
+
+
+def test_a_landlord_case_names_caseworker_uploads() -> None:
+    assert rail(stats(), evidence(2, "caseworker"), landlord=True)["evidence"] == (
+        "2 files · caseworker uploads")
+    assert rail(stats(), [], landlord=True)["evidence"] == "0 files · caseworker uploads"
+
+
+def test_a_caller_that_passes_a_count_still_gets_a_sentence() -> None:
+    """The fallback for a caller with only the number: a tenant case says just the count."""
+    assert rail(stats(), 2)["evidence"] == "2 files"
+    assert rail(stats(), 1, landlord=True)["evidence"] == "1 file · caseworker uploads"
 
 
 def test_form_field_counts_exclude_unfilled_optional_fields():

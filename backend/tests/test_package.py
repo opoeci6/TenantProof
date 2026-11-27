@@ -19,6 +19,7 @@ from app.services import storage
 
 CASE = "case_demo_001"
 BUILD = f"/api/cases/{CASE}/package"
+INFO = BUILD  # #200: GET reads the built package back
 DOWNLOAD = f"/api/cases/{CASE}/package/download"
 ZIP_NAMES = {"application_draft.pdf", "evidence_manifest.pdf", "manifest.json"}
 PDF_NAMES = {"application_draft.pdf", "evidence_manifest.pdf"}
@@ -92,6 +93,7 @@ def test_landlord_manual_pdf_stays_separate_from_tenant_package(
     for blocked in (
         client.post(f"{base}/package"),
         client.post(f"{base}/package", json=ATTESTED),
+        client.get(f"{base}/package"),  # #200
         client.get(f"{base}/package/download"),
         client.get(f"{base}/package/files/application_draft.pdf"),
     ):
@@ -764,3 +766,70 @@ def test_accepted_event_with_zero_sources_is_left_out_of_the_pdf(fresh_db, clien
     text = application_text(client)
     assert squash("The tenancy began under a written one-year lease.") not in text
     assert squash("Landlord") in text or squash("Tenant") in text  # other events still render
+
+
+# --- #200: reading a built package back --------------------------------------------------
+
+
+def test_the_built_package_can_be_read_back(fresh_db, client):
+    """The Package page lost its contents and file links on reload: GET returns the Package."""
+    missing = client.get(INFO)
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Package not found"
+
+    make_ready(client)
+    first = build(client).json()
+    read = client.get(INFO)
+    assert read.status_code == 200
+    assert read.json() == first
+    assert read.headers["cache-control"] == "private, no-store"
+
+    client.patch(f"/api/cases/{CASE}/form-draft/fields/rental_address", json={"value": "Suite 99"})
+    second = build(client).json()
+    assert client.get(INFO).json() == second
+    assert client.get(INFO, params={"version": 1}).json() == first
+    assert client.get(INFO, params={"version": 2}).json() == second
+
+
+def test_an_unknown_version_or_another_org_is_404(fresh_db, client, other_org_client):
+    make_ready(client)
+    build(client)
+    unknown = client.get(INFO, params={"version": 99})
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"] == "Package not found"
+    assert other_org_client.get(INFO).status_code == 404
+    assert other_org_client.get(INFO, params={"version": 1}).status_code == 404
+
+
+def test_a_version_below_one_is_422(fresh_db, client):
+    make_ready(client)
+    build(client)
+    for bad in (0, -1):
+        assert client.get(INFO, params={"version": bad}).status_code == 422
+    assert client.get(INFO, params={"version": "abc"}).status_code == 422
+
+
+def test_reading_the_package_is_not_logged(fresh_db, client, session):
+    make_ready(client)
+    build(client)
+    before = len(activity_rows(session))
+    assert client.get(INFO).status_code == 200
+    assert client.get(INFO, params={"version": 1}).status_code == 200
+    assert len(activity_rows(session)) == before
+
+
+def test_anonymous_cannot_read_the_package(fresh_db, client, anon_client):
+    make_ready(client)
+    build(client)
+    assert anon_client.get(INFO).status_code == 401
+
+
+def test_the_page_reads_the_package_back_when_it_loads():
+    """LOADERS.pkg restores S.pkg, and the contents table follows the version shown above it."""
+    from tests.test_empty_states import INDEX
+
+    source = INDEX.read_text(encoding="utf-8")
+    loaders = source[source.index("const LOADERS = {"):source.index("function prioritizeClient(")]
+    assert "pkg: async () => {" in loaders
+    assert '"GET", `${C}/package`' in loaders
+    assert "S.pkg && latest && S.pkg.version === latest.version" in source
