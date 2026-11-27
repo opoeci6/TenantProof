@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + var(--topbar-h,0px))}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>TenantProof</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -68,7 +68,7 @@ a{color:var(--accent)}
 body.tenant .view-head, body.tenant .intake-side, body.tenant details.contract, body.tenant #topnav, body.tenant label[for="devToggle"]{display:none}
 body.tenant .intake-wrap{grid-template-columns:minmax(0,420px);justify-content:center}
 .layout.single .rail{display:none}
-.rail{position:sticky;top:calc(env(safe-area-inset-top,0px) + 74px);display:flex;flex-direction:column;gap:2px}
+.rail{position:sticky;top:calc(env(safe-area-inset-top,0px) + var(--topbar-h,61px) + 13px);display:flex;flex-direction:column;gap:2px}
 .rail-back{font-size:13px;font-weight:600;text-decoration:none;color:var(--accent);padding:0 10px 10px}
 .rail-sub{margin-top:14px}
 .rail-label{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;padding:0 10px 8px}
@@ -1254,11 +1254,15 @@ function contract(key, data) {
   return `<details class="contract"><summary>Data contract <span class="eps">${ENDPOINTS[key].map(e => `<code class="ep">${esc(e)}</code>`).join("")}</span></summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
 }
 /* #96: a reading aid next to a quote in another language. Never the evidence itself. */
+/* translateToggle:start */
 const hasNonAscii = s => /[^\x00-\x7F]/.test(s || "");
 function englishToggle(text, language) {
-  if (!hasNonAscii(text)) return "";
+  const lang = (language || "").trim().toLowerCase().split("-")[0];
+  const show = hasNonAscii(text) || (Boolean(lang) && lang !== "en" && /\p{L}/u.test(text || ""));
+  if (!show) return "";
   return `<div class="tr" data-language="${esc(language || "")}"><button class="btn small" type="button" data-action="translate-excerpt" data-excerpt="${esc(text)}">Show in English</button><div class="tr-out" hidden></div></div>`;
 }
+/* translateToggle:end */
 async function translateExcerpt(btn) {
   const box = btn.closest(".tr"), out = box.querySelector(".tr-out");
   if (!out.hidden) { out.hidden = true; out.innerHTML = ""; btn.textContent = "Show in English"; return; }
@@ -1683,7 +1687,8 @@ function viewGaps() {
     const s = src(g.source_id), open = g.status === "open";
     let input = "";
     if (open && g.input && g.input.type === "text") input = `<form class="gap-input" data-action="resolve-text" data-id="${g.id}"><input class="field" id="gap-in-${g.id}" name="value" ${caseFieldAttrs(g.input.field_key)} placeholder="${esc(g.input.placeholder)}" required><button class="btn primary small" type="submit">Save</button></form>`;
-    if (open && g.input && g.input.type === "choice") input = `<form data-action="resolve-choice" data-id="${g.id}" style="display:grid;gap:10px"><span class="muted">Record the tenant's choice:</span><div class="choices">${g.input.options.map((o, i) => `<label><input type="checkbox" id="gap-${g.id}-${i}" name="opt" value="${esc(o)}">${esc(o)}</label>`).join("")}</div><div class="btn-row"><button class="btn primary small" type="submit">Save tenant's choice</button></div></form>`;
+    // #172: the remedy is a choice; once the tenant was asked, their answer is recorded the same way.
+    if ((open || g.status === "waiting_tenant") && g.input && g.input.type === "choice") input = `<form data-action="resolve-choice" data-id="${g.id}" style="display:grid;gap:10px"><span class="muted">Record the tenant's choice:</span><div class="choices">${g.input.options.map((o, i) => `<label><input type="checkbox" id="gap-${g.id}-${i}" name="opt" value="${esc(o)}">${esc(o)}</label>`).join("")}</div><div class="btn-row"><button class="btn primary small" type="submit">Save tenant's choice</button></div></form>`;
     const draft = open && g.tenant_request && S.drafting === g.id ? draftBox(g) : "";
     const status = g.status === "resolved" ? `<span class="pill ok">Resolved</span>` : g.status === "dismissed" ? `<span class="pill plain">Dismissed</span>` : g.status === "waiting_tenant" ? `<span class="pill info">Waiting for tenant</span>${S.case && S.case.intake.status === "not_sent" ? ` <a class="muted" href="#evidence">Intake link not sent yet</a>` : ""}` : g.severity === "blocking" ? `<span class="pill bad">Required</span>` : `<span class="pill warn">Suggested</span>`;
     const acts = [];
@@ -2343,7 +2348,9 @@ document.addEventListener("click", guarded(async ev => {
     finally { await refresh(["timeline", "form"]); }
   }
   if (a === "draft") { const g = S.gaps.find(x => x.id === id); if (g && g.tenant_request) { startDraft(g); render(); const el = document.getElementById(`draft-en-${id}`); el && el.focus(); } }  /* #48 */
-  if (a === "cancel-draft") { S.drafting = null; S.draftEdit = null; S.draftError = ""; render(); }
+  if (a === "cancel-draft") { const gid = S.drafting; S.drafting = null; S.draftEdit = null; S.draftError = ""; render();
+    /* #179: focus goes back to the button that opened the draft, scrolled only as far as needed (scroll-padding keeps it below the top bar) */
+    const ask = document.querySelector(`[data-action="draft"][data-id="${CSS.escape(String(gid))}"]`); if (ask) { ask.focus({ preventScroll: true }); ask.scrollIntoView({ block: "nearest" }); } }
   if (a === "translate-draft") return translateDraft(id);
   if (a === "preview-lang") { S.intake.lang = b.dataset.lang; render(); return; }  /* #48 */
   if (a === "translate-excerpt") return translateExcerpt(b);  /* #96 */
@@ -2483,6 +2490,16 @@ function wireDrop() {
   d.addEventListener("drop", e => { e.preventDefault(); d.classList.remove("over"); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
 }
 window.addEventListener("hashchange", () => { S.editing = null; S.drafting = null; render(); window.scrollTo({ top: 0 }); });
+/* #179: --topbar-h is the sticky top bar's height, used by scroll-padding-top and the rail, so anything
+   scrolled or focused into view lands below the bar. The bar wraps to more rows on narrower screens
+   and is not sticky on a phone (0 then), so it is measured rather than hard-coded. */
+(() => {
+  const bar = document.querySelector(".topbar"), root = document.documentElement;
+  const update = () => root.style.setProperty("--topbar-h", getComputedStyle(bar).position === "sticky" ? `${Math.ceil(bar.getBoundingClientRect().height)}px` : "0px");
+  update();
+  if (window.ResizeObserver) new ResizeObserver(update).observe(bar);
+  window.addEventListener("resize", update);  // the bar turns static at the phone breakpoint, which need not change its size
+})();
 
 try { if (localStorage.getItem("tp-dev") === "1") { $("#devToggle").checked = true; document.body.classList.add("dev"); } } catch {}
 (async function boot() {
