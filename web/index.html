@@ -508,7 +508,7 @@ const ENDPOINTS = {
   timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
   gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "POST /cases/{id}/translate-excerpt", "GET /cases/{id}/sources"],
   form: ["GET /cases/{id}/form-draft", "PATCH /cases/{id}/form-draft/fields/{key}", "GET /cases/{id}/form-draft/pdf"],
-  package: ["POST /cases/{id}/package", "GET /cases/{id}/activity"],
+  package: ["POST /cases/{id}/package", "GET /cases/{id}/package", "GET /cases/{id}/package/download", "GET /cases/{id}/package/files/{filename}", "GET /cases/{id}/activity"],
   intake: ["GET /intake/{token}", "POST /intake/{token}/files (multipart)", "POST /intake/{token}/submit"]
 };
 
@@ -724,7 +724,7 @@ const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
-db.runs = {}; db.intakeRequests = []; let runCounter = 0;
+db.runs = {}; db.intakeRequests = []; db.packages = []; let runCounter = 0;  // #200: built packages, newest last
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
 const RUN_SCRIPT = [
@@ -886,6 +886,11 @@ function mockRoute(method, path, body) {
     return clone(f);
   }
   if (method === "GET" && path === `${C}/activity`) return clone(db.activity);
+  if (method === "GET" && (m = path.match(/^\/cases\/[^/]+\/package(?:\?version=(\d+))?$/))) {  /* #200 */
+    const wanted = m[1] ? db.packages.find(p => p.version === Number(m[1])) : db.packages[db.packages.length - 1];
+    if (!wanted) throw Object.assign(new Error("Package not found"), { status: 404 });
+    return clone(wanted);
+  }
   if (method === "POST" && path === `${C}/package`) {
     const open = db.gaps.filter(g => g.severity === "blocking" && isOpen(g));
     if (open.length) throw Object.assign(new Error(`${plural(open.length, "required item")} still open`), { status: 409 });
@@ -894,9 +899,12 @@ function mockRoute(method, path, body) {
     if (!a.reviewed_fields || !a.remedy_confirmed_with_tenant || !a.explained_not_legal_advice) throw Object.assign(new Error("All caseworker confirmations are required"), { status: 400 });
     const files = db.evidence.filter(e => e.format_check.accepted).map(e => ({ label: e.label, filename: e.format_check.action === "converted" ? e.filename.replace(/\.(heic|heif)$/i, ".jpg") : e.format_check.action === "will_export_pdf" ? e.filename.replace(/\.\w+$/, ".pdf") : e.filename, sha256: e.sha256, note: e.format_check.action === "converted" ? "Converted from HEIC" : e.format_check.action === "will_export_pdf" ? "Exported to PDF" : (e.kind === "photo" && e.metadata.software ? "Saved by editing app" : e.kind === "photo" && !e.metadata.captured_at ? "No capture metadata" : "") }));
     files.unshift({ label: "—", filename: "application_draft.pdf", sha256: "generated at build time", note: "Form fields + narrative" }, { label: "—", filename: "evidence_manifest.pdf", sha256: "generated at build time", note: "SHA-256, receipt time and uploader of every file" });
+    const version = (db.pkgVersion || 0) + 1;  // #90: each build is a new version, as on the server
+    const pkg = { version, sha256: String(version).padStart(64, "0"), built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+    db.pkgVersion = version;
+    db.packages.push(pkg);  // #200: GET /cases/{id}/package reads it back after a reload
     log("caseworker", "Built the filing package");
-    db.pkgVersion = (db.pkgVersion || 0) + 1;  // #90: each build is a new version, as on the server
-    return { version: db.pkgVersion, sha256: "generated at build time", built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+    return clone(pkg);
   }
   if (method === "GET" && path === `/intake/${INTAKE_TOKEN}`) return clone({ org_name: ORG.name, tenant_first_name: db.case.tenant.name.split(" ")[0], unit: "Unit 4B, 100 Example Street", language: db.case.tenant.preferred_language, requests: db.intakeRequests });
   if (method === "POST" && path === `/intake/${INTAKE_TOKEN}/submit`) {
@@ -1854,7 +1862,8 @@ function viewPackage() {
     const path = r.filename.split("/").map(encodeURIComponent).join("/");
     return `<a href="${API_BASE}${C}/package/files/${path}?version=${S.pkg.version}" download>${esc(r.filename)}</a>`;
   };
-  const manifest = S.pkg ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
+  // #200: the ZIP panel and the contents table always describe the same version.
+  const manifest = S.pkg && latest && S.pkg.version === latest.version ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${fileCell(r)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
     ${unreadableLeftOut(S.pkg)}
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
@@ -2036,6 +2045,18 @@ const LOADERS = {
   sources: () => request("GET", `${C}/sources`).then(d => S.sources = d),
   form: () => request("GET", `${C}/form-draft`).then(d => S.form = d),
   activity: () => request("GET", `${C}/activity`).then(d => S.activity = d),
+  // #200: the built package, so a reload or a case switch keeps its contents and file links.
+  // 404 (nothing built yet) and 409 (a landlord case) mean "no package", not a failed load.
+  pkg: async () => {
+    const caseId = CASE_ID;
+    try {
+      const pkg = await request("GET", `${C}/package`);
+      if (CASE_ID === caseId) S.pkg = pkg;
+    } catch (err) {
+      if (err && (err.status === 404 || err.status === 409)) { if (CASE_ID === caseId) S.pkg = null; }
+      else throw err;
+    }
+  },
   // A revoked or expired link is a 404 here; for the caseworker that means "send a new link", not "case gone".
   // For the tenant, a 404 is a wrong, expired or replaced link: say so on the page, not only in a toast.
   intake: async () => { const tok = intakeTok(); try { S.intake.view = tok ? await request("GET", `/intake/${tok}`) : { noLink: true }; } catch (err) {
