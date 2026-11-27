@@ -22,6 +22,11 @@ from app.services.agent.llm import (
 )
 
 # Relay only fields used by the supported tool/continuation protocols.
+# Chat Completions endpoints often cap output tokens well below the 16000 the loop asks for
+# (DeepSeek's chat models allow 8192). A value over the provider's limit fails the whole call
+# with a 400, so chat adapters clamp to a value every supported provider accepts.
+CHAT_MAX_OUTPUT_TOKENS = 8000
+
 _MESSAGE_EXTRAS = {
     "deepseek": ("reasoning_content",),
     "openrouter": ("reasoning_details",),
@@ -108,7 +113,10 @@ def _result(raw: Any, provider: str) -> LLMResponse:
             return LLMResponse(stop_reason="max_tokens", usage=usage)
         assistant = _Assistant.model_validate(message)
         calls = assistant.tool_calls or []
-        if finish not in ("stop", "tool_calls") or (finish == "tool_calls") != bool(calls):
+        # Some OpenAI-compatible servers (Gemini's endpoint was reported) send "stop" for a
+        # function-call turn. Tool use is decided by the calls themselves; "tool_calls" without
+        # calls is still malformed. "length" and "content_filter" are refused above.
+        if finish not in ("stop", "tool_calls") or (finish == "tool_calls" and not calls):
             raise LLMCallError("Provider returned an unsupported completion state")
         if len({call.id for call in calls}) != len(calls):
             raise LLMCallError("Provider returned duplicate tool call identifiers")
@@ -137,6 +145,27 @@ def _result(raw: Any, provider: str) -> LLMResponse:
         raise LLMCallError("Provider returned an invalid chat completion") from None
 
 
+def _status_error(response: httpx.Response) -> str:
+    """The HTTP status plus the provider's own message, never the request or its headers."""
+    detail = ""
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        error = data.get("error")
+        if isinstance(error, dict):
+            detail = str(error.get("message") or "")
+        elif isinstance(error, str):
+            detail = error
+        if not detail:
+            detail = str(data.get("message") or "")
+    # Only a structured provider message is repeated: a plain body may echo the request or the
+    # key (the 307 body in the tests is the key itself), so it is never surfaced.
+    detail = " ".join(detail.split())[:200]
+    return f"Provider HTTP status {response.status_code}" + (f": {detail}" if detail else "")
+
+
 class ChatCompletionsProvider:
     """Adapter for Chat Completions endpoints with locally dispatched function tools."""
 
@@ -151,6 +180,7 @@ class ChatCompletionsProvider:
         base_url: str = "https://api.openai.com/v1",
         effort: str = "",
         deadline_s: float = CALL_TIMEOUT_S,
+        max_output_tokens: int = CHAT_MAX_OUTPUT_TOKENS,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key
@@ -159,6 +189,7 @@ class ChatCompletionsProvider:
         self.base_url = base_url.rstrip("/")
         self.effort = effort
         self.deadline_s = deadline_s
+        self.max_output_tokens = max_output_tokens
         self.transport = transport
         self.continuation_profile = (provider, model, self.base_url, effort)
 
@@ -172,7 +203,7 @@ class ChatCompletionsProvider:
             ],
         }
         token_key = "max_completion_tokens" if self.provider in {"openai", "groq"} else "max_tokens"
-        payload[token_key] = request.max_tokens
+        payload[token_key] = min(request.max_tokens, self.max_output_tokens)
         if request.tools:
             payload["tools"] = [{
                 "type": "function",
@@ -205,7 +236,7 @@ class ChatCompletionsProvider:
         except (TimeoutError, httpx.TimeoutException):
             raise LLMTimeout("provider request timed out") from None
         except httpx.HTTPStatusError as exc:
-            raise LLMCallError(f"Provider HTTP status {exc.response.status_code}") from None
+            raise LLMCallError(_status_error(exc.response)) from None
         except httpx.HTTPError as exc:
             raise LLMCallError(type(exc).__name__) from None
         except ValueError:
