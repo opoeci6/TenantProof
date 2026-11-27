@@ -740,3 +740,64 @@ def test_malformed_date_is_rejected_with_422(fresh_db, client, value):
     )
     assert r.status_code == 422
     assert _event(client, "te_02")["date"] == before
+
+
+@pytest.mark.parametrize("role", ["tenant", "landlord"])
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [("move_in_date", "move_out_date"), ("fixed_term_start", "fixed_term_end")],
+)
+def test_form_date_pairs_reject_both_reversed_edit_directions(fresh_db, client, role, start, end):
+    form = FORM
+    if role == "landlord":
+        created = client.post("/api/cases", json={
+            "applicant_role": role,
+            "tenant_name": "Example tenant",
+            "tenant_language": "en",
+            "unit": "1 Example Road",
+            "title": "Example application",
+        })
+        assert created.status_code == 200, created.text
+        form = f"/api/cases/{created.json()['id']}/form-draft"
+
+    def save(key, value, status=200):
+        result = client.patch(f"{form}/fields/{key}", json={"value": value})
+        assert result.status_code == status, result.text
+        return result.json()
+
+    early, late = "2026-04-01", "2026-04-03"
+    save(end, early)
+    save(start, late, 422)
+    save(start, early)
+    save(end, late)
+    save(end, "2026-03-31", 422)
+    save(start, "2026-04-04", 422)
+    saved = {field["key"]: field["value"] for field in client.get(form).json()["fields"]}
+    assert (saved[start], saved[end]) == (early, late)
+    assert save(start, "")["value"] is None
+    assert save(end, "")["value"] is None
+
+
+def test_legacy_reversed_dates_can_be_confirmed_and_repaired(fresh_db, client, session):
+    start_key, end_key = "move_in_date", "move_out_date"
+    start, end = "2026-04-01", "2026-04-03"
+    for key, value in [(start_key, start), (end_key, end)]:
+        assert client.patch(f"{FORM}/fields/{key}", json={"value": value}).status_code == 200
+    field = session.get(FormFieldRow, (CASE, start_key))
+    assert field is not None
+    field.value = "2026-04-05"
+    session.add(field)
+    session.commit()
+
+    for key, value in [(end_key, end), (start_key, start)]:
+        result = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert result.status_code == 200, result.text
+
+
+def test_notice_can_record_an_effective_date_before_given_date(fresh_db, client):
+    for key, value in [
+        ("notice_given_date", "2026-04-03"),
+        ("notice_effective_date", "2026-04-01"),
+    ]:
+        result = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert result.status_code == 200, result.text

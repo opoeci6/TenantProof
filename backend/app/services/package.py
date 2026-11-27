@@ -46,7 +46,14 @@ from app.services.form_fields import (
     covered_legacy_fields,
     is_required,
 )
-from app.services.form_values import F2_DEPENDENCIES, FORM_CHOICES, MONEY_KEYS, cad_amount
+from app.services.form_values import (
+    DATE_ORDER_PAIRS,
+    F2_DEPENDENCIES,
+    FORM_CHOICES,
+    MONEY_KEYS,
+    cad_amount,
+    dates_out_of_order,
+)
 from app.services.gating import MissingField, OpenGap, package_blockers
 from app.services.mappers import (
     OPEN_GAP,
@@ -237,6 +244,11 @@ def _write_f1_details(
 def _write_form_fields(
     pdf: FPDF, fields: Iterable[FormField], values: dict[str, str | None],
 ) -> None:
+    warnings = {
+        end: message
+        for (start, end), message in DATE_ORDER_PAIRS.items()
+        if dates_out_of_order(values.get(start), values.get(end))
+    }
     for field in fields:
         dependency = F2_DEPENDENCIES.get(field.key)
         if dependency is not None and values.get(dependency[0]) not in (None, "", dependency[1]):
@@ -249,6 +261,8 @@ def _write_form_fields(
             value = f"CAD {amount:,.2f}"
         value = FORM_CHOICES.get(field.key, {}).get(value, value)
         _write(pdf, value)
+        if field.key in warnings:
+            _write(pdf, f"Check dates: {warnings[field.key]}.")
 
 
 def _write_requests(

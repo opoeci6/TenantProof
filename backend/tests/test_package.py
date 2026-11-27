@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from app import schemas
-from app.models import ActivityRow, CaseRow, EvidenceRow, PackageRow, TimelineEventRow
+from app.models import ActivityRow, CaseRow, EvidenceRow, FormFieldRow, PackageRow, TimelineEventRow
 from app.services import storage
 
 CASE = "case_demo_001"
@@ -766,6 +766,36 @@ def test_accepted_event_with_zero_sources_is_left_out_of_the_pdf(fresh_db, clien
     text = application_text(client)
     assert squash("The tenancy began under a written one-year lease.") not in text
     assert squash("Landlord") in text or squash("Tenant") in text  # other events still render
+
+
+def test_new_package_warns_about_reversed_legacy_dates(fresh_db, client, session):
+    make_ready(client)
+    fields = [
+        ("move_in_date", "2026-04-03"),
+        ("move_out_date", "2026-04-04"),
+        ("fixed_term_start", "2026-05-02"),
+        ("fixed_term_end", "2026-05-03"),
+    ]
+    for key, value in fields:
+        result = client.patch(f"/api/cases/{CASE}/form-draft/fields/{key}", json={"value": value})
+        assert result.is_success, result.text
+    original = build(client).json()
+    original_zip = download(client, version=original["version"]).content
+    for key, value in [("move_out_date", "2026-04-01"), ("fixed_term_end", "2026-05-01")]:
+        field = session.get(FormFieldRow, (CASE, key))
+        assert field is not None
+        field.value = value
+        session.add(field)
+    session.commit()
+
+    latest = build(client).json()
+    latest_zip = unzip(download(client, version=latest["version"]).content)
+    text = pdf_text(latest_zip["application_draft.pdf"])
+    assert "Move-out date cannot be before move-in date" in text
+    assert "Fixed-term end date cannot be before its start date" in text
+    for value in ("2026-04-03", "2026-04-01", "2026-05-02", "2026-05-01"):
+        assert value in text
+    assert download(client, version=original["version"]).content == original_zip
 
 
 # --- #200: reading a built package back --------------------------------------------------

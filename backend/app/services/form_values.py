@@ -10,6 +10,11 @@ F2_DATE_KEYS = frozenset({
     "move_in_date", "move_out_date", "notice_given_date", "notice_effective_date",
     "fixed_term_start", "fixed_term_end", "deposit_paid_date",
 })
+DATE_ORDER_PAIRS = {
+    ("move_in_date", "move_out_date"): "Move-out date cannot be before move-in date",
+    ("fixed_term_start", "fixed_term_end"): "Fixed-term end date cannot be before its start date",
+}
+DATE_ORDER_FIELDS = {key: pair for pair in DATE_ORDER_PAIRS for key in pair}
 MONEY_KEYS = frozenset({"monthly_rent", "weekly_rent", "deposit_amount"})
 RENT_KEYS = frozenset({"monthly_rent", "weekly_rent"})
 EMAIL_KEYS = frozenset({"tenant_email", "landlord_email"})
@@ -73,3 +78,11 @@ def is_tenancy_start_date(value: str, max_year: int = date.max.year) -> bool:
     except ValueError:
         return False
     return parsed.isoformat() == value and MIN_TENANCY_YEAR <= parsed.year <= max_year
+
+
+def dates_out_of_order(start: str | None, end: str | None) -> bool:
+    return bool(
+        start and end
+        and is_tenancy_start_date(start) and is_tenancy_start_date(end)
+        and end < start
+    )
