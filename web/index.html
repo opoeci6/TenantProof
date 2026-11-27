@@ -1069,6 +1069,62 @@ function runState(run, open) {
   return { rail: "Done", pill: ["ok", "Done"], asking, done: true, attn: false };
 }
 /* runState:end */
+/* runText:start (#175, pure; tests/test_run_text.py runs it under node) */
+// What a step summary or a tool call says, in the words the caseworker sees: gap ids become the
+// gap's title, run and source ids go, and Form J field keys become their labels. Display only:
+// the data contract block keeps the text as the server wrote it.
+const RUN_ID_RE = /\brun_[0-9a-f]{2,}\b/g;
+const GAP_ID_RE = /\bgap_([0-9a-f]{2,})\b/g;
+const SRC_ID_RE = /\bsrc_[A-Za-z0-9_]+/g;
+// Removing an id can leave " ,", " :" or two spaces behind.
+const tidyRunText = s => s
+  .replace(/[ \t]{2,}/g, " ")
+  .replace(/\s+([,.;:!?])/g, "$1")
+  .replace(/([,;:])(?:\s*[,;:])+/g, "$1")
+  .replace(/\(\s*\)/g, "")
+  .replace(/\[\s*\]/g, "")
+  .replace(/\s{2,}/g, " ")
+  .trim();
+const URL_RE = /\bhttps?:\/\/[^\s"'<>]+/g;
+// A link is set aside while ids and keys are replaced, so a path like /files/src_03/ is left as
+// it is. The placeholder is a NUL and a number, which cannot come from the server.
+function outsideUrls(text, change) {
+  const urls = [];
+  const held = String(text ?? "").replace(URL_RE, m => `\u0000${urls.push(m) - 1}\u0000`);
+  const done = change(held);
+  return urls.length ? done.replace(/\u0000(\d+)\u0000/g, (_, i) => urls[Number(i)]) : done;
+}
+// The Package page's audit log keeps the server's activity text; only the run id goes.
+function stripRunIds(text) {
+  return outsideUrls(text, s => tidyRunText(s.replace(RUN_ID_RE, "")));
+}
+function humanRunText(text, { fields = [], gaps = [] } = {}) {
+  const titles = new Map((gaps || []).map(g => [g.id, g.title]));
+  const labels = new Map((fields || []).map(f => [f.key, f.label]));
+  return outsideUrls(text, held => {
+    let out = held;
+    // A quoted id first, so a JSON value does not end up with doubled quotes.
+    out = out.replace(/"gap_([0-9a-f]{2,})"/g, (_, id) => `"${titles.get(`gap_${id}`) || "a gap"}"`);
+    out = out.replace(GAP_ID_RE, (_, id) => {
+      const title = titles.get(`gap_${id}`);
+      return title ? `"${title}"` : "a gap";
+    });
+    out = out.replace(/"run_[0-9a-f]{2,}"/g, '""').replace(RUN_ID_RE, "");
+    out = out.replace(/"src_[A-Za-z0-9_]+"/g, '""').replace(SRC_ID_RE, "");
+    // A whole Form J field key becomes its label. One pass, longest key first, so a label that
+    // happens to contain another key is never replaced again.
+    const keys = [...labels.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+    if (keys.length) {
+      const one = new RegExp(`\\b(?:${keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "g");
+      out = out.replace(one, key => labels.get(key));
+    }
+    // "language zh" and "(fr)" only: never an ordinary word that happens to contain zh or fr.
+    out = out.replace(/\blanguage\s+(zh|fr)\b/gi, (_, code) => `language ${LANG_EN[code.toLowerCase()] || code}`);
+    out = out.replace(/\((zh|fr)\)/g, (_, code) => `(${LANG_EN[code] || code})`);
+    return tidyRunText(out);
+  });
+}
+/* runText:end */
 /* Fix #38: intakeLink:start (pure; tests/test_intake_link.py runs it under node) */
 // The raw intake link comes only from POST /cases/{id}/intake-link (every GET returns url null), so
 // the page keeps it in memory as { caseId, url } for the case it was made for. That case's Evidence
@@ -1405,14 +1461,17 @@ function viewRun() {
   const pill = { pending: `<span class="pill">Waiting</span>`, running: `<span class="pill info">Running</span>`, done: `<span class="pill ok">Done</span>`, incomplete: `<span class="pill warn">Incomplete</span>`, needs_input: `<span class="pill warn">Needs your input</span>`, failed: `<span class="pill bad">Failed</span>` };
   const rs = runState(run, openItems(stats()));
   const runPill = `<span class="pill ${rs.pill[0]}">${rs.pill[1]}</span>`;
+  // #175: summaries and tool calls say "Landlord's address for service", not gap_942b3e6f0f.
+  // Plain text only: every use is still put through esc().
+  const human = text => humanRunText(text, { fields: (S.form && S.form.fields) || [], gaps: S.gaps || [] });
   // The runner builds `extract` and `timeline`; the other four steps are not built in this prototype,
   // whatever a seeded or real run says about them. (The mock run is a scripted demo and keeps its steps.)
   const unbuilt = s => !USE_MOCK && !BUILT.includes(s.key);
   const steps = run.steps.map((s, i) => unbuilt(s) ? `<li class="run-step rs-unbuilt"><span class="rs-ico">–</span>
       <div><div class="rs-title">${i + 1}. ${esc(s.label)} <span class="pill plain">Not in this prototype</span></div></div></li>`
     : `<li class="run-step rs-${s.status}"><span class="rs-ico">${ico[s.status] || i + 1}</span>
-      <div><div class="rs-title">${i + 1}. ${esc(s.label)} ${pill[s.status]}</div>${s.summary ? `<p class="rs-sum">${esc(s.summary)}</p>` : ""}</div>
-      ${s.tool_calls.length ? `<details class="tools"${s.status === "needs_input" ? " open" : ""}><summary>${plural(s.tool_calls.length, "tool call")}</summary><ul class="tool-calls">${s.tool_calls.map(t => `<li><span class="t">${esc(t.tool)}</span><span class="io"><b>${esc(t.input)}</b> → ${esc(t.output)}</span></li>`).join("")}</ul></details>` : ""}</li>`).join("");
+      <div><div class="rs-title">${i + 1}. ${esc(s.label)} ${pill[s.status]}</div>${s.summary ? `<p class="rs-sum">${esc(human(s.summary))}</p>` : ""}</div>
+      ${s.tool_calls.length ? `<details class="tools"${s.status === "needs_input" ? " open" : ""}><summary>${plural(s.tool_calls.length, "tool call")}</summary><ul class="tool-calls">${s.tool_calls.map(t => `<li><span class="t">${esc(t.tool)}</span><span class="io"><b>${esc(human(t.input))}</b> → ${esc(human(t.output))}</span></li>`).join("")}</ul></details>` : ""}</li>`).join("");
   const asking = askStep(run);
   const ask = asking ? `<form class="panel panel-pad ask" data-action="answer" aria-labelledby="ask-title" novalidate>
       <h2 id="ask-title">The agent has a question for you</h2>
@@ -1425,7 +1484,7 @@ function viewRun() {
   const reviewLeft = rs.rail === "Needs review";
   const waiting = reviewLeft && !USE_MOCK ? `<div class="note"><span class="note-ico">i</span><span>The run has finished. Check the events on <a href="#timeline">Review timeline</a>. Steps marked "Not in this prototype" are not built yet.</span></div>` : reviewLeft ? `<div class="note warn"><span class="note-ico">!</span><span>The agent stopped at <b>Find missing information</b>. It drafted requests to the tenant in their language but sends nothing until you approve. It never decides the remedy. <a href="#gaps">Go to missing info</a></span></div>` : "";
   return `<div class="view-head"><div><h1>Agent run</h1><p>What the agent did, step by step, and which tools it used.</p></div><div class="btn-row">${run.status === "running" ? "" : briefButton()}<button class="btn" data-action="run" ${run.status === "running" ? "disabled" : ""}>Run analysis again</button></div></div>
-    <div class="panel panel-pad run-head"><div class="btn-row"><span class="mono">${esc(run.id)}</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="${esc(costNote(run.usage))}">${esc(costLabel(run.usage))}</span>` : ""}</div></div>
+    <div class="panel panel-pad run-head"><div class="btn-row"><span title="${esc(run.id)}">Analysis</span>${runPill}</div><div class="run-meta"><span>Started ${fmtTime(run.started_at)}</span><span>Finished ${fmtTime(run.finished_at)}</span>${run.usage ? `<span>Took ${fmtDur(run.usage.duration_ms)}</span><span title="${esc(costNote(run.usage))}">${esc(costLabel(run.usage))}</span>` : ""}</div></div>
     ${ask}${analysisNote(run)}${waiting}<ol class="panel run-steps">${steps}</ol>${contract("run", run)}`;
 }
 
@@ -1711,7 +1770,7 @@ function viewPackage() {
     ${latest ? packageResult(latest) : ""}
     ${manifest}
     <h2 class="section-h">Audit log</h2>
-    <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(a.action)}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
+    <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(stripRunIds(a.action))}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
     ${contract("package", { request: { attestations: S.attest }, response: S.pkg, activity: S.activity })}`;
 }
 
