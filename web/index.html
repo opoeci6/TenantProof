@@ -1164,7 +1164,7 @@ function stats() {
 
 /* ---------- login (M1) ---------- */
 function showLogin(msg) {
-  S.needLogin = true; clearInterval(poller);
+  S.needLogin = true; stopRunPolling();
   $("#layout").classList.add("single"); $("#topnav").innerHTML = ""; $("#rail").innerHTML = "";
   $("#ctx").innerHTML = `<strong>Sign in</strong><span></span>`;
   $("#view").innerHTML = `<form class="panel panel-pad" data-action="login" style="max-width:380px;display:grid;gap:12px">
@@ -1214,7 +1214,7 @@ function renderChrome() {
 // State that belongs to one case. Kept across a switch, the last case's package, confirmations
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
-  clearInterval(poller);
+  stopRunPolling();
   S.privacy = null;
   S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
@@ -1826,7 +1826,11 @@ const LOADERS = {
   case: () => request("GET", C).then(d => S.case = d),
   evidence: () => request("GET", `${C}/evidence`).then(d => S.evidence = d),
   privacy: () => request("GET", `${C}/privacy`).then(d => S.privacy = d).catch(() => S.privacy = null),  /* #60 */
-  run: () => request("GET", `${C}/runs/latest`).then(d => S.run = d).catch(() => S.run = null),
+  run: async () => {
+    const caseId = CASE_ID;
+    const run = await request("GET", `${C}/runs/latest`).catch(() => null);
+    if (CASE_ID === caseId) S.run = run;
+  },
   timeline: () => request("GET", `${C}/timeline`).then(d => S.timeline = d),
   gaps: () => request("GET", `${C}/gaps`).then(d => S.gaps = d),
   sources: () => request("GET", `${C}/sources`).then(d => S.sources = d),
@@ -1843,6 +1847,7 @@ function prioritizeClient(list) { return list.map(c => ({ ...c, _days: c.next_de
 const CASELESS_LOADERS = ["me", "cases"];
 // If the selected case is gone (404), forget it and go back to the caseload instead of an empty shell.
 async function dropCase(why) {
+  stopRunPolling();
   CASE_ID = null; C = ""; writeCaseToUrl(null); S.case = null; S.evidence = []; S.privacy = null; S.run = null; S.timeline = []; S.gaps = []; S.sources = []; S.form = null; S.activity = []; S.pkg = null;
   S.intake.view = null; S.lastLink = null;
   location.hash = "cases";
@@ -1859,7 +1864,9 @@ function refresh(parts) {
   refreshQueue = next.catch(() => {});
   return next;
 }
+/* runPolling:start (#178) */
 async function loadAndRender(parts) {
+  const caseId = CASE_ID;
   let keys = TENANT_MODE ? ["intake"] : parts ? [...new Set([...parts, "activity", "cases"])] : Object.keys(LOADERS);
   if (!TENANT_MODE && !CASE_ID) keys = keys.filter(k => CASELESS_LOADERS.includes(k));
   try { await Promise.all(keys.map(k => LOADERS[k]())); }
@@ -1870,27 +1877,58 @@ async function loadAndRender(parts) {
     toast(err.message);
   }
   render();
+  if (CASE_ID === caseId && keys.includes("run")) pollRun();
 }
 
 const focusAsk = () => { const el = $("#ask-a"); if (el) el.focus(); };
 let poller = null;
-function pollRun() {
+function stopRunPolling() {
   clearInterval(poller);
-  poller = setInterval(async () => {
-    if (!S.run) { clearInterval(poller); return; }  // the case was closed meanwhile
-    try { S.run = await request("GET", `/runs/${S.run.id}`); }
-    catch (err) { if (err.status === 401 || err.status === 404) { clearInterval(poller); uiFailed(err); } return; }  // otherwise try again next tick
+  poller = null;
+}
+
+function pollRun() {
+  stopRunPolling();
+  if (S.run?.status !== "running") return;
+  const runId = S.run.id, caseId = CASE_ID;
+  let inFlight = false;
+  const current = () => poller === timer && CASE_ID === caseId && S.run?.id === runId;
+  const timer = setInterval(async () => {
+    if (!current()) {
+      if (poller === timer) stopRunPolling();
+      return;
+    }
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const run = await request("GET", `/runs/${runId}`);
+      if (!current()) return;
+      S.run = run;
+    } catch (err) {
+      if (current() && (err.status === 401 || err.status === 404)) {
+        stopRunPolling();
+        uiFailed(err);
+      }
+      return; // Retriable errors are polled on the next tick.
+    } finally {
+      inFlight = false;
+    }
     if (S.run.status !== "running") {
-      clearInterval(poller);
+      stopRunPolling();
       const asked = askStep(S.run) !== null;
       toast(asked ? "The agent has a question for you." : "Analysis finished. Required items need your input.");
       // Everything a run writes: the rules step adds the case's sources and deadline, the others the rest.
-      await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]); if (asked && route() === "run") focusAsk(); return;
+      await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]);
+      if (asked && CASE_ID === caseId && S.run?.id === runId && route() === "run") focusAsk();
+      return;
     }
     if (route() === "run") $("#view").innerHTML = viewRun();
     renderChrome();
   }, 700);
+  poller = timer;
 }
+
+/* runPolling:end */
 
 /* ---------- events ---------- */
 /* ---------- Form J draft saves and download ---------- */
