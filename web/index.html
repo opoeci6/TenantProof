@@ -1,11 +1,9 @@
-<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + var(--topbar-h,0px))}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<title>TenantProof</title>
-<meta name="claude:viewport-fit-sides" content="cover">
+<!doctype html><html lang="en"><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><title>TenantProof</title><meta name="claude:viewport-fit-sides" content="cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + var(--topbar-h,0px))}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <style>
 /* Layout: clinic case-file workspace. Sticky app bar; caseload table as home; numbered workflow rail inside a case; tenant intake shown in a phone frame. */
 :root{
   --bg:#F3F5F4; --surface:#FFFFFF; --surface-2:#E9EEEC; --line:#D3DBD8;
-  --ink:#16201D; --ink-2:#465450; --ink-3:#6A7773;
+  --ink:#16201D; --ink-2:#465450; --ink-3:#5F6C68;
   --accent:#1D4F91; --accent-ink:#FFFFFF; --accent-soft:#E2EBF7;
   --ok:#2C6D45; --ok-soft:#E0F0E6; --warn:#8F5506; --warn-soft:#FAEED7; --bad:#A3241C; --bad-soft:#F8E2DF;
   --tag:#F6E7A8; --tag-ink:#4A3B00;
@@ -364,6 +362,9 @@ textarea.field{min-height:72px;resize:vertical}
 .log{list-style:none;margin:0;padding:0}
 .log li{display:grid;grid-template-columns:150px 92px minmax(0,1fr);gap:4px 14px;padding:9px 16px;border-top:1px solid var(--line);font-size:13px;align-items:baseline}
 .log li:first-child{border-top:0}
+/* #203: a 64-character SHA-256 in an audit line wraps inside its own column instead of
+   pushing the page sideways at phone widths. */
+.log li > span{min-width:0;overflow-wrap:anywhere}
 .log time{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:12.5px}
 .log .who{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
 .who-agent{color:var(--accent)} .who-tenant{color:var(--warn)} .who-caseworker{color:var(--ok)}
@@ -729,6 +730,7 @@ for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
 db.runs = {}; db.intakeRequests = []; db.packages = []; let runCounter = 0;  // #200: built packages, newest last
+db.caseByKey = {};  // #202: the case each submission key made, so a retry returns it
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
 const RUN_SCRIPT = [
@@ -829,7 +831,7 @@ function mockRoute(method, path, body) {
   if (method === "GET" && path === "/me") return clone(ME);
   if (method === "GET" && path === "/cases") return clone(caseload());
   if (method === "POST" && path === "/cases") return mockNewCase(body);  /* #41 */
-  if (method === "GET" && path === C) return clone(db.case);
+  if (method === "GET" && path === C) return clone({ ...db.case, has_run: !!db.latestRun, has_package: db.packages.length > 0 });  /* #218 */
   if (method === "POST" && path === `${C}/intake-link`) { db.case.intake.sent_at = new Date().toISOString(); log("caseworker", "Re-sent the intake link in Chinese (中文)"); return clone(db.case.intake); }
   if (method === "GET" && path === `${C}/evidence`) return clone(db.evidence);
   if (path.startsWith(`${C}/privacy`) || /\/model-text$/.test(path)) return mockPrivacy(method, path, body);  /* #60 */
@@ -1023,7 +1025,7 @@ function sentBeforeText(t, record, lang) {
 /* =====================================================================
    UI
    ===================================================================== */
-const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null,
+const S = { me: null, cases: [], case: null, evidence: [], run: null, timeline: [], gaps: [], sources: [], form: null, activity: [], pkg: null, editing: null, drafting: null, missingCase: null,
   attest: { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false }, pkgError: null,
   intake: { view: null, lang: null, files: [], answers: {}, attest: false, consent: false, sent: false } };
 const RESUMABLE = ["extract", "timeline", "gaps"];  // steps the runner can resume after an answer (the others' needs_input is not a question)
@@ -1428,10 +1430,16 @@ async function ensureCase() {
   if (CASE_ID) return;
   const list = await request("GET", "/cases");
   const wanted = caseInUrl();  // the case open before a refresh, if this user can still see it
-  const pick = (wanted && list.find(c => c.id === wanted)) || list.find(c => c.has_demo_data) || list[0];
-  if (pick) setCase(pick.id);
+  const { id, missing } = pickInitialCase(list, wanted);
+  S.missingCase = missing;
+  if (id) setCase(id);
 }
-async function logout() { try { await request("POST", "/auth/logout"); } catch {} writeCaseToUrl(null); location.reload(); }
+async function logout() {
+  try { await request("POST", "/auth/logout"); } catch {}
+  S.missingCase = null;
+  if (!USE_MOCK && !TENANT_MODE) history.replaceState(null, "", signOutUrl(location.href));
+  location.reload();
+}
 
 /* ---------- chrome ---------- */
 const landlordApplication = () => S.case?.applicant_role === "landlord";
@@ -1487,6 +1495,20 @@ function resetCaseState() {
   S.attest = { reviewed_fields: false, remedy_confirmed_with_tenant: false, explained_not_legal_advice: false };
 }
 const NEW_CASE_LANGS = ["en", "zh", "fr", "es", "ru", "hi"];  // the languages the tenant page has text for
+/* #202: one key per submission. A retry after a lost response carries the same key, so the
+   server answers with the case the first attempt made instead of creating a second one. */
+function newSubmissionKey() {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const b = c.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;  // version 4
+    b[8] = (b[8] & 0x3f) | 0x80;  // variant 10
+    const hex = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `k${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 function newCaseForm() {
   const n = S.newCase; if (!n) return "";
   const v = k => esc(n.values[k] || "");
@@ -1511,12 +1533,16 @@ function newCaseForm() {
 async function createCase(form) {
   const fd = new FormData(form);
   const values = Object.fromEntries(["applicant_role", "tenant_name", "tenant_language", "unit", "title"].map(k => [k, String(fd.get(k) || "").trim()]));
-  const body = values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values;
-  S.newCase = { values, busy: true, error: null }; render();
+  // #202: the key is minted once and kept while this form is open, so Create case again after a
+  // lost response returns the case the first attempt made. A deliberate new submission starts
+  // from New case, which has no key.
+  const key = S.newCase?.key || newSubmissionKey();
+  const body = { ...(values.applicant_role === "landlord" ? { ...values, tenant_language: "en" } : values), idempotency_key: key };
+  S.newCase = { values, key, busy: true, error: null }; render();
   let made;
   try { made = await request("POST", "/cases", body); }
   catch (err) {
-    S.newCase = { values, busy: false, error: err.message }; render();
+    S.newCase = { values, key, busy: false, error: err.message }; render();
     // The message sits above the fields, so after clicking Create it can be scrolled out of view.
     const note = document.querySelector("form.new-case .note.bad"); if (note) note.scrollIntoView({ block: "center" });
     return;
@@ -1533,10 +1559,16 @@ async function createCase(form) {
 }
 function mockNewCase(body) {
   const b = body || {}, blank = ["tenant_name", "unit", "title"].filter(k => !String(b[k] || "").trim());
+  // #202: the checks come first, so a refused body never binds its key; then the same key
+  // returns the case the first attempt saved instead of adding a second one.
   if (blank.length || !["tenant", "landlord"].includes(b.applicant_role) || !NEW_CASE_LANGS.includes(b.tenant_language)) throw Object.assign(new Error("Fill in every field"), { status: 422 });
+  const key = String(b.idempotency_key || "");
+  if (key && db.caseByKey[key]) return JSON.parse(JSON.stringify(db.caseByKey[key]));
   const id = `case_mock_${db.otherCases.length + 1}`;
   db.otherCases.push({ id, applicant_role: b.applicant_role, tenant_name: b.tenant_name, title: b.title, unit: b.unit, dispute_type: "maintenance", stage: "waiting_tenant", next_deadline: null, open_blocking: 0, pending_review: 0, tenant_language: b.tenant_language, updated_at: new Date().toISOString(), has_demo_data: false, _not_sent: true });
-  return { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true };
+  const made = { id, applicant_role: b.applicant_role, dispute_type: "maintenance", title: b.title, unit: b.unit, assigned_to: { id: ME.id, name: ME.name }, tenant: { name: b.tenant_name, preferred_language: b.tenant_language }, intake: { url: null, status: "not_sent", sent_at: null, last_upload_at: null, tenant_attested_genuine: false, tenant_attested_at: null }, created_at: new Date().toISOString(), synthetic: true, has_run: false, has_package: false };
+  if (key) db.caseByKey[key] = made;
+  return made;
 }
 /* --- end new case --- */
 
@@ -1546,7 +1578,10 @@ function mockNewCase(body) {
 const notAnalysed = c => !!c && c.analysed === false && c.stage === "ready_to_file";
 function viewCases() {
   const cs = S.cases;
-  if (!cs.length) return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases appear here.</p></div><button class="btn" data-action="new-case">New case</button></div>${newCaseForm()}
+  // #217: an id the URL asked for that this caseload does not have is reported here, and the
+  // page does not quietly open a different case.
+  const missingNote = S.missingCase ? `<div class="note bad" role="alert"><span class="note-ico">×</span><span>That case was not found or you do not have access. Choose a case from your caseload below.</span></div>` : "";
+  if (!cs.length) return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases appear here.</p></div><button class="btn" data-action="new-case">New case</button></div>${missingNote}${newCaseForm()}
     <div class="panel panel-pad"><strong>No cases yet</strong><p class="muted">Cases assigned to you will show up here. Nothing is shared with you from other organizations.</p></div>`;
   // Events waiting for review count whatever the stage: a case with a hearing date stays
   // "hearing_scheduled" (gating.compute_stage) while its events still need review.
@@ -1569,7 +1604,7 @@ function viewCases() {
       <span class="cl-reason">${fresh ? (openable ? "Not analysed yet. Open the case and run the analysis." : "Not analysed yet.") : `${c.priority === "high" ? "High priority: " : ""}${esc(c.priority_reason)}`}</span>
     </${tag}>`;
   }).join("");
-  return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases. The order follows fixed rules (received-by dates first, then required items), so you can always see why a case is on top.</p></div><button class="btn" data-action="new-case">New case</button></div>${newCaseForm()}
+  return `<div class="view-head"><div><h1>Caseload</h1><p>Your open maintenance cases. The order follows fixed rules (received-by dates first, then required items), so you can always see why a case is on top.</p></div><button class="btn" data-action="new-case">New case</button></div>${missingNote}${newCaseForm()}
     <div class="summary-row"><span><b>${cs.length}</b>open ${cs.length === 1 ? "case" : "cases"}</span><span><b>${review}</b>${review === 1 ? "needs" : "need"} your review</span><span><b>${week}</b>${week === 1 ? "case" : "cases"} due within 7 days</span></div>
     <div class="panel cl" role="list"><div class="cl-head"><span></span><span>Tenant · issue</span><span>Stage</span><span>Next deadline</span><span>Open items</span><span>Language</span></div>${rows}</div>
     <div class="note"><span class="note-ico">i</span><span>Rows marked <b>Demo row</b> show what a caseload looks like. They have no case view and cannot be opened.</span></div>
@@ -1927,7 +1962,7 @@ function viewForm() {
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
       ${applies(reason.key) ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
-        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(draftFieldValue(reason))}</textarea></label>` : ""}
+        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" data-saved="${esc(reason.value || "")}" rows="3">${esc(draftFieldValue(reason))}</textarea></label>` : ""}
       ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
@@ -2155,16 +2190,36 @@ function render() {
     const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
     const focused = active !== view && view.contains(active) && active.id ? active : null;
     const saves = S.draftSaves;
-    const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading,
-      unsaved: !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size) });
+    // #194: only a problem on a field the draft still shows holds the view back. An error left on
+    // a control its parent answer just hid must not keep that control on the page.
+    const unsaved = typeof draftProblemLabels === "function"
+      ? !!(saves?.pending.size || draftProblemLabels().length)
+      : !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size);
+    const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading, unsaved });
     formRenderDeferred = mode === "after-composition";
     if (mode === "skip" || mode === "after-composition") {
       const notice = $("#draft-save-notice");
       if (notice) notice.innerHTML = draftSaveNotice();
       return;
     }
-    // A focused text field missing from the new view keeps the old view, so its text is not lost.
-    if (mode === "keep-focus" && (renderAroundFocus(view, focused, banner + VIEWS[r]()) || editing)) return;
+    if (mode === "keep-focus") {
+      const html = banner + VIEWS[r]();
+      if (renderAroundFocus(view, focused, html)) return;  // the focused control is still there
+      /* #194: it is gone, so a parent answer hid it while it had focus. Typed text is never
+         thrown away: the old view stays and the blur that follows completes the reconciliation.
+         An untouched control is replaced at once, and focus moves to the next control left. */
+      const dirty = editing && focused.dataset && Object.hasOwn(focused.dataset, "saved")
+        && focused.value !== focused.dataset.saved;
+      if (dirty) { formRenderDeferred = true; return; }
+      const sel = '[data-action="field"][id], [data-action="date-field"][id]';
+      const oldIds = [...(view.querySelectorAll?.(sel) || [])].map(el => el.id);
+      view.innerHTML = html;
+      const newIds = [...(view.querySelectorAll?.(sel) || [])].map(el => el.id);
+      const nextId = nextSurvivingControlId(oldIds, focused.id, newIds);
+      const nextEl = nextId ? document.getElementById?.(nextId) : null;
+      if (nextEl) nextEl.focus?.();
+      return;
+    }
   }
   view.innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
   if (r === "evidence") wireDrop();
@@ -2180,10 +2235,28 @@ function writeCaseToUrl(id) {
   if (id) url.searchParams.set("case", id); else url.searchParams.delete("case");
   if (url.href !== location.href) history.replaceState(history.state, "", url);
 }
+/* #217: which case to open on load. An id the caller asked for is never swapped for another
+   case: it either exists in this caseload or it is reported as missing. */
+function pickInitialCase(list, wanted) {
+  if (wanted) {
+    const match = list.find(c => c.id === wanted) || null;
+    return { id: match ? match.id : null, missing: match ? null : wanted };
+  }
+  const fallback = list.find(c => c.has_demo_data) || list[0] || null;
+  return { id: fallback ? fallback.id : null, missing: null };
+}
+/* #219: where signing out lands: the same page without ?case= and without the view hash. */
+function signOutUrl(href) {
+  const u = new URL(href);
+  u.searchParams.delete("case");
+  u.hash = "";
+  return u.pathname + u.search;
+}
 /* caseInUrl:end */
 const setCase = id => {
   CASE_ID = id;
   C = `/cases/${id}`;
+  S.missingCase = null;
   S.draftSaves = tenantDraftSavesByCase.get(id) ?? null;
   tenantDraftSavesByCase.delete(id);
   writeCaseToUrl(id);
@@ -2200,6 +2273,9 @@ const LOADERS = {
   privacy: () => request("GET", `${C}/privacy`).then(d => S.privacy = d).catch(() => S.privacy = null),  /* #60 */
   run: async () => {
     const caseId = CASE_ID;
+    // #218: a landlord case has no run and an empty case has nothing to read, so the page does
+    // not ask for one: no 404 the browser reports as a failed request. The endpoint is unchanged.
+    if (S.case && S.case.id === caseId && (S.case.applicant_role === "landlord" || S.case.has_run === false)) { S.run = null; return; }
     const run = await request("GET", `${C}/runs/latest`).catch(() => null);
     if (CASE_ID === caseId) S.run = run;
   },
@@ -2212,6 +2288,9 @@ const LOADERS = {
   // 404 (nothing built yet) and 409 (a landlord case) mean "no package", not a failed load.
   pkg: async () => {
     const caseId = CASE_ID;
+    // #218: same rule as the run: nothing built (or a landlord case) means no request at all,
+    // so the 404/409 that would follow never reaches the console.
+    if (S.case && S.case.id === caseId && (S.case.applicant_role === "landlord" || S.case.has_package === false)) { S.pkg = null; return; }
     try {
       const pkg = await request("GET", `${C}/package`);
       if (CASE_ID === caseId) S.pkg = pkg;
@@ -2255,7 +2334,16 @@ async function loadAndRender(parts) {
   const caseId = CASE_ID;
   let keys = TENANT_MODE ? ["intake"] : parts ? [...new Set([...parts, "activity", "cases"])] : Object.keys(LOADERS);
   if (!TENANT_MODE && !CASE_ID) keys = keys.filter(k => CASELESS_LOADERS.includes(k));
-  try { await Promise.all(keys.map(k => LOADERS[k]())); }
+  try {
+    // #218: the case says whether it has a run and a package, so it is read before either, and
+    // an empty or landlord case never asks for a run or a package it does not have.
+    if (keys.includes("case") && (keys.includes("run") || keys.includes("pkg"))) {
+      await Promise.all(keys.filter(k => k !== "run" && k !== "pkg").map(k => LOADERS[k]()));
+      if (CASE_ID === caseId) await Promise.all(keys.filter(k => k === "run" || k === "pkg").map(k => LOADERS[k]()));
+    } else {
+      await Promise.all(keys.map(k => LOADERS[k]()));
+    }
+  }
   catch (err) {
     if (err.status === 401 && !TENANT_MODE) return showLogin();
     // Not awaited: dropCase queues its own refresh, which runs once this one has finished.
@@ -2352,6 +2440,17 @@ function formRefreshMode({ focused, composing, downloading, unsaved }) {
   if (composing) return "after-composition";
   return focused ? "keep-focus" : "full";
 }
+/* #194: the control to focus when the one that had focus has just disappeared, because its
+   parent answer (deposit paid, lease term, a request) hid it. The next surviving control after
+   it, else the previous one, else none. */
+function nextSurvivingControlId(oldIds, focusedId, newIds) {
+  const idx = oldIds.indexOf(focusedId);
+  if (idx < 0 || !Array.isArray(newIds) || !newIds.length) return null;
+  const surviving = new Set(newIds);
+  for (let i = idx + 1; i < oldIds.length; i++) if (surviving.has(oldIds[i])) return oldIds[i];
+  for (let i = idx - 1; i >= 0; i--) if (surviving.has(oldIds[i])) return oldIds[i];
+  return null;
+}
 /* formRefresh:end */
 /* #161: rebuild the view from `html` around `keep`, which stays in the page with its value,
    selection and focus. Every other node is replaced. False when the new view has no `keep`. */
@@ -2399,7 +2498,7 @@ function draftProblemLabels() {
   if (!state || !S.form) return [];
   const fields = new Map(S.form.fields.map(field => [field.key, field]));
   return [...new Set([...state.failed, ...state.invalid])]
-    .filter(key => fields.has(key) && formFieldApplies(key, fields, false))
+    .filter(key => fields.has(key) && formFieldApplies(key, fields, landlordApplication()))
     .map(key => fields.get(key).label);
 }
 
@@ -2631,7 +2730,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "privacy-undo") { S.privacy = await request("DELETE", `${C}/privacy/terms/${id}`); toast("Done." + (S.run ? " Run the analysis again to use it." : "")); render(); return; }
   if (a === "copy") { ev.preventDefault(); try { await navigator.clipboard.writeText(b.dataset.text); toast("Copied"); } catch { copyFallback(b); } }
   if (a === "open-case") { const c = S.cases.find(x => x.id === id); if (c && c.has_demo_data) { if (id !== CASE_ID) { resetCaseState(); setCase(id); await refresh(); } location.hash = landlordApplication() ? "form" : "timeline"; } }
-  if (a === "new-case") { S.newCase = S.newCase || { values: {} }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41 */
+  if (a === "new-case") { S.newCase = S.newCase || { values: {}, key: null }; render(); const first = document.querySelector("form.new-case [name=applicant_role]"); if (first) first.focus(); return; }  /* #41, #202 */
   if (a === "cancel-new-case") { S.newCase = null; render(); return; }
   if (a === "resend") { if (!CASE_ID || landlordApplication()) return; const ik = S.case && S.case.intake;
     if (ik && ik.status !== "not_sent" && !confirm(`Make a new intake link for ${S.case.tenant.name}? The link sent earlier stops working.`)) return;
@@ -2648,7 +2747,7 @@ document.addEventListener("click", guarded(async ev => {
     if (!validCaseField(key, value, saved)) return;
     return saveDraftField(key, value);
   }
-  if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
+  if (a === "run") { S.run = await request("POST", `${C}/runs`); if (S.case && S.case.id === CASE_ID) S.case.has_run = true; location.hash = "run"; render(); pollRun(); }
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
   if (a === "edit") { S.editing = id; render(); const el = document.getElementById("ed-desc-" + id); el && el.focus(); }
   if (a === "cancel-edit") { S.editing = null; render(); }
@@ -2670,7 +2769,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "build") {
     if (draftPackageBlock()) return render();
     let built = false;
-    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; toast(`Package v${S.pkg.version} built`); }
+    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; if (S.case && S.case.id === CASE_ID) S.case.has_package = true; toast(`Package v${S.pkg.version} built`); }
     catch (err) { S.pkgError = err.status === 409 ? `Can't build yet: ${err.message}.` : err.message; }
     await refresh([]);
     if (built) showPackageResult();
@@ -2775,48 +2874,57 @@ document.addEventListener("input", ev => {
 document.addEventListener("focusout", guarded(async ev => {
   const input = ev.target;
   const { action, key } = input.dataset;
-  if (input.contains(ev.relatedTarget)) return;
-  const state = S.draftSaves;
-  if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
-      && !state.pending.has(key)) {
-    return saveDraftControl(input);
-  }
-  if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
-  const dateState = draftSaveState();
-  if (!input.reportValidity()) {
-    setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid date."), input);
-    dateState.invalid.add(key);
-    dateState.attempted.set(key, input.value);
-    if (!landlordApplication()) render();
-    return;
-  }
-  const pending = dateState.pending.get(key);
-  const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.dataset.saved ?? "";
-  const values = formFieldValues();
-  for (const [k, v] of dateState.confirmed) values[k] = v;
-  for (const [k, entry] of dateState.pending) values[k] = entry.value;
-  const pairError = dateOrderError(key, input.value, saved, values);
-  if (pairError) {
-    setFieldError(key, pairError, input);
-    dateState.invalid.add(key);
-    dateState.attempted.set(key, input.value);
-    if (!landlordApplication()) render();
-    return;
-  }
-  if (dateState.failed.has(key) && !pending) return commitDateField(key, input, dateState);
-  if (input.value === saved) {
-    dateState.invalid.delete(key);
-    if (!pending) {
-      dateState.failed.delete(key);
-      dateState.attempted.delete(key);
+  /* #194: a render held back because this control was being typed into completes once focus has
+     left it, in a microtask, after this handler has started the save it may need. */
+  const flushDeferred = () => queueMicrotask(() => {
+    if (formRenderDeferred && !formComposing) { formRenderDeferred = false; render(); }
+  });
+  try {
+    if (input.contains(ev.relatedTarget)) return;
+    const state = S.draftSaves;
+    if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
+        && !state.pending.has(key)) {
+      return saveDraftControl(input);
     }
-    clearFieldError(key, input);
-    if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
-      $("#draft-save-notice").innerHTML = draftSaveNotice();
+    if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
+    const dateState = draftSaveState();
+    if (!input.reportValidity()) {
+      setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid date."), input);
+      dateState.invalid.add(key);
+      dateState.attempted.set(key, input.value);
+      if (!landlordApplication()) render();
+      return;
     }
-    return;
+    const pending = dateState.pending.get(key);
+    const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.dataset.saved ?? "";
+    const values = formFieldValues();
+    for (const [k, v] of dateState.confirmed) values[k] = v;
+    for (const [k, entry] of dateState.pending) values[k] = entry.value;
+    const pairError = dateOrderError(key, input.value, saved, values);
+    if (pairError) {
+      setFieldError(key, pairError, input);
+      dateState.invalid.add(key);
+      dateState.attempted.set(key, input.value);
+      if (!landlordApplication()) render();
+      return;
+    }
+    if (dateState.failed.has(key) && !pending) return commitDateField(key, input, dateState);
+    if (input.value === saved) {
+      dateState.invalid.delete(key);
+      if (!pending) {
+        dateState.failed.delete(key);
+        dateState.attempted.delete(key);
+      }
+      clearFieldError(key, input);
+      if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
+        $("#draft-save-notice").innerHTML = draftSaveNotice();
+      }
+      return;
+    }
+    return commitDateField(key, input, dateState);
+  } finally {
+    flushDeferred();
   }
-  return commitDateField(key, input, dateState);
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;

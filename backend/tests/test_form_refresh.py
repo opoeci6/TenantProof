@@ -29,6 +29,13 @@ def modes(*cases: dict) -> list[str]:
     return node_json(match.group(1) + f"\nconsole.log(JSON.stringify({call}));")
 
 
+def pure(expr: str) -> object:
+    """Runs one expression against the block's pure helpers."""
+    match = BLOCK.search(INDEX.read_text(encoding="utf-8"))
+    assert match, "formRefresh block not found in web/index.html"
+    return node_json(match.group(1) + f"\nconsole.log(JSON.stringify({expr}));")
+
+
 def test_nothing_focused_replaces_the_view() -> None:
     assert modes({}) == ["full"]
 
@@ -88,3 +95,82 @@ const renderAroundFocus = (target, focused, html) => {{
         + "\nrender(); console.log(JSON.stringify({html: view.innerHTML, kept}));"
     )
     assert node_json(script) == {"html": expected_html, "kept": kept}
+
+
+# --------------------------------------------------------------------------- #194
+
+OLD = ["fld-deposit_paid", "fld-deposit_amount", "fld-notice_given"]
+SURVIVING = [key for key in OLD if key != "fld-deposit_amount"]
+
+
+def test_the_next_surviving_control_is_the_one_to_focus() -> None:
+    assert pure('nextSurvivingControlId(["a", "b", "c"], "b", ["a", "c"])') == "c"
+
+
+def test_the_previous_control_takes_over_when_the_last_one_disappears() -> None:
+    assert pure('nextSurvivingControlId(["a", "b", "c"], "c", ["a", "b"])') == "b"
+
+
+def test_no_control_is_focused_when_none_survives() -> None:
+    assert pure('nextSurvivingControlId(["a", "b"], "a", [])') is None
+    assert pure('nextSurvivingControlId(["a", "b"], "a", null)') is None
+
+
+def test_a_control_that_was_not_in_the_old_view_has_no_successor() -> None:
+    assert pure('nextSurvivingControlId(["a", "b"], "elsewhere", ["a"])') is None
+
+
+def disappearing_control(*, value: str, saved: str) -> str:
+    """A render of the Form draft whose focused control the new view no longer has: the parent
+    answer (Security deposit paid -> No) was just saved, and Tab moved focus into the child."""
+    source = INDEX.read_text(encoding="utf-8")
+    policy = BLOCK.search(source)
+    render = re.search(r"^function render\(\) \{.*?^\}", source, re.M | re.S)
+    assert policy and render
+    harness = f"""
+const CASE_ID = "case-tenant", TENANT_MODE = false;
+const S = {{case: {{applicant_role: "tenant"}}, cases: [], form: {{}}, draftSaves: null}};
+const CASE_ROUTES = ["form"], VIEWS = {{form: () => "new form"}};
+const route = () => "form", landlordApplication = () => false, renderChrome = () => {{}};
+const control = {{
+  id: "fld-deposit_amount", matches: () => true,
+  value: {json.dumps(value)}, dataset: {{saved: {json.dumps(saved)}}},
+}};
+const next = {{id: "fld-notice_given", focus: () => {{focused = next.id;}}}};
+let focused = null;
+const document = {{activeElement: control, getElementById: id => (id === next.id ? next : null)}};
+let current = {json.dumps(OLD)};
+const view = {{
+  _html: "old form",
+  get innerHTML() {{ return this._html; }},
+  set innerHTML(html) {{ this._html = html; current = {json.dumps(SURVIVING)}; }},
+  querySelector: () => ({{dataset: {{formDraft: "case-tenant"}}}}),
+  contains: el => el === control,
+  querySelectorAll: () => current.map(id => ({{id}})),
+}};
+const $ = () => view;
+let formComposing = false, formRenderDeferred = false;
+const renderAroundFocus = () => false;  // the focused control is not in the new view
+"""
+    script = (
+        harness + policy.group(1) + render.group(0)
+        + "\nrender(); console.log(JSON.stringify("
+        "{html: view.innerHTML, focused, formRenderDeferred}));"
+    )
+    return node_json(script)
+
+
+def test_an_untouched_control_that_disappears_is_replaced_and_focus_moves_on() -> None:
+    """Tabbed into Security deposit amount, not typed into: the row goes and focus lands on the
+    next control, so the hidden field is never left on the page (#194)."""
+    assert disappearing_control(value="500", saved="500") == {
+        "html": "new form", "focused": "fld-notice_given", "formRenderDeferred": False,
+    }
+
+
+def test_a_typed_into_control_keeps_the_view_until_it_loses_focus() -> None:
+    """Typed into and not saved yet: the old view stays so the text is not lost, and the blur
+    completes the reconciliation."""
+    assert disappearing_control(value="300", saved="500") == {
+        "html": "old form", "focused": None, "formRenderDeferred": True,
+    }

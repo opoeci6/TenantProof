@@ -7,7 +7,7 @@ yet. The org and the assignee are the signed-in caseworker's; nothing in the bod
 import unicodedata
 import uuid
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models import CaseRow, FormFieldRow, UserRow
 from app.schemas import ApplicantCaseCreate, CaseCreate
@@ -32,6 +32,9 @@ LABELS = {
     "tenant_language": "Preferred language",
     "unit": "Unit address",
     "title": "What is wrong",
+    # #202: the form's per-submission key. Labelled, not limited: it is an opaque token, so a bad
+    # one is "not valid" rather than too short or too long.
+    "idempotency_key": "Submission key",
 }
 # "<" and its look-alikes are refused, not escaped: escaped, a typed "Heat < 15C" would be stored
 # and shown (caseload, tenant page, filed PDF) as "Heat &lt; 15C".
@@ -69,6 +72,20 @@ def problems(body: CaseCreate) -> list[str]:
     return reasons
 
 
+def find_by_idempotency_key(
+    session: Session, org_id: str, idempotency_key: str | None
+) -> CaseRow | None:
+    """The case this key already made in the org, or None (#202). Keys are scoped per org, so the
+    same key in another org is a different submission."""
+    if not idempotency_key:
+        return None
+    return session.exec(
+        select(CaseRow).where(
+            CaseRow.org_id == org_id, CaseRow.idempotency_key == idempotency_key
+        )
+    ).first()
+
+
 def create_case(session: Session, user: UserRow, body: ApplicantCaseCreate) -> CaseRow:
     """The new case, in the user's org and assigned to them. Caller checks `problems` first, and
     commits."""
@@ -90,6 +107,7 @@ def create_case(session: Session, user: UserRow, body: ApplicantCaseCreate) -> C
         form_name=FORM_NAME,
         form_disclaimer=LANDLORD_FORM_DISCLAIMER if landlord_applicant else FORM_DISCLAIMER,
         intake_status="not_sent",
+        idempotency_key=body.idempotency_key,
     )
     session.add(case)
     session.flush()  # the activity row's foreign key needs the case row first
