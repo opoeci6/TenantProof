@@ -1719,13 +1719,25 @@ function viewGaps() {
 function viewForm() {
   const f = S.form;
   const stPill = { auto_filled: `<span class="pill info">Filled from files</span>`, needs_confirmation: `<span class="pill warn">Please confirm</span>`, missing: `<span class="pill bad">Missing</span>`, user_entered: `<span class="pill ok">Entered by caseworker</span>` };
+  const validDate = value => {
+    if (!value || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value) || value < minTenancyDate) return false;
+    const day = new Date(value + "T00:00:00Z");
+    return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
+  };
+  const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
+  const dateWarnings = new Map();
+  for (const [start, end, message] of [
+    ["move_in_date", "move_out_date", "Move-out date is before move-in date. Check both dates."],
+    ["fixed_term_start", "fixed_term_end", "Fixed-term end date is before its start date. Check both dates."],
+    ["notice_given_date", "notice_effective_date", "The notice is effective before the date it was given. Check the recorded dates."],
+  ]) {
+    const first = fieldsByKey.get(start)?.value, last = fieldsByKey.get(end)?.value;
+    if (validDate(first) && validDate(last) && last < first) dateWarnings.set(end, message);
+  }
   const renderField = x => {
     const saved = x.value || "";
     const { date, options, money } = fieldControls[x.key] || {};
-    const day = date ? new Date(saved + "T00:00:00Z") : null;
-    const legacyDate = day && saved && (!/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(saved)
-      || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
-      || saved < minTenancyDate || saved > fieldMaxDate(x.key));
+    const legacyDate = date && saved && (!validDate(saved) || saved > fieldMaxDate(x.key));
     const confirm = x.status === "needs_confirmation" && saved;
     const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"`;
     const control = options
@@ -1734,13 +1746,13 @@ function viewForm() {
       : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
     return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(partyFields[x.key]?.label || x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
       <div style="display:grid;gap:6px;min-width:0">${control}
+        ${dateWarnings.has(x.key) ? `<span class="flag">${esc(dateWarnings.get(x.key))}</span>` : ""}
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
         ${x.key === "applicant_email_consent" ? '<span class="muted">The applicant email appears in the draft PDF only if you select Yes.</span>' : ""}
         ${x.key === "tenancy_start" && saved && (legacyDate || x.status === "needs_confirmation") ? '<span class="muted">Previously recorded. Check whether this is the move-in date or the fixed-term start date.</span>' : ""}
         ${x.note ? `<span class="flag">${esc(x.note)}</span>` : ""}${x.sources.length ? `<div class="chips">${srcChips(x.sources)}</div>` : ""}</div>
       <div class="fs">${x.required || x.status !== "missing" ? stPill[x.status] : ""}${confirm ? `<button class="btn small" type="button" data-action="confirm-field" data-key="${esc(x.key)}">Confirm</button>` : ""}</div></div>`;
   };
-  const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
   const landlord = landlordApplication();
   const applies = key => fieldsByKey.has(key) && formFieldApplies(key, fieldsByKey, landlord);  // #162
   const groups = landlord ? [

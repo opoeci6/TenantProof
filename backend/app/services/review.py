@@ -20,6 +20,8 @@ from app.services.form_fields import (
     materialize_optional_field,
 )
 from app.services.form_values import (
+    DATE_ORDER_FIELDS,
+    DATE_ORDER_PAIRS,
     EMAIL_KEYS,
     F2_DATE_KEYS,
     FORM_CHOICES,
@@ -27,6 +29,7 @@ from app.services.form_values import (
     MONEY_KEYS,
     RENT_KEYS,
     cad_amount,
+    dates_out_of_order,
     is_email_address,
     is_tenancy_start_date,
 )
@@ -151,13 +154,26 @@ def _check_rent_period(session: Session, case_id: str, key: str, value: str) -> 
             raise _bad(f"Clear {existing.label.lower()} before saving a different rent period")
 
 
+def _check_date_order(session: Session, field: FormFieldRow, value: str) -> None:
+    pair = DATE_ORDER_FIELDS.get(field.key)
+    if not pair or not value or value == field.value:
+        return
+    start, end = pair
+    peer_key = end if field.key == start else start
+    peer = session.get(FormFieldRow, (field.case_id, peer_key))
+    other = peer.value if peer else None
+    dates = (value, other) if field.key == start else (other, value)
+    if dates_out_of_order(*dates):
+        raise _bad(DATE_ORDER_PAIRS[pair])
+
+
 def patch_gap(
     session: Session, case: CaseRow, gap: GapRow, patch: GapPatch, user: UserRow
 ) -> GapRow:
     key = (gap.input or {}).get("field_key")
     if key and not field_allowed_for_case(case, key):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
-    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
+    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES or key in DATE_ORDER_FIELDS:
         lock_alternative_fields(session, case.id)
         session.refresh(gap)
     was_resolved = gap.status == "resolved"
@@ -171,6 +187,7 @@ def patch_gap(
         if not value:
             raise _bad("value cannot be empty")
         _check_rent_period(session, case.id, field.key, value)
+        _check_date_order(session, field, value)
         save_field_value(field, value)
         session.add(field)
     elif patch.status in OPEN and was_resolved:
@@ -218,7 +235,7 @@ def patch_field(
 ) -> FormFieldRow:
     if not field_allowed_for_case(case, key):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
-    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES:
+    if key in LEGACY_ALTERNATIVES or key in F2_ALTERNATIVES or key in DATE_ORDER_FIELDS:
         lock_alternative_fields(session, case.id)
     field = session.get(FormFieldRow, (case.id, key))
     if field is None:
@@ -227,6 +244,7 @@ def patch_field(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Field not found")
     value = patch.value.strip()
     _check_rent_period(session, case.id, key, value)
+    _check_date_order(session, field, value)
     save_field_value(field, value)
     session.add(field)
     for gap in session.exec(select(GapRow).where(GapRow.case_id == case.id)).all():
