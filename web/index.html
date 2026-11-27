@@ -582,6 +582,8 @@ const SEED = {
 };
 
 /* ---------- mock backend ---------- */
+/* formApplies:start (#162: the form field definitions and the one rule for which fields the draft
+   shows; pure, tests/test_form_applies.py runs it under node) */
 /* #67: Form J F2 fields and controls. */
 const yesNoOptions = { yes: "Yes", no: "No" };
 const leaseFields = {
@@ -677,6 +679,45 @@ for (const [prefix, categories] of [
   }
 }
 const fieldControls = { ...leaseFields, ...partyFields, ...requestFields };
+// #162: which saved fields the Form draft shows. viewForm draws only these and stats() counts
+// only these, so the page and its progress count cannot disagree. A hidden value is kept on the
+// server; it is shown and counted again once its parent answer allows it.
+// - An F2 field with `when: [controller, value]` applies while the controller is empty or equals
+//   that value (the server's F2_DEPENDENCIES, which the PDF uses, has the same rule).
+// - A request (F3 tenant, F4 landlord) applies in its own role and when both its selection and
+//   reason fields exist; a payment child also needs "Payment of money" selected; a reason needs
+//   its own request selected.
+// - Every other field always applies.
+const requestSlots = new Map();
+for (const [prefix, top, payment] of [
+  ["request", tenantRequests, paymentRequests],
+  ["landlord_request", landlordRequests, landlordPaymentRequests]
+]) {
+  for (const name of [...Object.keys(top), ...Object.keys(payment)]) {
+    const slot = { prefix, selection: `${prefix}_${name}`, parent: Object.hasOwn(payment, name) ? `${prefix}_payment` : null };
+    requestSlots.set(slot.selection, slot);
+    requestSlots.set(`${slot.selection}_reason`, { ...slot, reason: true });
+  }
+}
+function formFieldApplies(key, byKey, landlord) {
+  const when = leaseFields[key]?.when;
+  if (when) {
+    const choice = byKey.get(when[0])?.value;
+    return !choice || choice === when[1];
+  }
+  const slot = requestSlots.get(key);
+  if (!slot) return true;
+  const selected = k => byKey.get(k)?.value === "yes";
+  if (slot.prefix !== (landlord ? "landlord_request" : "request")) return false;
+  if (!byKey.has(slot.selection) || !byKey.has(`${slot.selection}_reason`)) return false;
+  if (slot.parent && !(formFieldApplies(slot.parent, byKey, landlord) && selected(slot.parent))) return false;
+  return !slot.reason || selected(slot.selection);
+}
+function applicableFormFields(fields, landlord) {
+  const byKey = new Map(fields.map(field => [field.key, field]));
+  return fields.filter(field => formFieldApplies(field.key, byKey, landlord));
+}
+/* formApplies:end */
 const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
@@ -1248,12 +1289,13 @@ function stats() {
   const blockingWaiting = S.gaps.filter(g => g.severity === "blocking" && g.status === "waiting_tenant").length;
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, blockingWaiting, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
+  const fields = applicableFormFields(S.form?.fields || [], landlordApplication());  // #162: only shown fields count
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, blockingWaiting, recommended, waiting, ...formFieldCounts(fields) };
 }
 
 /* ---------- login (M1) ---------- */
 function showLogin(msg) {
-  S.needLogin = true; clearInterval(poller); stopStepTicker();
+  S.needLogin = true; stopRunPolling();
   $("#layout").classList.add("single"); $("#topnav").innerHTML = ""; $("#rail").innerHTML = "";
   $("#ctx").innerHTML = `<strong>Sign in</strong><span></span>`;
   $("#view").innerHTML = `<form class="panel panel-pad" data-action="login" style="max-width:380px;display:grid;gap:12px">
@@ -1310,7 +1352,7 @@ function renderChrome() {
 // State that belongs to one case. Kept across a switch, the last case's package, confirmations
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
-  clearInterval(poller); stopStepTicker();
+  stopRunPolling();
   S.privacy = null;
   S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
@@ -1692,6 +1734,7 @@ function viewForm() {
   };
   const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
   const landlord = landlordApplication();
+  const applies = key => fieldsByKey.has(key) && formFieldApplies(key, fieldsByKey, landlord);  // #162
   const groups = landlord ? [
     ["Landlord applicant", [...partyGroups[2][1], "applicant_email_consent"]],
     partyGroups[3],
@@ -1704,30 +1747,25 @@ function viewForm() {
     return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
   }).join("");
   const rows = f.fields.filter(field => !partyKeys.has(field.key) &&
-    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key))
+    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key) && applies(field.key))
     .map(renderField).join("");
   const prefix = landlord ? "landlord_request" : "request";
   const paymentOptions = landlord ? landlordPaymentRequests : paymentRequests;
   const renderRequest = ([key, title]) => {
     const selection = fieldsByKey.get(`${prefix}_${key}`);
     const reason = fieldsByKey.get(`${prefix}_${key}_reason`);
-    if (!selection || !reason) return "";
+    if (!applies(`${prefix}_${key}`)) return "";
     const selected = selection.value === "yes";
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
-      ${selected ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
+      ${applies(reason.key) ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
         <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
       ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
   const requestRows = Object.entries(landlord ? landlordRequests : tenantRequests).map(renderRequest).join("");
-  const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
-    if (!fieldsByKey.has(key)) return false;
-    if (!definition.when) return true;
-    const [controller, eligible] = definition.when;
-    const choice = fieldsByKey.get(controller)?.value;
-    return !choice || choice === eligible;
-  }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
+  const leaseRows = Object.keys(leaseFields).filter(applies)
+    .map(key => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
@@ -1944,7 +1982,11 @@ const LOADERS = {
   case: () => request("GET", C).then(d => S.case = d),
   evidence: () => request("GET", `${C}/evidence`).then(d => S.evidence = d),
   privacy: () => request("GET", `${C}/privacy`).then(d => S.privacy = d).catch(() => S.privacy = null),  /* #60 */
-  run: () => request("GET", `${C}/runs/latest`).then(d => S.run = d).catch(() => S.run = null),
+  run: async () => {
+    const caseId = CASE_ID;
+    const run = await request("GET", `${C}/runs/latest`).catch(() => null);
+    if (CASE_ID === caseId) S.run = run;
+  },
   timeline: () => request("GET", `${C}/timeline`).then(d => S.timeline = d),
   gaps: () => request("GET", `${C}/gaps`).then(d => S.gaps = d),
   sources: () => request("GET", `${C}/sources`).then(d => S.sources = d),
@@ -1961,6 +2003,7 @@ function prioritizeClient(list) { return list.map(c => ({ ...c, _days: c.next_de
 const CASELESS_LOADERS = ["me", "cases"];
 // If the selected case is gone (404), forget it and go back to the caseload instead of an empty shell.
 async function dropCase(why) {
+  stopRunPolling();
   CASE_ID = null; C = ""; writeCaseToUrl(null); S.case = null; S.evidence = []; S.privacy = null; S.run = null; S.timeline = []; S.gaps = []; S.sources = []; S.form = null; S.activity = []; S.pkg = null;
   S.intake.view = null; S.lastLink = null;
   location.hash = "cases";
@@ -1977,7 +2020,9 @@ function refresh(parts) {
   refreshQueue = next.catch(() => {});
   return next;
 }
+/* runPolling:start (#178) */
 async function loadAndRender(parts) {
+  const caseId = CASE_ID;
   let keys = TENANT_MODE ? ["intake"] : parts ? [...new Set([...parts, "activity", "cases"])] : Object.keys(LOADERS);
   if (!TENANT_MODE && !CASE_ID) keys = keys.filter(k => CASELESS_LOADERS.includes(k));
   try { await Promise.all(keys.map(k => LOADERS[k]())); }
@@ -1988,13 +2033,14 @@ async function loadAndRender(parts) {
     toast(err.message);
   }
   render();
+  if (CASE_ID === caseId && keys.includes("run")) pollRun();
 }
 
 const focusAsk = () => { const el = $("#ask-a"); if (el) el.focus(); };
 // #176: when this page first saw a step running, by "runId:stepKey". The server has no per-step
 // start time; a step already running when the page loads counts from the load.
 const stepSeen = new Map();
-let poller = null, stepTicker = null;
+let stepTicker = null;
 function stepSeconds(runId, key) {
   const id = `${runId}:${key}`;
   if (!stepSeen.has(id)) stepSeen.set(id, Date.now());
@@ -2013,26 +2059,57 @@ function startStepTicker() {
     }
   }, 1000);
 }
-function pollRun() {
+let poller = null;
+function stopRunPolling() {
   clearInterval(poller);
-  poller = setInterval(async () => {
-    if (!S.run) { clearInterval(poller); stopStepTicker(); return; }  // the case was closed meanwhile
-    try { S.run = await request("GET", `/runs/${S.run.id}`); }
-    catch (err) { if (err.status === 401 || err.status === 404) { clearInterval(poller); stopStepTicker(); uiFailed(err); } return; }  // otherwise try again next tick
+  poller = null;
+  stopStepTicker();  // #176
+}
+
+function pollRun() {
+  stopRunPolling();
+  if (S.run?.status !== "running") return;
+  const runId = S.run.id, caseId = CASE_ID;
+  let inFlight = false;
+  const current = () => poller === timer && CASE_ID === caseId && S.run?.id === runId;
+  const timer = setInterval(async () => {
+    if (!current()) {
+      if (poller === timer) stopRunPolling();
+      return;
+    }
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const run = await request("GET", `/runs/${runId}`);
+      if (!current()) return;
+      S.run = run;
+    } catch (err) {
+      if (current() && (err.status === 401 || err.status === 404)) {
+        stopRunPolling();
+        uiFailed(err);
+      }
+      return; // Retriable errors are polled on the next tick.
+    } finally {
+      inFlight = false;
+    }
     if (S.run.status !== "running") {
-      clearInterval(poller);
-      stopStepTicker();
+      stopRunPolling();
       const asked = askStep(S.run) !== null;
       toast(asked ? "The agent has a question for you." : "Analysis finished. Required items need your input.");
       // Everything a run writes: the rules step adds the case's sources and deadline, the others the rest.
-      await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]); if (asked && route() === "run") focusAsk(); return;
+      await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]);
+      if (asked && CASE_ID === caseId && S.run?.id === runId && route() === "run") focusAsk();
+      return;
     }
     // #176: the first reply that redraws the Run page also starts the 1 s tick. Started here, not
     // when polling starts, so a page with no elapsed span never owns a timer.
     if (route() === "run") { $("#view").innerHTML = viewRun(); startStepTicker(); }
     renderChrome();
   }, 700);
+  poller = timer;
 }
+
+/* runPolling:end */
 
 /* ---------- events ---------- */
 /* ---------- Form J draft saves and download ---------- */
