@@ -186,22 +186,50 @@ class PlaceholderProvider:
     def __init__(self, inner: LLMProvider, placeholders: Placeholders) -> None:
         self.inner = inner
         self.placeholders = placeholders
+        self._sent_text: dict[str, str] = {}  # revealed text -> the text the model wrote
+        self._sent_inputs: dict[str, Any] = {}  # tool_use id -> the input the model wrote
 
     def __getattr__(self, name: str) -> Any:
-        if name in ("inner", "placeholders"):  # not set yet (copying): no recursion
+        if name in ("inner", "placeholders", "_sent_text", "_sent_inputs"):  # copying: no recursion
             raise AttributeError(name)
         return getattr(self.inner, name)
 
-    def hide_request(self, request: LLMRequest) -> LLMRequest:
+    def _hide_content(self, role: str, content: str | list[dict[str, Any]]) -> Any:
+        """One message's content with personal details swapped. What the model itself wrote goes
+        back as it wrote it: `reveal` puts the real value in, and a placeholder written against
+        a letter or digit (`[TENANT_NAME]s`) would not be found again by `hide`, which would
+        send the real value on the next call."""
         hide = self.placeholders.hide
+        if role != "assistant":
+            return _content(content, hide)
+        if isinstance(content, str):
+            return self._sent_text.get(content, hide(content))
+        return [self._hide_block(b) for b in content]
+
+    def _hide_block(self, block: dict[str, Any]) -> dict[str, Any]:
+        kind = block.get("type")
+        if kind == "text" and block.get("text") in self._sent_text:
+            return {**block, "text": self._sent_text[block["text"]]}
+        if kind == "tool_use" and block.get("id") in self._sent_inputs:
+            sent = self._sent_inputs[block["id"]]
+            if _strings(sent, self.placeholders.reveal) == block.get("input"):
+                return {**block, "input": sent}
+        return _block(block, self.placeholders.hide)
+
+    def hide_request(self, request: LLMRequest) -> LLMRequest:
         return request.model_copy(update={
             "system_run": f"{request.system_run}\n\n{LEGEND}".strip(),
-            "messages": [Message(role=m.role, content=_content(m.content, hide))
+            "messages": [Message(role=m.role, content=self._hide_content(m.role, m.content))
                          for m in request.messages],
         })  # fmt: skip
 
     def reveal_response(self, response: LLMResponse) -> LLMResponse:
         reveal = self.placeholders.reveal
+        for b in response.content:  # remember what the model wrote, for the next call
+            if b.get("type") == "text" and isinstance(b.get("text"), str):
+                self._sent_text[reveal(b["text"])] = b["text"]
+            elif b.get("type") == "tool_use" and b.get("id"):
+                self._sent_inputs[b["id"]] = b.get("input", {})
         return response.model_copy(update={
             "content": [_block(b, reveal) for b in response.content],
             "text": reveal(response.text),

@@ -162,6 +162,43 @@ def test_the_wrapper_keeps_the_model_name_and_paused_run_profile() -> None:
     assert llm.continuation_key(wrapped) == llm.continuation_key(inner)
 
 
+def test_a_placeholder_written_against_a_letter_is_never_resent_as_the_real_value() -> None:
+    """Issue #164: `reveal` turns `[TENANT_NAME]s` into `Jordan Lees`; `hide` would not find
+    `Jordan Lee` before an `s`, and the surname would reach the provider on the next call."""
+    from app.services.personal_details import Placeholders, name_variants
+
+    ph = Placeholders(known=name_variants("Jordan Lee", "TENANT"))
+    ph.hide("Jordan Lee")  # the case's own name gets [TENANT_NAME]
+    wrapped = placeholders.PlaceholderProvider(llm.FixtureProvider(), ph)
+    wrote = [
+        {"type": "text", "text": "Note on the [TENANT_NAME]s unit and [TENANT_FIRST_NAME]2."},
+        {"type": "tool_use", "id": "tu_1", "name": "x", "input": {"d": "the [TENANT_NAME]s"}},
+    ]
+    revealed = wrapped.reveal_response(llm.LLMResponse(content=wrote, text=wrote[0]["text"]))
+    assert "Jordan Lees" in revealed.content[0]["text"]  # the app works on real text
+    assert revealed.content[1]["input"] == {"d": "the Jordan Lees"}
+
+    request = llm.LLMRequest(system="s", fixture_key="k", messages=[
+        llm.Message(role="user", content="Jordan Lee wrote this."),
+        llm.Message(role="assistant", content=revealed.content),
+        llm.Message(role="user", content=[{
+            "type": "tool_result", "tool_use_id": "tu_1", "content": "Jordan Lee, unit 4B",
+        }]),
+    ])
+    sent = wrapped.hide_request(request).messages
+    assert sent[1].content == wrote  # exactly what the model wrote
+    flat = json.dumps([m.model_dump() for m in sent], ensure_ascii=False)
+    assert "Jordan" not in flat and "Lee" not in flat
+    assert sent[0].content == "[TENANT_NAME] wrote this."
+
+    # An assistant block the model did not write this run (a resumed history) is still hidden.
+    other = llm.Message(role="assistant", content=[{"type": "text", "text": "Hi Jordan Lee"}])
+    resumed = llm.LLMRequest(system="s", fixture_key="k", messages=[other])
+    assert wrapped.hide_request(resumed).messages[0].content == [
+        {"type": "text", "text": "Hi [TENANT_NAME]"}
+    ]
+
+
 # --- the caseworker's list
 
 
