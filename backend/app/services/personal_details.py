@@ -90,17 +90,38 @@ def _international_phone(surface: str) -> bool:
     return 8 <= len(re.sub(r"\D", "", surface)) <= 15
 
 
+_EMAIL_CHAR = "[A-Za-z0-9._%+-]"
+_EMAIL = _EMAIL_CHAR + r"+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}" + _AFTER
+_EMAIL_ANYWHERE = re.compile(_EMAIL)
+_EMAIL_AT_RUN = re.compile(f"(?<!{_EMAIL_CHAR})" + _EMAIL)
+
+
+def _emails(text: str) -> Iterable[re.Match[str]]:
+    """The matches of `_EMAIL_ANYWHERE.finditer(text)`, in time linear in the length of the
+    text (issue #165). Tried at every position, the local part runs to the end of a long run of
+    letters and digits (OCR noise, base64) and back, once per position. A match starts either
+    where such a run starts, or straight after the previous match (`jo@ex.com-ann@ex.com` gives
+    `-ann@ex.com`): those are the only two places tried."""
+    m = _EMAIL_AT_RUN.search(text)
+    while m is not None:
+        yield m
+        m = _EMAIL_ANYWHERE.match(text, m.end()) or _EMAIL_AT_RUN.search(text, m.end())
+
+
 @dataclass(frozen=True)
 class _Pattern:
     stem: str
     kind: str
     regex: re.Pattern[str]
     check: Callable[[str], bool] | None = None
+    finder: Callable[[str], Iterable[re.Match[str]]] | None = None  # else `regex.finditer`
+
+    def finditer(self, text: str) -> Iterable[re.Match[str]]:
+        return (self.finder or self.regex.finditer)(text)
 
 
 PATTERNS: tuple[_Pattern, ...] = (
-    _Pattern("EMAIL", "email", re.compile(
-        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}" + _AFTER)),
+    _Pattern("EMAIL", "email", _EMAIL_ANYWHERE, finder=_emails),
     _Pattern("PHONE", "phone", re.compile(
         _NUM_BEFORE + r"(?:(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
         r"|\+?1?[2-9]\d{2}[2-9]\d{6})" + _NUM_AFTER)),
@@ -273,7 +294,7 @@ class Placeholders:
                 found.append(_Span(m.start(), m.end(), k.stem, k.kind, k.source, k.numbered,
                                    k.part, k.term_id, 0))  # fmt: skip
         for p in PATTERNS:
-            for m in p.regex.finditer(text):
+            for m in p.finditer(text):
                 if p.check is None or p.check(m.group(0)):
                     found.append(_Span(m.start(), m.end(), p.stem, p.kind, "found", True,
                                        False, None, 1))  # fmt: skip

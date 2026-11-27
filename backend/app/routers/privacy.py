@@ -62,7 +62,11 @@ def privacy_view(session: Session, case: CaseRow) -> PrivacyView:
 
 @router.get("/cases/{case_id}/privacy", response_model=PrivacyView)
 def get_privacy(case: CaseDep, session: SessionDep) -> PrivacyView:
-    """The personal details found in the case and the placeholder the model sees for each."""
+    """The personal details found in the case and the placeholder the model sees for each.
+    With the setting off the UI shows no list, so none is built: building it reads and scans
+    every evidence page, on every load of the case (issue #165)."""
+    if not get_settings().privacy_placeholders:
+        return PrivacyView(enabled=False, details=[])
     return privacy_view(session, case)
 
 
