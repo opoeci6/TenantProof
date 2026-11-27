@@ -581,6 +581,8 @@ const SEED = {
 };
 
 /* ---------- mock backend ---------- */
+/* formApplies:start (#162: the form field definitions and the one rule for which fields the draft
+   shows; pure, tests/test_form_applies.py runs it under node) */
 /* #67: Form J F2 fields and controls. */
 const yesNoOptions = { yes: "Yes", no: "No" };
 const leaseFields = {
@@ -676,6 +678,45 @@ for (const [prefix, categories] of [
   }
 }
 const fieldControls = { ...leaseFields, ...partyFields, ...requestFields };
+// #162: which saved fields the Form draft shows. viewForm draws only these and stats() counts
+// only these, so the page and its progress count cannot disagree. A hidden value is kept on the
+// server; it is shown and counted again once its parent answer allows it.
+// - An F2 field with `when: [controller, value]` applies while the controller is empty or equals
+//   that value (the server's F2_DEPENDENCIES, which the PDF uses, has the same rule).
+// - A request (F3 tenant, F4 landlord) applies in its own role and when both its selection and
+//   reason fields exist; a payment child also needs "Payment of money" selected; a reason needs
+//   its own request selected.
+// - Every other field always applies.
+const requestSlots = new Map();
+for (const [prefix, top, payment] of [
+  ["request", tenantRequests, paymentRequests],
+  ["landlord_request", landlordRequests, landlordPaymentRequests]
+]) {
+  for (const name of [...Object.keys(top), ...Object.keys(payment)]) {
+    const slot = { prefix, selection: `${prefix}_${name}`, parent: Object.hasOwn(payment, name) ? `${prefix}_payment` : null };
+    requestSlots.set(slot.selection, slot);
+    requestSlots.set(`${slot.selection}_reason`, { ...slot, reason: true });
+  }
+}
+function formFieldApplies(key, byKey, landlord) {
+  const when = leaseFields[key]?.when;
+  if (when) {
+    const choice = byKey.get(when[0])?.value;
+    return !choice || choice === when[1];
+  }
+  const slot = requestSlots.get(key);
+  if (!slot) return true;
+  const selected = k => byKey.get(k)?.value === "yes";
+  if (slot.prefix !== (landlord ? "landlord_request" : "request")) return false;
+  if (!byKey.has(slot.selection) || !byKey.has(`${slot.selection}_reason`)) return false;
+  if (slot.parent && !(formFieldApplies(slot.parent, byKey, landlord) && selected(slot.parent))) return false;
+  return !slot.reason || selected(slot.selection);
+}
+function applicableFormFields(fields, landlord) {
+  const byKey = new Map(fields.map(field => [field.key, field]));
+  return fields.filter(field => formFieldApplies(field.key, byKey, landlord));
+}
+/* formApplies:end */
 const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
@@ -1159,7 +1200,8 @@ function stats() {
   const blocking = S.gaps.filter(g => g.severity === "blocking" && isOpen(g)).length;
   const recommended = S.gaps.filter(g => g.severity === "recommended" && g.status === "open").length;
   const waiting = S.gaps.filter(g => g.status === "waiting_tenant").length;
-  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, ...formFieldCounts(S.form?.fields || []) };
+  const fields = applicableFormFields(S.form?.fields || [], landlordApplication());  // #162: only shown fields count
+  return { gaps: S.gaps.length, reviewed, total: S.timeline.length, blocking, recommended, waiting, ...formFieldCounts(fields) };
 }
 
 /* ---------- login (M1) ---------- */
@@ -1583,6 +1625,7 @@ function viewForm() {
   };
   const fieldsByKey = new Map(f.fields.map(field => [field.key, field]));
   const landlord = landlordApplication();
+  const applies = key => fieldsByKey.has(key) && formFieldApplies(key, fieldsByKey, landlord);  // #162
   const groups = landlord ? [
     ["Landlord applicant", [...partyGroups[2][1], "applicant_email_consent"]],
     partyGroups[3],
@@ -1595,30 +1638,25 @@ function viewForm() {
     return group ? `<section><h3 class="form-subheading">${title}</h3><div class="panel form-grid">${group}</div></section>` : "";
   }).join("");
   const rows = f.fields.filter(field => !partyKeys.has(field.key) &&
-    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key))
+    !Object.hasOwn(leaseFields, field.key) && !Object.hasOwn(requestFields, field.key) && applies(field.key))
     .map(renderField).join("");
   const prefix = landlord ? "landlord_request" : "request";
   const paymentOptions = landlord ? landlordPaymentRequests : paymentRequests;
   const renderRequest = ([key, title]) => {
     const selection = fieldsByKey.get(`${prefix}_${key}`);
     const reason = fieldsByKey.get(`${prefix}_${key}_reason`);
-    if (!selection || !reason) return "";
+    if (!applies(`${prefix}_${key}`)) return "";
     const selected = selection.value === "yes";
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
-      ${selected ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
+      ${applies(reason.key) ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
         <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
       ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
   const requestRows = Object.entries(landlord ? landlordRequests : tenantRequests).map(renderRequest).join("");
-  const leaseRows = Object.entries(leaseFields).filter(([key, definition]) => {
-    if (!fieldsByKey.has(key)) return false;
-    if (!definition.when) return true;
-    const [controller, eligible] = definition.when;
-    const choice = fieldsByKey.get(controller)?.value;
-    return !choice || choice === eligible;
-  }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
+  const leaseRows = Object.keys(leaseFields).filter(applies)
+    .map(key => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
   return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
