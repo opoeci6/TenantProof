@@ -145,8 +145,10 @@ def _result(raw: Any, provider: str) -> LLMResponse:
         raise LLMCallError("Provider returned an invalid chat completion") from None
 
 
-def _status_error(response: httpx.Response) -> str:
-    """The HTTP status plus the provider's own message, never the request or its headers."""
+def _status_error(response: httpx.Response, secret: str = "") -> str:
+    """The HTTP status plus the provider's own message, never the request, headers or key."""
+    if response.status_code in (401, 403):
+        return f"Provider HTTP status {response.status_code}"
     detail = ""
     try:
         data = response.json()
@@ -162,6 +164,8 @@ def _status_error(response: httpx.Response) -> str:
             detail = str(data.get("message") or "")
     # Only a structured provider message is repeated: a plain body may echo the request or the
     # key (the 307 body in the tests is the key itself), so it is never surfaced.
+    if secret:
+        detail = detail.replace(secret, "[redacted]")
     detail = " ".join(detail.split())[:200]
     return f"Provider HTTP status {response.status_code}" + (f": {detail}" if detail else "")
 
@@ -236,7 +240,7 @@ class ChatCompletionsProvider:
         except (TimeoutError, httpx.TimeoutException):
             raise LLMTimeout("provider request timed out") from None
         except httpx.HTTPStatusError as exc:
-            raise LLMCallError(_status_error(exc.response)) from None
+            raise LLMCallError(_status_error(exc.response, self._api_key)) from None
         except httpx.HTTPError as exc:
             raise LLMCallError(type(exc).__name__) from None
         except ValueError:

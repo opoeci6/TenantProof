@@ -193,6 +193,32 @@ def test_provider_status_error_carries_the_message_but_not_the_key() -> None:
     assert SECRET not in text
 
 
+def test_provider_status_error_scrubs_echoed_secret_even_at_truncation_edge() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={
+            "error": {"message": ("x" * 190) + f" bad key {SECRET}"},
+        })
+
+    with pytest.raises(llm.LLMCallError) as err:
+        asyncio.run(adapter(handler).complete(request()))
+    text = str(err.value)
+    assert "Provider HTTP status 400" in text
+    assert SECRET not in text
+    assert SECRET[:8] not in text
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_provider_auth_status_errors_never_echo_body(code: int) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, json={
+            "error": {"message": f"Incorrect API key provided: {SECRET[:6]}****{SECRET[-4:]}"},
+        })
+
+    with pytest.raises(llm.LLMCallError) as err:
+        asyncio.run(adapter(handler).complete(request()))
+    assert str(err.value) == f"Provider HTTP status {code}"
+
+
 @pytest.mark.parametrize("arguments", ['{"fact":', '["not a named arguments object"]'])
 def test_invalid_tool_arguments_fail_closed(arguments: str) -> None:
     provider = adapter(lambda _: response({
