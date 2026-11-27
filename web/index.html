@@ -221,6 +221,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 @media (prefers-reduced-motion: reduce){.rs-running .rs-ico{animation:none}}
 .rs-title{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:600}
 .rs-sum{color:var(--ink-2);font-size:13.5px;margin:2px 0 0}
+.rs-last{color:var(--ink-3);font-size:12.5px;margin:3px 0 0;overflow-wrap:anywhere}
 .ask{margin:0 0 14px;border-left:3px solid var(--warn)}
 .ask h2{margin:0 0 6px;font-size:16px}
 .ask-q{margin:0 0 12px;font-size:15px}
@@ -1252,7 +1253,7 @@ function stats() {
 
 /* ---------- login (M1) ---------- */
 function showLogin(msg) {
-  S.needLogin = true; clearInterval(poller);
+  S.needLogin = true; clearInterval(poller); stopStepTicker();
   $("#layout").classList.add("single"); $("#topnav").innerHTML = ""; $("#rail").innerHTML = "";
   $("#ctx").innerHTML = `<strong>Sign in</strong><span></span>`;
   $("#view").innerHTML = `<form class="panel panel-pad" data-action="login" style="max-width:380px;display:grid;gap:12px">
@@ -1309,7 +1310,7 @@ function renderChrome() {
 // State that belongs to one case. Kept across a switch, the last case's package, confirmations
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
 function resetCaseState() {
-  clearInterval(poller);
+  clearInterval(poller); stopStepTicker();
   S.privacy = null;
   S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
@@ -1496,13 +1497,23 @@ function viewRun() {
   // #175: summaries and tool calls say "Landlord's address for service", not gap_942b3e6f0f.
   // Plain text only: every use is still put through esc().
   const human = text => humanRunText(text, { fields: (S.form && S.form.fields) || [], gaps: S.gaps || [] });
+  // #176: a running step shows it is alive: seconds since this page first saw it run, and the
+  // tool call it is on now. The 1 s ticker updates only these spans.
+  const stepPill = s => s.status === "running"
+    ? `<span class="pill info" data-elapsed="${esc(s.key)}">Running · ${stepSeconds(run.id, s.key)} s</span>`
+    : pill[s.status];
+  const lastTool = s => {
+    if (s.status !== "running" || !s.tool_calls.length) return "";
+    const t = s.tool_calls[s.tool_calls.length - 1], out = human(t.output);
+    return `<p class="rs-last">Last: <b>${esc(t.tool)}</b> → ${esc(out.length > 120 ? `${out.slice(0, 120).trimEnd()}…` : out)}</p>`;
+  };
   // The runner builds `extract` and `timeline`; the other four steps are not built in this prototype,
   // whatever a seeded or real run says about them. (The mock run is a scripted demo and keeps its steps.)
   const unbuilt = s => !USE_MOCK && !BUILT.includes(s.key);
   const steps = run.steps.map((s, i) => unbuilt(s) ? `<li class="run-step rs-unbuilt"><span class="rs-ico">–</span>
       <div><div class="rs-title">${i + 1}. ${esc(s.label)} <span class="pill plain">Not in this prototype</span></div></div></li>`
     : `<li class="run-step rs-${s.status}"><span class="rs-ico">${ico[s.status] || i + 1}</span>
-      <div><div class="rs-title">${i + 1}. ${esc(s.label)} ${pill[s.status]}</div>${s.summary ? `<p class="rs-sum">${esc(human(s.summary))}</p>` : ""}</div>
+      <div><div class="rs-title">${i + 1}. ${esc(s.label)} ${stepPill(s)}</div>${s.summary ? `<p class="rs-sum">${esc(human(s.summary))}</p>` : ""}${lastTool(s)}</div>
       ${s.tool_calls.length ? `<details class="tools"${s.status === "needs_input" ? " open" : ""}><summary>${plural(s.tool_calls.length, "tool call")}</summary><ul class="tool-calls">${s.tool_calls.map(t => `<li><span class="t">${esc(t.tool)}</span><span class="io"><b>${esc(human(t.input))}</b> → ${esc(human(t.output))}</span></li>`).join("")}</ul></details>` : ""}</li>`).join("");
   const asking = askStep(run);
   const ask = asking ? `<form class="panel panel-pad ask" data-action="answer" aria-labelledby="ask-title" novalidate>
@@ -1980,21 +1991,45 @@ async function loadAndRender(parts) {
 }
 
 const focusAsk = () => { const el = $("#ask-a"); if (el) el.focus(); };
-let poller = null;
+// #176: when this page first saw a step running, by "runId:stepKey". The server has no per-step
+// start time; a step already running when the page loads counts from the load.
+const stepSeen = new Map();
+let poller = null, stepTicker = null;
+function stepSeconds(runId, key) {
+  const id = `${runId}:${key}`;
+  if (!stepSeen.has(id)) stepSeen.set(id, Date.now());
+  return Math.max(0, Math.floor((Date.now() - stepSeen.get(id)) / 1000));
+}
+function stopStepTicker() { clearInterval(stepTicker); stepTicker = null; }
+// Updates only the elapsed-time spans, so a running page moves without being rebuilt every second.
+// Idempotent: pollRun() calls it on every reply, and a restarted 1 s timer would never fire.
+function startStepTicker() {
+  if (stepTicker) return;
+  stepTicker = setInterval(() => {
+    if (!S.run || S.run.status !== "running") return stopStepTicker();
+    if (route() !== "run") return;  // another page is open: nothing to update
+    for (const el of document.querySelectorAll("[data-elapsed]")) {
+      el.textContent = `Running · ${stepSeconds(S.run.id, el.dataset.elapsed)} s`;
+    }
+  }, 1000);
+}
 function pollRun() {
   clearInterval(poller);
   poller = setInterval(async () => {
-    if (!S.run) { clearInterval(poller); return; }  // the case was closed meanwhile
+    if (!S.run) { clearInterval(poller); stopStepTicker(); return; }  // the case was closed meanwhile
     try { S.run = await request("GET", `/runs/${S.run.id}`); }
-    catch (err) { if (err.status === 401 || err.status === 404) { clearInterval(poller); uiFailed(err); } return; }  // otherwise try again next tick
+    catch (err) { if (err.status === 401 || err.status === 404) { clearInterval(poller); stopStepTicker(); uiFailed(err); } return; }  // otherwise try again next tick
     if (S.run.status !== "running") {
       clearInterval(poller);
+      stopStepTicker();
       const asked = askStep(S.run) !== null;
       toast(asked ? "The agent has a question for you." : "Analysis finished. Required items need your input.");
       // Everything a run writes: the rules step adds the case's sources and deadline, the others the rest.
       await refresh(["case", "timeline", "gaps", "sources", "form", "evidence"]); if (asked && route() === "run") focusAsk(); return;
     }
-    if (route() === "run") $("#view").innerHTML = viewRun();
+    // #176: the first reply that redraws the Run page also starts the 1 s tick. Started here, not
+    // when polling starts, so a page with no elapsed span never owns a timer.
+    if (route() === "run") { $("#view").innerHTML = viewRun(); startStepTicker(); }
     renderChrome();
   }, 700);
 }
