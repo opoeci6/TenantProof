@@ -1621,7 +1621,7 @@ function viewForm() {
   }).map(([key]) => renderField(fieldsByKey.get(key))).join("");
   const narrHtml = esc(f.narrative.text.replace(/\[([^\]]+)\]/g, "⟦$1⟧")).replace(/⟦([^⟧]+)⟧/g, `<span class="narr-cite">[$1]</span>`);
   const left = S.timeline.filter(e => e.review_status === "pending").length;
-  return `<div class="view-head"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
+  return `<div class="view-head" data-form-draft="${esc(CASE_ID)}"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
     ${landlord && !USE_MOCK ? `<button class="btn" type="button" data-action="download-form-draft"${S.draftSaves?.downloading ? " disabled" : ""}>Download draft PDF</button>` : ""}
     </div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
@@ -1787,8 +1787,8 @@ function render() {
   const here = S.cases.find(x => x.id === CASE_ID);
   const banner = !landlordApplication() && CASE_ROUTES.includes(r) && here && here.analysed === false ? `<div class="note warn" role="status"><span class="note-ico">!</span><span><b>Not analysed yet.</b> No analysis has been completed and no events are reviewed, so nothing here is ready to file. <a href="#run">Run the analysis</a></span></div>` : "";
   const view = $("#view");
-  if (r === "form" && landlordApplication() && view.querySelector('[data-action="download-form-draft"]')) {
-    /* #161: refresh the rows without replacing the control that has focus */
+  if (r === "form" && view.querySelector("[data-form-draft]")?.dataset.formDraft === CASE_ID) {
+    /* #161, #182: refresh the current draft without replacing the focused control. */
     const active = document.activeElement;
     const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
     const focused = active !== view && view.contains(active) && active.id ? active : null;
@@ -1895,7 +1895,7 @@ function pollRun() {
 /* ---------- events ---------- */
 /* ---------- Form J draft saves and download ---------- */
 /* formRefresh:start (#161, pure; tests/test_form_refresh.py runs it under node). How render()
-   refreshes the landlord Form draft: "skip" keeps the view while a download runs or a value is
+   refreshes the Form draft: "skip" keeps the view while a download runs or a value is
    pending, failed or invalid (a new view would show the old value); "after-composition" waits
    for an IME composition to end; "keep-focus" rebuilds all but the focused control; else "full". */
 function formRefreshMode({ focused, composing, downloading, unsaved }) {

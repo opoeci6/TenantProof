@@ -67,6 +67,8 @@ Single source of truth. Update the relevant section in every PR.
 
 Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to #40).
 
+- **#182:** Tenant Form draft refreshes preserve the focused input, its text and selection, including while an IME composition is active.
+
 ## In progress
 
 - **#67 (tenant draft, F1–F3):** expanded the tenant application draft with move-in and move-out dates, notice and lease details, weekly rent, and security deposit fields. Existing tenancy start values and sources remain available for review. F1 adds party and premises addresses, contact fields and explicit applicant email consent. The draft PDF includes the applicant email only with consent. F3 records multiple tenant requests with individual reasons. The applicant signs and dates the official form. F4 is for landlord applicants.
