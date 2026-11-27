@@ -123,3 +123,76 @@ def test_other_upload_errors_get_the_short_message() -> None:
         "L'envoi n'a pas fonctionné. Réessayez dans un moment.")
     assert upload_text(413, "File 1 is too large", files=FILES) == (
         "L'envoi n'a pas fonctionné. Réessayez dans un moment.")
+
+
+# --------------------------------------------------------------------------- #170: already sent
+
+STORE = """process.env.TZ = "America/Halifax"; const mem = {}; const store = {
+  getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = v; } };"""
+
+
+def sent(script: str) -> object:
+    return js(f"(() => {{ {STORE} {script} }})()")
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_every_language_has_the_already_sent_text(lang: str) -> None:
+    text = strings(lang)
+    assert "{when}" in text["sentBeforeOne"] and "{when}" in text["sentBeforeMany"]
+    assert "{n}" in text["sentBeforeMany"] and "{n}" not in text["sentBeforeOne"]
+
+
+def test_nothing_sent_here_shows_nothing() -> None:
+    assert sent("""return sentBeforeText(I18N.en, readSent(store, "tok"), "en");""") == ""
+
+
+def test_what_was_sent_is_remembered_by_count_and_time_and_adds_up() -> None:
+    script = """
+      rememberSent(store, "tok", 3, "2026-11-27T14:05:00Z");
+      const first = readSent(store, "tok");
+      rememberSent(store, "tok", 1, "2026-11-27T16:30:00Z");
+      return { first, second: readSent(store, "tok"), other: readSent(store, "other"),
+               raw: Object.values(mem) };"""
+    out = sent(script)
+    assert out["first"] == {"files": 3, "at": "2026-11-27T14:05:00Z"}  # type: ignore[index]
+    assert out["second"] == {"files": 4, "at": "2026-11-27T16:30:00Z"}  # type: ignore[index]
+    assert out["other"] is None  # type: ignore[index]
+    assert all("photo" not in v and ".jpg" not in v for v in out["raw"])  # type: ignore[index]
+
+
+def test_an_answer_with_no_files_is_not_remembered_as_files() -> None:
+    assert sent("""rememberSent(store, "tok", 0, "2026-11-27T14:05:00Z");
+                   return Object.keys(mem).length;""") == 0
+
+
+@pytest.mark.parametrize(("lang", "n", "expected"), [
+    ("en", 1, "You already sent 1 file on Nov 27, 2026"),
+    ("en", 3, "You already sent 3 files on Nov 27, 2026"),
+    ("fr", 1, "Vous avez déjà envoyé 1 fichier le 27 nov. 2026"),
+    ("fr", 3, "Vous avez déjà envoyé 3 fichiers le 27 nov. 2026"),
+    ("zh", 3, "你已于 2026年11月27日"),
+])
+def test_the_note_names_the_count_and_the_time_in_the_tenants_language(
+    lang: str, n: int, expected: str
+) -> None:
+    at = "2026-11-27T15:05:00Z"  # 11:05 on the 27th in Halifax (the script sets that zone)
+    record = f'{{ files: {n}, at: "{at}" }}'
+    text = str(sent(f'return sentBeforeText(I18N.{lang}, {record}, "{lang}");'))
+    assert text.startswith(expected), text
+    assert "{" not in text  # no placeholder left unfilled
+
+
+@pytest.mark.parametrize("raw", ["not json", '{"files":"3","at":"x"}', '{"files":0,"at":"x"}',
+                                 '{"files":2}', "null", '[1,2]'])
+def test_a_damaged_record_is_ignored(raw: str) -> None:
+    script = f"""mem["tp-sent:tok"] = {json.dumps(raw)}; return readSent(store, "tok");"""
+    assert sent(script) is None
+
+
+def test_a_browser_without_storage_just_does_not_remember() -> None:
+    script = """
+      const broken = { getItem() { throw new Error("denied"); },
+                       setItem() { throw new Error("full"); } };
+      rememberSent(broken, "tok", 2, "2026-11-27T14:05:00Z");
+      return [readSent(broken, "tok"), readSent(null, "tok")];"""
+    assert sent(script) == [None, None]
