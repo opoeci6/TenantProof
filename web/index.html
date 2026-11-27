@@ -1962,7 +1962,7 @@ function viewForm() {
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
       ${applies(reason.key) ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
-        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(draftFieldValue(reason))}</textarea></label>` : ""}
+        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" data-saved="${esc(reason.value || "")}" rows="3">${esc(draftFieldValue(reason))}</textarea></label>` : ""}
       ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
@@ -2190,16 +2190,36 @@ function render() {
     const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
     const focused = active !== view && view.contains(active) && active.id ? active : null;
     const saves = S.draftSaves;
-    const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading,
-      unsaved: !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size) });
+    // #194: only a problem on a field the draft still shows holds the view back. An error left on
+    // a control its parent answer just hid must not keep that control on the page.
+    const unsaved = typeof draftProblemLabels === "function"
+      ? !!(saves?.pending.size || draftProblemLabels().length)
+      : !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size);
+    const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading, unsaved });
     formRenderDeferred = mode === "after-composition";
     if (mode === "skip" || mode === "after-composition") {
       const notice = $("#draft-save-notice");
       if (notice) notice.innerHTML = draftSaveNotice();
       return;
     }
-    // A focused text field missing from the new view keeps the old view, so its text is not lost.
-    if (mode === "keep-focus" && (renderAroundFocus(view, focused, banner + VIEWS[r]()) || editing)) return;
+    if (mode === "keep-focus") {
+      const html = banner + VIEWS[r]();
+      if (renderAroundFocus(view, focused, html)) return;  // the focused control is still there
+      /* #194: it is gone, so a parent answer hid it while it had focus. Typed text is never
+         thrown away: the old view stays and the blur that follows completes the reconciliation.
+         An untouched control is replaced at once, and focus moves to the next control left. */
+      const dirty = editing && focused.dataset && Object.hasOwn(focused.dataset, "saved")
+        && focused.value !== focused.dataset.saved;
+      if (dirty) { formRenderDeferred = true; return; }
+      const sel = '[data-action="field"][id], [data-action="date-field"][id]';
+      const oldIds = [...(view.querySelectorAll?.(sel) || [])].map(el => el.id);
+      view.innerHTML = html;
+      const newIds = [...(view.querySelectorAll?.(sel) || [])].map(el => el.id);
+      const nextId = nextSurvivingControlId(oldIds, focused.id, newIds);
+      const nextEl = nextId ? document.getElementById?.(nextId) : null;
+      if (nextEl) nextEl.focus?.();
+      return;
+    }
   }
   view.innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
   if (r === "evidence") wireDrop();
@@ -2419,6 +2439,17 @@ function formRefreshMode({ focused, composing, downloading, unsaved }) {
   if (downloading || unsaved) return "skip";
   if (composing) return "after-composition";
   return focused ? "keep-focus" : "full";
+}
+/* #194: the control to focus when the one that had focus has just disappeared, because its
+   parent answer (deposit paid, lease term, a request) hid it. The next surviving control after
+   it, else the previous one, else none. */
+function nextSurvivingControlId(oldIds, focusedId, newIds) {
+  const idx = oldIds.indexOf(focusedId);
+  if (idx < 0 || !Array.isArray(newIds) || !newIds.length) return null;
+  const surviving = new Set(newIds);
+  for (let i = idx + 1; i < oldIds.length; i++) if (surviving.has(oldIds[i])) return oldIds[i];
+  for (let i = idx - 1; i >= 0; i--) if (surviving.has(oldIds[i])) return oldIds[i];
+  return null;
 }
 /* formRefresh:end */
 /* #161: rebuild the view from `html` around `keep`, which stays in the page with its value,
@@ -2843,48 +2874,57 @@ document.addEventListener("input", ev => {
 document.addEventListener("focusout", guarded(async ev => {
   const input = ev.target;
   const { action, key } = input.dataset;
-  if (input.contains(ev.relatedTarget)) return;
-  const state = S.draftSaves;
-  if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
-      && !state.pending.has(key)) {
-    return saveDraftControl(input);
-  }
-  if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
-  const dateState = draftSaveState();
-  if (!input.reportValidity()) {
-    setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid date."), input);
-    dateState.invalid.add(key);
-    dateState.attempted.set(key, input.value);
-    if (!landlordApplication()) render();
-    return;
-  }
-  const pending = dateState.pending.get(key);
-  const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.dataset.saved ?? "";
-  const values = formFieldValues();
-  for (const [k, v] of dateState.confirmed) values[k] = v;
-  for (const [k, entry] of dateState.pending) values[k] = entry.value;
-  const pairError = dateOrderError(key, input.value, saved, values);
-  if (pairError) {
-    setFieldError(key, pairError, input);
-    dateState.invalid.add(key);
-    dateState.attempted.set(key, input.value);
-    if (!landlordApplication()) render();
-    return;
-  }
-  if (dateState.failed.has(key) && !pending) return commitDateField(key, input, dateState);
-  if (input.value === saved) {
-    dateState.invalid.delete(key);
-    if (!pending) {
-      dateState.failed.delete(key);
-      dateState.attempted.delete(key);
+  /* #194: a render held back because this control was being typed into completes once focus has
+     left it, in a microtask, after this handler has started the save it may need. */
+  const flushDeferred = () => queueMicrotask(() => {
+    if (formRenderDeferred && !formComposing) { formRenderDeferred = false; render(); }
+  });
+  try {
+    if (input.contains(ev.relatedTarget)) return;
+    const state = S.draftSaves;
+    if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
+        && !state.pending.has(key)) {
+      return saveDraftControl(input);
     }
-    clearFieldError(key, input);
-    if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
-      $("#draft-save-notice").innerHTML = draftSaveNotice();
+    if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
+    const dateState = draftSaveState();
+    if (!input.reportValidity()) {
+      setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid date."), input);
+      dateState.invalid.add(key);
+      dateState.attempted.set(key, input.value);
+      if (!landlordApplication()) render();
+      return;
     }
-    return;
+    const pending = dateState.pending.get(key);
+    const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.dataset.saved ?? "";
+    const values = formFieldValues();
+    for (const [k, v] of dateState.confirmed) values[k] = v;
+    for (const [k, entry] of dateState.pending) values[k] = entry.value;
+    const pairError = dateOrderError(key, input.value, saved, values);
+    if (pairError) {
+      setFieldError(key, pairError, input);
+      dateState.invalid.add(key);
+      dateState.attempted.set(key, input.value);
+      if (!landlordApplication()) render();
+      return;
+    }
+    if (dateState.failed.has(key) && !pending) return commitDateField(key, input, dateState);
+    if (input.value === saved) {
+      dateState.invalid.delete(key);
+      if (!pending) {
+        dateState.failed.delete(key);
+        dateState.attempted.delete(key);
+      }
+      clearFieldError(key, input);
+      if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
+        $("#draft-save-notice").innerHTML = draftSaveNotice();
+      }
+      return;
+    }
+    return commitDateField(key, input, dateState);
+  } finally {
+    flushDeferred();
   }
-  return commitDateField(key, input, dateState);
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
