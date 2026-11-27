@@ -376,6 +376,8 @@ textarea.field{min-height:72px;resize:vertical}
 .phone .req{background:var(--warn-soft);border-radius:8px;padding:10px 12px;font-size:14px}
 .phone .req b{display:block;font-size:12px;letter-spacing:.04em;color:var(--warn);margin-bottom:2px}
 .phone .up{display:flex;align-items:center;justify-content:center;gap:8px;border:1.5px dashed var(--line);border-radius:10px;padding:16px;font-weight:700;color:var(--accent);cursor:pointer;text-align:center}
+.phone .selected-files li{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.phone .selected-files bdi{min-width:0;overflow-wrap:anywhere}
 .phone .attest label{font-size:14px}
 .phone .btn.primary{justify-content:center;padding:11px;font-size:15px}
 .phone .done{background:var(--ok-soft);color:var(--ok);border-radius:8px;padding:12px;font-weight:600;font-size:14.5px}
@@ -1890,6 +1892,24 @@ function tenantLang() {
   const k = S.intake.lang || (S.intake.view && S.intake.view.language) || pickLang(navigator.languages, I18N);
   return I18N[k] ? k : "en";
 }
+const intakeRemoveText = {
+  en: ["Remove", "Remove {name}"],
+  zh: ["移除", "移除 {name}"],
+  fr: ["Retirer", "Retirer {name}"],
+  es: ["Quitar", "Quitar {name}"],
+  ru: ["Удалить", "Удалить {name}"],
+  hi: ["हटाएँ", "{name} हटाएँ"],
+};
+
+function selectedIntakeFiles(lang) {
+  const { files, submitting } = S.intake;
+  if (!files.length) return "";
+  const [remove, accessible] = intakeRemoveText[lang] || intakeRemoveText.en;
+  return `<ul class="selected-files">${files.map((file, index) =>
+    `<li><bdi>${esc(file.name)}</bdi><button class="btn small" type="button" data-action="intake-remove-file" data-id="${index}" aria-label="${esc(tpl(accessible, { name: file.name }))}"${submitting ? " disabled" : ""}>${esc(remove)}</button></li>`
+  ).join("")}</ul>`;
+}
+
 function viewIntake() {
   const v = S.intake.view; if (!v) return "<p>Loading…</p>";
   // #174: with no working link there is no case, so the browser's language picks the page's.
@@ -1909,14 +1929,14 @@ function viewIntake() {
   const body = S.intake.sent ? `<div class="done">${esc(tpl(t.sent, vars))}</div>` : `
       <p>${esc(tpl(t.intro, vars))}</p>${reqs}
       <div><strong style="font-size:14.5px">${esc(t.what)}</strong><ul>${t.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></div>
-      ${UPLOADS_ENABLED ? `<label class="up" for="intakeFiles"><input class="file-in" type="file" id="intakeFiles" multiple accept="${UPLOAD_ACCEPT}">${S.intake.files.length ? esc(tCount(t, S.intake.files.length)) : esc(t.choose)}</label>` : `<p class="muted">${esc(UPLOAD_SOON[lang] || UPLOAD_SOON.en)}</p>`}
+      ${UPLOADS_ENABLED ? `<label class="up" for="intakeFiles"><input class="file-in" type="file" id="intakeFiles" multiple accept="${UPLOAD_ACCEPT}"${S.intake.submitting ? " disabled" : ""}>${S.intake.files.length ? esc(tCount(t, S.intake.files.length)) : esc(t.choose)}</label>${selectedIntakeFiles(lang)}` : `<p class="muted">${esc(UPLOAD_SOON[lang] || UPLOAD_SOON.en)}</p>`}
       <p style="font-size:13px">${esc(tpl(t.privacy, vars))}</p>
       <form class="attest" data-action="intake-attest">
         <label><input type="checkbox" id="in-attest" name="attest" ${S.intake.attest ? "checked" : ""}>${esc(t.attest)}</label>
         <label><input type="checkbox" id="in-consent" name="consent" ${S.intake.consent ? "checked" : ""}>${esc(tpl(t.consent, vars))}</label></form>
       ${(() => { const answered = Object.values(S.intake.answers || {}).some(v => (v || "").trim());
         const ok = (S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent;
-        return `<button class="btn primary" data-action="intake-send" ${ok ? "" : `disabled aria-describedby="send-hint"`}>${esc(tpl(t.send, vars))}</button>${ok ? "" : `<p class="muted send-hint" id="send-hint">${esc(t.sendHint)}</p>`}`; })()}`;
+        return `<button class="btn primary" data-action="intake-send" ${ok ? (S.intake.submitting ? "disabled" : "") : `disabled aria-describedby="send-hint"`}>${esc(tpl(t.send, vars))}</button>${ok ? "" : `<p class="muted send-hint" id="send-hint">${esc(t.sendHint)}</p>`}`; })()}`;
   const link = TENANT_MODE ? null : sessionLink(S.lastLink, CASE_ID);  // Fix #38: the link just sent, for this case only
   const qr = TENANT_MODE ? null : sessionQr(S.lastLink, CASE_ID);
   return `<div class="view-head"><div><h1>Tenant view</h1><p>What ${esc(v.tenant_first_name)} sees after opening the intake link on a phone. No account needed. It opens in the tenant's preferred language, and the tenant never sees the caseworker workspace.</p></div></div>
@@ -2363,19 +2383,41 @@ document.addEventListener("click", guarded(async ev => {
     await refresh([]);
     if (built) showPackageResult();
   }
+  if (a === "intake-remove-file") {
+    const index = Number(id);
+    if (S.intake.submitting || !Number.isInteger(index) || index < 0 || index >= S.intake.files.length) return;
+    S.intake.files.splice(index, 1);
+    render();
+    const next = document.querySelectorAll('[data-action="intake-remove-file"]');
+    (next[Math.min(index, next.length - 1)] || $("#intakeFiles"))?.focus();
+    return;
+  }
   if (a === "intake-send") {
+    if (S.intake.submitting) return;
+    const intake = S.intake, token = intakeTok();
+    const files = [...intake.files];
+    const answers = Object.entries(intake.answers || {})
+      .map(([request_id, text]) => ({ request_id, text: text.trim() })).filter(a => a.text);
+    const body = { attest_genuine: intake.attest, consent_share: intake.consent,
+      language: intake.lang || intake.view.language, answers };
+    intake.submitting = true;
+    render();
     try {
-      if (UPLOADS_ENABLED && S.intake.files.length) await uploadFiles(`/intake/${intakeTok()}/files`, S.intake.files);
-      const answers = Object.entries(S.intake.answers || {})
-        .map(([request_id, text]) => ({ request_id, text: text.trim() })).filter(a => a.text);
-      await request("POST", `/intake/${intakeTok()}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language, answers });
-      S.intake.sent = true; S.intake.answers = {}; await refresh(["evidence", "case", "privacy"]);
+      if (UPLOADS_ENABLED && files.length) await uploadFiles(`/intake/${token}/files`, files);
+      await request("POST", `/intake/${token}/submit`, body);
+      if (intakeTok() === token) {
+        intake.sent = true; intake.answers = {};
+        await refresh(["evidence", "case", "privacy"]);
+      }
     } catch (err) {
       // #174: on the tenant's own page the server's English upload error is not shown; the page
       // says it in the tenant's language. The server text stays in the console.
       if (!TENANT_MODE) return toast(err.message);
       console.warn(err && err.message);
-      toast(uploadErrorText(err, S.intake.files, I18N[tenantLang()]), 6000);
+      toast(uploadErrorText(err, files, I18N[tenantLang()]), 6000);
+    } finally {
+      intake.submitting = false;
+      if (S.intake === intake) render();
     }
   }
   if (a === "answer-none") return sendAnswer("none");
@@ -2432,7 +2474,7 @@ document.addEventListener("input", ev => {
   const btn = document.querySelector('[data-action="intake-send"]');
   if (btn) {
     const answered = Object.values(S.intake.answers).some(v => (v || "").trim());
-    btn.disabled = !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
+    btn.disabled = !!S.intake.submitting || !((S.intake.files.length || answered || !UPLOADS_ENABLED) && S.intake.attest && S.intake.consent);
   }
 });
 /* A native date emits change while the user is still editing its individual segments. */
