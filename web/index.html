@@ -287,6 +287,9 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 .field{width:100%;border:1px solid var(--line);border-radius:5px;background:var(--bg);padding:7px 10px;font-size:14px}
 textarea.field{min-height:72px;resize:vertical}
 .field:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
+.field.is-invalid{border-color:var(--bad)}
+.field.is-invalid:focus{border-color:var(--bad);box-shadow:0 0 0 3px var(--bad-soft)}
+.field-err{margin:0;color:var(--bad);font-size:12.5px}
 
 /* gaps */
 .gap-group{display:flex;flex-direction:column;gap:10px}
@@ -880,6 +883,9 @@ function mockRoute(method, path, body) {
     if (paired && body.value && db.fields.find(field => field.key === paired)?.value) {
       throw Object.assign(new Error("Clear the other rent amount before changing the payment frequency."), { status: 422 });
     }
+    const values = Object.fromEntries(db.fields.map(field => [field.key, field.value || ""]));
+    const pairError = dateOrderError(f.key, String(body.value || "").trim(), f.value || "", values);
+    if (pairError) throw Object.assign(new Error(pairError.replace(/^Not saved\. /, "")), { status: 422 });
     f.value = body.value || null; f.status = f.value ? "user_entered" : "missing";
     const covered = { weekly_rent: "monthly_rent", move_in_date: "tenancy_start" }[f.key];
     const legacy = db.fields.find(field => field.key === covered);
@@ -1756,7 +1762,32 @@ async function sendDraft(id) {
 /* editRequest:end */
 
 /* #122: input controls for the form draft and its missing-info fields. */
+/* formValidation:start (#195; pure; tests/test_form_validation.py runs it under node).
+   CAD amount check and Form J date-order check matching backend services/form_values.py. */
 const minTenancyDate = "1900-01-01";
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const MONEY_FIELD_KEYS = ["monthly_rent", "weekly_rent", "deposit_amount"];
+const DATE_ORDER_PAIRS = [
+  ["move_in_date", "move_out_date", "Move-out date cannot be before move-in date"],
+  ["fixed_term_start", "fixed_term_end", "Fixed-term end date cannot be before its start date"],
+];
+function moneyFieldError(key, value, saved) {
+  if (!MONEY_FIELD_KEYS.includes(key) || !value || value === saved) return null;
+  const rent = /^(?:(CAD)[ \t]+)?\$?[ \t]*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]{1,2})?(?:[ \t]+(CAD))?$/i.exec(value);
+  if (rent && !(rent[1] && rent[4]) && /[1-9]/.test(rent[2] + (rent[3] || ""))) return null;
+  return "Not saved. Enter a positive amount in CAD, with up to two decimal places.";
+}
+function dateOrderError(key, value, saved, values) {
+  if (!value || value === saved) return null;
+  const pair = DATE_ORDER_PAIRS.find(([start, end]) => key === start || key === end);
+  if (!pair) return null;
+  const [startKey, endKey, message] = pair;
+  const other = ((values || {})[key === startKey ? endKey : startKey]) || "";
+  if (!ISO_DAY.test(value) || !ISO_DAY.test(other) || value < minTenancyDate || other < minTenancyDate) return null;
+  const [first, last] = key === startKey ? [value, other] : [other, value];
+  return last < first ? `Not saved. ${message}.` : null;
+}
+/* formValidation:end */
 const maxTenancyDate = `${new Date().getFullYear()}-12-31`;
 const fieldMaxDate = key => leaseFields[key]?.date === "future" ? "9999-12-31" : maxTenancyDate;
 function caseFieldAttrs(key) {
@@ -1765,13 +1796,10 @@ function caseFieldAttrs(key) {
   return partyFields[key]?.type ? `type="${partyFields[key].type}"` : "";
 }
 function validCaseField(key, value, saved) {
-  if (!leaseFields[key]?.money || !value || value === saved) return true;
-  const rent = /^(?:(CAD)[ \t]+)?\$?[ \t]*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]{1,2})?(?:[ \t]+(CAD))?$/i.exec(value);
-  if (!rent || (rent[1] && rent[4]) || !/[1-9]/.test(rent[2] + (rent[3] || ""))) {
-    toast("Enter a positive amount in CAD, with up to two decimal places.", 6000);
-    return false;
-  }
-  return true;
+  const error = moneyFieldError(key, value, saved);
+  if (!error) return true;
+  toast(error.replace(/^Not saved\. /, ""), 6000);
+  return false;
 }
 
 function viewGaps() {
@@ -1827,6 +1855,7 @@ function viewForm() {
   }
   const renderField = x => {
     const saved = x.value || "";
+    const fieldErr = fieldErrorOf(x.key);
     const { date, options, money } = fieldControls[x.key] || {};
     const legacyDate = date && saved && (!validDate(saved) || saved > fieldMaxDate(x.key));
     const confirm = x.status === "needs_confirmation" && saved;
@@ -1834,13 +1863,14 @@ function viewForm() {
     const reenterDate = date && !landlordApplication() && S.draftSaves?.invalid.has(x.key)
       && S.draftSaves.attempted.get(x.key) === "";
     const displayed = reenterDate ? saved : draftFieldValue(x);
-    const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"${reenterDate ? " data-draft-reenter-date" : ""}`;
+    const attrs = `class="field${fieldErr ? " is-invalid" : ""}" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}" aria-invalid="${fieldErr ? "true" : "false"}" aria-describedby="err-${esc(x.key)}"${reenterDate ? " data-draft-reenter-date" : ""}`;
     const control = options
       ? `<select ${attrs}><option value="">Choose an answer</option>${Object.entries(options).map(([value, label]) =>
           `<option value="${value}" ${displayed === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
-      : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate && displayed === saved ? "" : displayed)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
+      : `<input ${attrs} ${caseFieldAttrs(x.key)} data-saved="${esc(legacyDate ? "" : saved)}" value="${esc(legacyDate && displayed === saved ? "" : displayed)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
     return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(partyFields[x.key]?.label || x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
       <div style="display:grid;gap:6px;min-width:0">${control}
+        <p class="field-err" id="err-${esc(x.key)}" role="alert"${fieldErr ? "" : " hidden"}>${esc(fieldErr)}</p>
         ${dateWarnings.has(x.key) ? `<span class="flag">${esc(dateWarnings.get(x.key))}</span>` : ""}
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
         ${x.key === "applicant_email_consent" ? '<span class="muted">The applicant email appears in the draft PDF only if you select Yes.</span>' : ""}
@@ -2331,7 +2361,7 @@ document.addEventListener("compositionend", () => {
 });
 
 function draftSaveState() {
-  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), attempted: new Map(), downloading: false };
+  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), attempted: new Map(), errors: new Map(), downloading: false };
 }
 
 // #204: retain tenant edits across navigation within a case and keep stale drafts out of new packages.
@@ -2389,19 +2419,79 @@ async function saveDraftField(key, value) {
   if (S.draftSaves === state) await refresh(["form", "gaps"]);
 }
 
+/* #195: refused field values stay visible with an accessible inline error under the field. */
+const fieldNode = (key, input) => (input && input.isConnected ? input : document.getElementById(`fld-${key}`));
+const fieldErrorOf = key => S.draftSaves?.errors?.get(key) || "";
+const formFieldValues = () => Object.fromEntries(((S.form && S.form.fields) || []).map(field => [field.key, field.value || ""]));
+function setFieldError(key, message, input) {
+  (draftSaveState().errors ??= new Map()).set(key, message);
+  const el = fieldNode(key, input);
+  if (el) {
+    el.classList.add("is-invalid");
+    el.setAttribute("aria-invalid", "true");
+    el.setAttribute("aria-describedby", `err-${key}`);
+  }
+  const err = document.getElementById(`err-${key}`);
+  if (err) { err.textContent = message; err.hidden = false; }
+}
+function clearFieldError(key, input) {
+  S.draftSaves?.errors?.delete(key);
+  const el = fieldNode(key, input);
+  if (el) {
+    el.classList.remove("is-invalid");
+    el.setAttribute("aria-invalid", "false");
+  }
+  const err = document.getElementById(`err-${key}`);
+  if (err) { err.textContent = ""; err.hidden = true; }
+}
+
 async function saveDraftControl(input) {
   const { key } = input.dataset;
   const value = input.type === "checkbox" ? (input.checked ? input.value : "") : input.value.trim();
   const saved = S.form.fields.find(field => field.key === key)?.value;
   const state = draftSaveState();
-  if (!input.reportValidity() || !validCaseField(key, value, saved)) {
+  if (!input.reportValidity()) {
+    setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid value."), input);
+    state.invalid.add(key);
+    state.attempted.set(key, value);
+    if (!landlordApplication()) render();
+    return;
+  }
+  const moneyError = moneyFieldError(key, value, saved);
+  if (moneyError) {
+    setFieldError(key, moneyError, input);
     state.invalid.add(key);
     state.attempted.set(key, value);
     if (!landlordApplication()) render();
     return;
   }
   state.invalid.delete(key);
-  await saveDraftField(key, value);
+  clearFieldError(key, input);
+  try {
+    await saveDraftField(key, value);
+  } catch (err) {
+    if (!err || err.status !== 422) throw err;
+    state.failed.delete(key);
+    const msg = String(err.message || "This value could not be saved.");
+    setFieldError(key, msg.startsWith("Not saved.") ? msg : "Not saved. " + msg, input);
+    state.invalid.add(key);
+    if (!landlordApplication()) render();
+  }
+}
+
+async function commitDateField(key, input, dateState) {
+  dateState.invalid.delete(key);
+  clearFieldError(key, input);
+  try {
+    await saveDraftField(key, input.value);
+  } catch (err) {
+    if (!err || err.status !== 422) throw err;
+    dateState.failed.delete(key);
+    const msg = String(err.message || "This date could not be saved.");
+    setFieldError(key, msg.startsWith("Not saved.") ? msg : "Not saved. " + msg, input);
+    dateState.invalid.add(key);
+    if (!landlordApplication()) render();
+  }
 }
 
 async function downloadFormDraft(button) {
@@ -2668,23 +2758,39 @@ document.addEventListener("focusout", guarded(async ev => {
   if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
   const dateState = draftSaveState();
   if (!input.reportValidity()) {
+    setFieldError(key, "Not saved. " + (input.validationMessage || "Enter a valid date."), input);
     dateState.invalid.add(key);
     dateState.attempted.set(key, input.value);
     if (!landlordApplication()) render();
     return;
   }
-  dateState.invalid.delete(key);
   const pending = dateState.pending.get(key);
-  const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.defaultValue;
-  if (dateState.failed.has(key) && !pending) return saveDraftField(key, input.value);
+  const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.dataset.saved ?? "";
+  const values = formFieldValues();
+  for (const [k, v] of dateState.confirmed) values[k] = v;
+  for (const [k, entry] of dateState.pending) values[k] = entry.value;
+  const pairError = dateOrderError(key, input.value, saved, values);
+  if (pairError) {
+    setFieldError(key, pairError, input);
+    dateState.invalid.add(key);
+    dateState.attempted.set(key, input.value);
+    if (!landlordApplication()) render();
+    return;
+  }
+  if (dateState.failed.has(key) && !pending) return commitDateField(key, input, dateState);
   if (input.value === saved) {
-    if (!pending) dateState.attempted.delete(key);
+    dateState.invalid.delete(key);
+    if (!pending) {
+      dateState.failed.delete(key);
+      dateState.attempted.delete(key);
+    }
+    clearFieldError(key, input);
     if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
       $("#draft-save-notice").innerHTML = draftSaveNotice();
     }
     return;
   }
-  await saveDraftField(key, input.value);
+  return commitDateField(key, input, dateState);
 }));
 document.addEventListener("change", guarded(async ev => {
   const t = ev.target;
@@ -2715,7 +2821,14 @@ function wireDrop() {
   d.addEventListener("dragleave", () => d.classList.remove("over"));
   d.addEventListener("drop", e => { e.preventDefault(); d.classList.remove("over"); if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
 }
-window.addEventListener("hashchange", () => { S.editing = null; S.drafting = null; render(); window.scrollTo({ top: 0 }); });
+window.addEventListener("hashchange", () => {
+  S.editing = null; S.drafting = null;
+  if (route() !== "form" && landlordApplication() && S.draftSaves) {
+    S.draftSaves.errors?.clear();
+    S.draftSaves.invalid?.clear();
+  }
+  render(); window.scrollTo({ top: 0 });
+});
 /* #179: --topbar-h is the sticky top bar's height, used by scroll-padding-top and the rail, so anything
    scrolled or focused into view lands below the bar. The bar wraps to more rows on narrower screens
    and is not sticky on a phone (0 then), so it is measured rather than hard-coded. */
