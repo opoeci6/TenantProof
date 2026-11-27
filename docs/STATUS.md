@@ -86,6 +86,8 @@ Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to 
 - **#67 (tenant draft, F1–F3):** expanded the tenant application draft with move-in and move-out dates, notice and lease details, weekly rent, and security deposit fields. Existing tenancy start values and sources remain available for review. F1 adds party and premises addresses, contact fields and explicit applicant email consent. The draft PDF includes the applicant email only with consent. F3 records multiple tenant requests with individual reasons. The applicant signs and dates the official form. F4 is for landlord applicants.
 - **#67 (landlord draft, F4):** caseworkers choose an applicant role in New case. Tenant cases open F1–F3; landlord cases open shared F1/F2 and manual F4 with a downloadable unsigned draft. Tenant cases keep the Evidence landing page and initialize their core draft fields during analysis. Landlord cases have no tenant intake link. The caseload identifies landlord applications and their draft PDF indexes original supporting exhibits and waits for pending form saves.
 
+- **#204 (tenant draft saves):** failed edits remain available for retry within the open session. A new tenant package is blocked while a save is pending or while applicable fields have failed or invalid edits.
+
 Open PRs (2026-11-18), all into `dev`: this one (`opoeci6/fix-97-photo-preview`) and #101 (YCL0609: splitting `web/index.html` into `index.html`, `index.css` and `index.js`; not for the submission).
 
 Open issues:
