@@ -111,6 +111,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 /* #90: the built package, right under the Build button */
 .btn.big{padding:11px 20px;font-size:15px}
 .pkg-result{display:grid;gap:12px;justify-items:start;border-color:var(--ok)}
+.pkg-result.is-stale{border-color:var(--warn)}
 .pkg-result h2{margin:0;font-size:16px}
 .pkg-result p{margin:0}
 .pkg-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:0;width:100%;font-size:13.5px}
@@ -838,7 +839,10 @@ function mockRoute(method, path, body) {
     const e = db.timeline.find(x => x.id === m[1]); Object.assign(e, body);
     e.reviewed_by = e.review_status === "pending" ? null : ME.name;
     db.timeline.sort((a, b) => (a.date.value || "9").localeCompare(b.date.value || "9"));
-    log("caseworker", { accepted: "Accepted", edited: "Edited", rejected: "Rejected", pending: "Reopened" }[e.review_status] + ` event “${e.title}”` + (body.caseworker_note ? " and added a note" : ""));
+    // A note on its own is "Noted on", as the server says (services/review.py), and never a change
+    // to what the package would contain (#201).
+    const verb = body.review_status ? { accepted: "Accepted", edited: "Edited", rejected: "Rejected", pending: "Reopened" }[e.review_status] : "Noted on";
+    log("caseworker", `${verb} ${body.review_status ? "event" : "timeline event:"} “${e.title}”` + (body.caseworker_note ? " and added a note" : ""));
     return clone(e);
   }
   if (method === "GET" && path === `${C}/gaps`) return clone(db.gaps);
@@ -1103,6 +1107,45 @@ function latestPackage(pkg, activity) {
 }
 // One place for the zip address, so the result panel and the earlier versions cannot drift.
 const packageDownloadUrl = version => `${API_BASE}${C}/package/download?version=${version}`;
+// #201: does this activity line change what a built package would contain? Internal notes, requests
+// to the tenant, intake links, translations, privacy choices, source checks, dismissals and the
+// build itself never reach the zip, so they do not make a built version out of date.
+const NOT_PACKAGE_CHANGES = [
+  /^Noted on timeline event:/,
+  /^(?:Sent|Edited|Approved and sent) a request to the tenant:/,
+  /^(?:Created|Re-sent) the intake link/,
+  /^Translated a quoted source/,
+  /^(?:Hid|Let|Undid) a personal detail/,
+  /^Checked the official sources:/,
+  /^(?:Dismissed item:|Marked waiting on tenant)/,
+  /^(?:Built filing package v|Built the filing package)/,
+  /^(?:Started|Closed|Paused) run_/,
+  /^Answered the agent's question/,
+];
+const PACKAGE_CHANGES = [
+  /^(?:Edited form field:|Updated form field\b|Drafted form field\b|Added the \d+ Form J fields\b)/,
+  /^(?:Resolved item:|Reopened item:|Resolved “|Reopened “|Confirmed the files are genuine)/,
+  /^(?:Accepted|Edited|Rejected|Reset|Reopened) (?:timeline )?event\b/,
+  /^(?:Uploaded |Added \d+ files?\b)/,
+  /^(?:Finished run_|Removed \d+ unreviewed\b|Extracted facts:)/,
+];
+function isPackageChangeAction(action) {
+  const text = String(action || "");
+  if (NOT_PACKAGE_CHANGES.some(pattern => pattern.test(text))) return false;
+  if (text === "New files arrived after the confirmation") return true;
+  return PACKAGE_CHANGES.some(pattern => pattern.test(text));
+}
+// #201: what changed after `latest` was built, newest first as the activity log is. A line with the
+// same timestamp as the build is older only when it sits further down the list.
+function packageChangesAfter(latest, activity) {
+  if (!latest || !Array.isArray(activity)) return [];
+  const buildIdx = activity.findIndex(a => a.actor === "caseworker" && PACKAGE_BUILT.test(a.action)
+    && Number(PACKAGE_BUILT.exec(a.action)[1]) === latest.version);
+  const buildAt = buildIdx >= 0 ? activity[buildIdx].at : latest.built_at;
+  const buildMs = Date.parse(buildAt);
+  return activity.filter((a, i) => isPackageChangeAction(a.action)
+    && (Date.parse(a.at) > buildMs || (buildIdx >= 0 && Date.parse(a.at) === buildMs && i < buildIdx)));
+}
 const buildButton = latest => latest
   ? { label: "Build a new version", hint: `This makes v${latest.version + 1}. v${latest.version} stays available.` }
   : { label: "Build package", hint: "" };
@@ -1380,13 +1423,16 @@ function renderChrome() {
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
   const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence, landlordApplication());
+  // #201: the rail says so when the case changed after the latest build.
+  const latestPkg = latestPackage(S.pkg, S.activity);
+  const pkgStale = !!(latestPkg && packageChangesAfter(latestPkg, S.activity).length);
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
     { id: "timeline", name: "Review timeline", meta: rm.timeline, done: rm.doneTimeline, attn: st.reviewed < st.total },
     { id: "gaps", name: "Missing info", meta: rm.gaps, done: rm.doneGaps, attn: st.blocking > 0 },
     { id: "form", name: "Form draft", meta: rm.form, done: rm.doneForm, attn: st.reqMissing > 0 },
-    { id: "package", name: "Package", meta: latestPackage(S.pkg, S.activity) ? "Built" : "Not built", done: !!latestPackage(S.pkg, S.activity) }
+    { id: "package", name: "Package", meta: !latestPkg ? "Not built" : pkgStale ? "Out of date" : "Built", done: !!latestPkg && !pkgStale, attn: pkgStale }
   ];
   $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.filter(it => !landlordApplication() || ["evidence", "form"].includes(it.id)).map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
     + (landlordApplication() ? "" : `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`);
@@ -1830,12 +1876,16 @@ function viewForm() {
     ${contract("form", f)}`;
 }
 
-/* #90: the result of a build, under the Build button */
-function packageResult(p) {
+/* #90: the result of a build, under the Build button. #201: it says so when the case changed after
+   that version was built, and keeps the zip as it is. */
+function packageResult(p, changes = packageChangesAfter(p, S.activity)) {
   const zip = `Download the zip (v${p.version})`;
-  return `<section class="panel panel-pad pkg-result" id="pkg-result" aria-label="Built package">
-    <h2>Package v${p.version} is ready</h2>
-    ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${packageDownloadUrl(p.version)}" download>${zip}</a>`}
+  const stale = changes.length > 0;
+  const changed = changes.slice(0, 2).map(a => stripRunIds(a.action)).join("; ");
+  return `<section class="panel panel-pad pkg-result${stale ? " is-stale" : ""}" id="pkg-result" aria-label="Built package">
+    <h2>Package v${p.version} is ${stale ? "out of date" : "ready"}</h2>
+    ${stale ? `<div class="note warn" role="status"><span class="note-ico">!</span><span>The case changed after v${p.version} was built (${esc(changed)}${changes.length > 2 ? `; +${changes.length - 2} more` : ""}). The v${p.version} zip stays unchanged for your records; build a new version to include the latest changes.</span></div>` : ""}
+    ${USE_MOCK ? `<button class="btn ${stale ? "" : "primary "}big" type="button" disabled>${zip}</button>` : `<a class="btn ${stale ? "" : "primary "}big" id="pkg-download" href="${packageDownloadUrl(p.version)}" download>${zip}</a>`}
     <dl class="pkg-meta"><dt>Version</dt><dd>v${p.version}</dd><dt>Built by</dt><dd>${esc(p.built_by)}</dd><dt>Built</dt><dd>${fmtTime(p.built_at)}</dd><dt>SHA-256</dt><dd class="mono">${esc(p.sha256)}</dd></dl>
     <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records. The Program does not accept zip files: in the real app, each file can be downloaded from the table below and uploaded on its own." : "The zip is for your records. The Program does not accept zip files: download each file from the table below and upload it on its own."}</p></section>`;
 }
@@ -1850,6 +1900,8 @@ function showPackageResult() {
 function viewPackage() {
   const st = stats(), ik = S.case.intake;
   const latest = latestPackage(S.pkg, S.activity), build = buildButton(latest);
+  // #201: the case changed after the latest build, so the panel says it is out of date.
+  const stale = latest ? packageChangesAfter(latest, S.activity).length > 0 : false;
   // #199: the versions kept for the record, newest first. The latest is what the panel above shows.
   const earlier = packageVersions(S.pkg, S.activity).slice(1);
   const doneRun = S.run && ["done", "needs_review"].includes(S.run.status) && S.run.finished_at;
@@ -1900,7 +1952,7 @@ function viewPackage() {
     ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
     ${analysisNote(S.run)}
     ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
-    <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
+    <div class="btn-row"><button class="btn${!latest || stale ? " primary" : ""}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
     ${latest ? packageResult(latest) : ""}
     ${manifest}
     ${earlierSection}
