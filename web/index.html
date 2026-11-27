@@ -362,6 +362,9 @@ textarea.field{min-height:72px;resize:vertical}
 .log{list-style:none;margin:0;padding:0}
 .log li{display:grid;grid-template-columns:150px 92px minmax(0,1fr);gap:4px 14px;padding:9px 16px;border-top:1px solid var(--line);font-size:13px;align-items:baseline}
 .log li:first-child{border-top:0}
+/* #203: a 64-character SHA-256 in an audit line wraps inside its own column instead of
+   pushing the page sideways at phone widths. */
+.log li > span{min-width:0;overflow-wrap:anywhere}
 .log time{color:var(--ink-3);font-variant-numeric:tabular-nums;font-size:12.5px}
 .log .who{font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
 .who-agent{color:var(--accent)} .who-tenant{color:var(--warn)} .who-caseworker{color:var(--ok)}
