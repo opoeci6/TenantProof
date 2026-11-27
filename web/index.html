@@ -1826,11 +1826,17 @@ function render() {
   const banner = !landlordApplication() && CASE_ROUTES.includes(r) && here && here.analysed === false ? `<div class="note warn" role="status"><span class="note-ico">!</span><span><b>Not analysed yet.</b> No analysis has been completed and no events are reviewed, so nothing here is ready to file. <a href="#run">Run the analysis</a></span></div>` : "";
   const view = $("#view");
   if (r === "form" && landlordApplication() && view.querySelector('[data-action="download-form-draft"]')) {
+    /* #161: refresh the rows without replacing the control that has focus */
     const active = document.activeElement;
     const editing = active?.matches('textarea[data-action="field"], input[data-action="field"]:not([type="checkbox"]), input[data-action="date-field"]');
-    // Refresh the data without replacing a control the caseworker is still editing or correcting.
+    const focused = active !== view && view.contains(active) && active.id ? active : null;
     const saves = S.draftSaves;
-    if (editing || saves?.downloading || saves?.pending.size || saves?.failed.size || saves?.invalid.size) return;
+    const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading,
+      unsaved: !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size) });
+    formRenderDeferred = mode === "after-composition";
+    if (mode === "skip" || mode === "after-composition") return;
+    // A focused text field missing from the new view keeps the old view, so its text is not lost.
+    if (mode === "keep-focus" && (renderAroundFocus(view, focused, banner + VIEWS[r]()) || editing)) return;
   }
   view.innerHTML = (r === "cases" ? S.casesLoaded : r === "intake" ? S.intake.view : S.form) ? banner + VIEWS[r]() : `<p>Loading…</p>`;
   if (r === "evidence") wireDrop();
@@ -1926,6 +1932,48 @@ function pollRun() {
 
 /* ---------- events ---------- */
 /* ---------- Form J draft saves and download ---------- */
+/* formRefresh:start (#161, pure; tests/test_form_refresh.py runs it under node). How render()
+   refreshes the landlord Form draft: "skip" keeps the view while a download runs or a value is
+   pending, failed or invalid (a new view would show the old value); "after-composition" waits
+   for an IME composition to end; "keep-focus" rebuilds all but the focused control; else "full". */
+function formRefreshMode({ focused, composing, downloading, unsaved }) {
+  if (downloading || unsaved) return "skip";
+  if (composing) return "after-composition";
+  return focused ? "keep-focus" : "full";
+}
+/* formRefresh:end */
+/* #161: rebuild the view from `html` around `keep`, which stays in the page with its value,
+   selection and focus. Every other node is replaced. False when the new view has no `keep`. */
+function renderAroundFocus(view, keep, html) {
+  const fresh = document.createElement("template");
+  fresh.innerHTML = html;
+  const pairs = [];
+  let live = keep, twin = fresh.content.getElementById(keep.id);
+  while (live !== view) {
+    if (!twin || twin === fresh.content || live.nodeName !== twin.nodeName) return false;
+    pairs.push([live, twin]);
+    live = live.parentNode; twin = twin.parentNode;
+  }
+  if (twin !== fresh.content) return false;
+  pairs.forEach(([live, twin], level) => {
+    if (level) {  // ancestors take the new attributes; the kept control keeps its own
+      for (const { name } of [...live.attributes]) if (!twin.hasAttribute(name)) live.removeAttribute(name);
+      for (const { name, value } of [...twin.attributes]) live.setAttribute(name, value);
+    }
+    for (const node of [...live.parentNode.childNodes]) if (node !== live) node.remove();
+    const siblings = [...twin.parentNode.childNodes], at = siblings.indexOf(twin);
+    live.before(...siblings.slice(0, at));
+    live.after(...siblings.slice(at + 1));
+  });
+  return true;
+}
+let formComposing = false, formRenderDeferred = false;
+document.addEventListener("compositionstart", () => { formComposing = true; });
+document.addEventListener("compositionend", () => {
+  formComposing = false;
+  if (formRenderDeferred) { formRenderDeferred = false; render(); }
+});
+
 function draftSaveState() {
   return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), downloading: false };
 }

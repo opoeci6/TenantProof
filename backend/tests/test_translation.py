@@ -147,3 +147,18 @@ def test_the_translation_is_logged(fresh_db, client, provider, session) -> None:
         for row in session.exec(select(ActivityRow).where(ActivityRow.case_id == CASE)).all()
     ]
     assert "Translated a quoted source" in actions
+
+
+def test_with_placeholders_on_a_translation_is_cached_for_its_case_only(
+    fresh_db, client, provider, session, monkeypatch
+) -> None:
+    """Issue #60: the reply is revealed with this case's details, so another case (or org) asking
+    for the same words must not be served it from the cache."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", True)
+    assert _translate(client).status_code == 200
+    session.expire_all()
+    assert session.get(ExcerptTranslationRow, excerpt_translation.key_for("zh", ZH)) is None
+    assert session.get(ExcerptTranslationRow, excerpt_translation.key_for("zh", ZH, CASE))
+    assert excerpt_translation.cached(session, "zh", ZH, "case_other") is None

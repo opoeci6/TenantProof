@@ -4,7 +4,7 @@ refuse a second answer. FixtureProvider only, so nothing reaches the network."""
 import asyncio
 import json
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlmodel import Session, select
@@ -171,6 +171,24 @@ def test_crash_checkpoint_refuses_a_different_model_before_any_call(fresh_db, se
             session, row, llm.FixtureProvider(model="new-model"), InMemoryTextStore(),
         ))
     assert status_of(session, key) == ("running", "running")
+
+
+def test_a_checkpoint_saved_before_provider_keys_resumes_on_anthropic_only() -> None:
+    """Runs paused before PR #155 have no provider_key; Anthropic was the only live provider
+    then, so it may answer them. A chat provider still may not."""
+    from app.services.agent.chat import ChatCompletionsProvider
+
+    run = RunRow(id="run_old", case_id=CASE, status="needs_input",
+                 started_at=datetime.now(UTC), steps=[
+        {"key": "timeline", "status": "needs_input", "checkpoint": {"messages": []}},
+    ])  # fmt: skip
+    anthropic = llm.AnthropicProvider("sk-test", client=object())
+    chat = ChatCompletionsProvider("sk-test", "gpt-5-mini", provider="openai",
+                                   base_url="https://api.openai.com/v1")  # fmt: skip
+    assert runner.can_resume_with(run, anthropic)
+    assert not runner.can_resume_with(run, chat)
+    run.steps = [{**run.steps[0], "provider_key": llm.continuation_key(chat)}]
+    assert not runner.can_resume_with(run, anthropic)  # a keyed checkpoint still must match
 
 
 def test_the_field_key_is_saved_with_the_pause_and_is_not_a_field_of_the_run(
