@@ -100,6 +100,7 @@ const renderAroundFocus = (target, focused, html) => {{
 # --------------------------------------------------------------------------- #194
 
 OLD = ["fld-deposit_paid", "fld-deposit_amount", "fld-notice_given"]
+SURVIVING = [key for key in OLD if key != "fld-deposit_amount"]
 
 
 def test_the_next_surviving_control_is_the_one_to_focus() -> None:
@@ -142,7 +143,7 @@ let current = {json.dumps(OLD)};
 const view = {{
   _html: "old form",
   get innerHTML() {{ return this._html; }},
-  set innerHTML(html) {{ this._html = html; current = {json.dumps([i for i in OLD if i != "fld-deposit_amount"])}; }},
+  set innerHTML(html) {{ this._html = html; current = {json.dumps(SURVIVING)}; }},
   querySelector: () => ({{dataset: {{formDraft: "case-tenant"}}}}),
   contains: el => el === control,
   querySelectorAll: () => current.map(id => ({{id}})),
@@ -153,7 +154,8 @@ const renderAroundFocus = () => false;  // the focused control is not in the new
 """
     script = (
         harness + policy.group(1) + render.group(0)
-        + "\nrender(); console.log(JSON.stringify({html: view.innerHTML, focused, formRenderDeferred}));"
+        + "\nrender(); console.log(JSON.stringify("
+        "{html: view.innerHTML, focused, formRenderDeferred}));"
     )
     return node_json(script)
 
