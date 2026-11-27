@@ -101,6 +101,10 @@ class Case(BaseModel):
     intake: Intake
     created_at: str
     synthetic: bool
+    # #218: what the case has, so the page asks for a run or a package only when there is one
+    # (GET /runs/latest and GET /package keep their 404/409 answers).
+    has_run: bool = False
+    has_package: bool = False
 
 
 class IntakeRequest(BaseModel):
@@ -389,6 +393,12 @@ class CaseCreate(BaseModel):
     tenant_language: Literal["en", "zh", "fr", "es", "ru", "hi"]
     unit: str = Field(min_length=1, max_length=200)  # the rental unit's address
     title: str = Field(min_length=1, max_length=120)  # one line: what is wrong
+    # #202: the form's per-submission key. A retry that carries a key the org already used gets
+    # the case that key made, instead of a duplicate. Never stored in `LIMITS`: it is an opaque
+    # token, not typed text.
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
     # Stripped before the length checks, so a whitespace-only value is refused as empty.
     model_config = {"extra": "forbid", "str_strip_whitespace": True}
 

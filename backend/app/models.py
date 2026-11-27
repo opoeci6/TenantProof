@@ -6,7 +6,7 @@ routers validate them through the Pydantic models in schemas.py."""
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, Column, Index, String, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, Column, Index, String, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 from app.schemas import ApplicantRole, PrivacyAction, PrivacyRole
@@ -48,6 +48,15 @@ class CaseRow(SQLModel, table=True):
         CheckConstraint(
             "applicant_role IN ('tenant', 'landlord')", name="ck_tenant_case_applicant_role"
         ),
+        # #202: a retried create with the same key returns the case the first attempt made. The
+        # key is per org, and rows without one (seeds, tests, older cases) never collide.
+        Index(
+            "uq_tenant_case_org_idempotency_key",
+            "org_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
     id: str = Field(primary_key=True)
     org_id: str = Field(foreign_key="org.id", index=True)
@@ -73,6 +82,11 @@ class CaseRow(SQLModel, table=True):
     intake_last_upload_at: datetime | None = None
     tenant_attested_genuine: bool = False
     tenant_attested_at: datetime | None = None
+    # #202: the key the new-case form minted for this submission; a retry with the same key
+    # returns this case instead of creating a second one. Null for seeds and older cases.
+    idempotency_key: str | None = Field(
+        default=None, sa_column=Column(String(64), nullable=True)
+    )
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
