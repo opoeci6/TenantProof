@@ -72,6 +72,7 @@ Single source of truth. Update the relevant section in every PR.
 Details of every deviation from `API_CONTRACT.md`: `CONTRACT_CHANGES.md` (#1 to #40).
 
 - **#178:** Reloading a case with an analysis in progress resumes polling. Replies from a previous case are ignored after switching cases.
+- **#182:** Tenant Form draft refreshes preserve the focused input, its text and selection, including while an IME composition is active.
 
 ## In progress
 
