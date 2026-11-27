@@ -19,6 +19,7 @@ compares real text with real text. Spellings of one person share a stem: `[TENAN
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 # A known value starts and ends at a letter or digit only where the text has no ASCII letter or
 # digit next to it. ASCII only on purpose: "Mei Chen您好" still matches "Mei Chen".
@@ -334,6 +335,25 @@ class Placeholders:
     def _entry_value(self, token: str) -> str:
         entry = self._entries.get(token)
         return entry.value if entry is not None else token
+
+    def snapshot(self) -> dict[str, Any]:
+        """Every placeholder handed out so far and the counters, as JSON, to save with a run."""
+        return {
+            "entries": [[e.value, e.placeholder, e.kind, e.source, e.part, e.term_id, e.count]
+                        for e in self._entries.values()],
+            "next": dict(self._next),
+        }  # fmt: skip
+
+    def restore(self, saved: dict[str, Any]) -> None:
+        """Go back to a saved `snapshot`: each value keeps its placeholder, and a value first
+        seen from now on gets the next free number. A run that resumes after a pause must not
+        renumber: its saved conversation still holds the old placeholders."""
+        self._entries.clear()
+        self._by_value.clear()
+        for value, token, kind, source, part, term_id, count in saved["entries"]:
+            self._entries[token] = Entry(value, token, kind, source, part, term_id, count)
+            self._by_value[value] = token
+        self._next = {str(k): int(v) for k, v in saved["next"].items()}
 
     def entries(self) -> list[Entry]:
         """Every placeholder handed out so far, in order. Pieces of a longer value (a first name

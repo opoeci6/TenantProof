@@ -41,6 +41,21 @@ def build_package(
     return svc.to_package(row)
 
 
+@router.get("/cases/{case_id}/package", response_model=Package)
+def get_package_info(
+    case: CaseDep,
+    session: SessionDep,
+    response: Response,
+    version: int | None = Query(default=None, ge=1),
+) -> Package:
+    """#200: read a built package back. The page lost its contents and file links on reload."""
+    if case.applicant_role == "landlord":
+        raise _refuse(status.HTTP_409_CONFLICT, [_LANDLORD_PACKAGE_REASON])
+    row = svc.get_package(session, case, version)
+    response.headers["Cache-Control"] = "private, no-store"
+    return svc.to_package(row)
+
+
 @router.get("/cases/{case_id}/package/download")
 def download_package(
     case: CaseDep, session: SessionDep, version: int | None = Query(default=None, ge=1)
