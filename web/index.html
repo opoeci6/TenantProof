@@ -2498,7 +2498,7 @@ function draftProblemLabels() {
   if (!state || !S.form) return [];
   const fields = new Map(S.form.fields.map(field => [field.key, field]));
   return [...new Set([...state.failed, ...state.invalid])]
-    .filter(key => fields.has(key) && formFieldApplies(key, fields, false))
+    .filter(key => fields.has(key) && formFieldApplies(key, fields, landlordApplication()))
     .map(key => fields.get(key).label);
 }
 
