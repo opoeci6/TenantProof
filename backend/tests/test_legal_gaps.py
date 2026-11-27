@@ -530,6 +530,22 @@ def test_fixture_gaps_run_creates_choice_remedy_gap_and_saving_choices_fills_rem
     assert remedy_field["value"] == chosen
     assert remedy_field["status"] == "user_entered"
 
+    # Asked of the tenant first (waiting_tenant), the choice is saved the same way.
+    reopened = client.patch(f"/api/gaps/{remedy_gap.id}", json={"status": "open"})
+    assert reopened.status_code == 200
+    session.expire_all()
+    waiting = session.get(GapRow, remedy_gap.id)
+    assert waiting is not None
+    waiting.status = "waiting_tenant"
+    session.add(waiting)
+    session.commit()
+    again = client.patch(
+        f"/api/gaps/{remedy_gap.id}",
+        json={"status": "resolved", "value": F3_REQUESTS["request_repairs"]},
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "resolved"
+
 
 def test_landlord_case_never_gets_a_remedy_gap(fresh_db, client, session) -> None:
     created = client.post(
@@ -584,6 +600,27 @@ def test_landlord_case_never_gets_a_remedy_gap(fresh_db, client, session) -> Non
     prepared = prepare(session, bare.id)
     assert prepared.fields_added == 6
     assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, bare.id))
+
+
+def test_a_landlord_case_with_an_old_remedy_row_gets_no_remedy_gap(fresh_db, session) -> None:
+    """A landlord case that already has an empty required `remedy` row (made before the role
+    existed, or by hand) is still not asked for the tenant's remedy: `case_facts` leaves it out."""
+    template = session.get(CaseRow, CASE)
+    assert template is not None
+    case = CaseRow(
+        id="case_landlord_old_remedy", org_id=template.org_id,
+        assigned_to_id=template.assigned_to_id, dispute_type="maintenance", title="Unpaid rent",
+        unit="100 Main St", tenant_name="Alex", tenant_language="en", applicant_role="landlord",
+        stage="needs_review", form_name="Partial Form J draft", form_disclaimer="Draft.",
+        intake_status="not_sent",
+    )  # fmt: skip
+    session.add(case)
+    session.add(FormFieldRow(case_id=case.id, key="remedy", position=0,
+                             label="What the tenant is asking for", required=True,
+                             status="missing"))  # fmt: skip
+    session.commit()
+    prepare(session, case.id)
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, case.id))
 
 
 # --- #173: screenshots with OCR text skip "Original photo" ----------------------------------
