@@ -55,6 +55,38 @@ def test_fixture_hash_changes_with_messages_model_and_token_budget(tmp_path: Pat
         run(llm.FixtureProvider(tmp_path, strict=True, model="another-model").complete(request))
 
 
+def test_fixture_hash_masks_ids_of_rows_the_tools_create() -> None:
+    """propose_event/create_gap return a fresh id each run; a replay must hash the same."""
+
+    def request(event_id: str, gap_id: str, title: str = "Tenancy starts") -> llm.LLMRequest:
+        result = json.dumps({
+            "accepted": True,
+            "event_id": event_id,
+            "created_gap": gap_id,
+            "title": title,
+        })
+        return req().model_copy(update={
+            "messages": [
+                llm.Message(role="user", content="propose an event and a gap"),
+                llm.Message(role="assistant", content=[{
+                    "type": "tool_use", "id": "call_1", "name": "propose_event",
+                    "input": {"title": title},
+                }]),
+                llm.Message(role="user", content=[{
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": result,
+                }]),
+            ],
+        })
+
+    first = request("te_0123456789", "gap_0123456789")
+    replay = request("te_abcdefabcd", "gap_abcdefabcd")
+    assert llm.request_hash(first) == llm.request_hash(replay)
+    changed = request("te_0123456789", "gap_0123456789", title="Another event")
+    assert llm.request_hash(first) != llm.request_hash(changed)
+
+
 def test_fixture_hash_masks_only_the_run_tag_in_nested_messages() -> None:
     def request(nonce: str, note: str) -> llm.LLMRequest:
         tag = f"evidence-{nonce}"

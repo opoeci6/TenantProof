@@ -178,8 +178,39 @@ class LLMProvider(Protocol):
 # --------------------------------------------------------------------------- fixture hashing
 
 
+# Rows a run creates get a fresh uuid suffix, so a recorded response can never carry the
+# id a replay will see. Mask those ids in tool results before hashing, or every write step
+# (propose_event, create_gap, ...) would mismatch when replayed.
+_RUN_ROW_ID = re.compile(r"\b(te|gap)_[0-9a-f]{10}\b")
+
+
+def _mask_row_ids(value: Any) -> Any:
+    """Mask generated row ids inside tool result content (strings, or lists of blocks)."""
+    if isinstance(value, str):
+        return _RUN_ROW_ID.sub(r"\1_ID", value)
+    if isinstance(value, list):
+        return [_mask_row_ids(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _mask_row_ids(item) for key, item in value.items()}
+    return value
+
+
+def _stable_messages(request: LLMRequest) -> list[dict[str, Any]]:
+    """The conversation with the per-run parts of tool results masked."""
+    messages: list[dict[str, Any]] = []
+    for message in request.messages:
+        data = message.model_dump(mode="json")
+        content = data.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    block["content"] = _mask_row_ids(block.get("content"))
+        messages.append(data)
+    return messages
+
+
 def request_hash(request: LLMRequest, *, model: str = MODEL) -> str:
-    """Fingerprint the request, with only the system's per-run evidence tag masked."""
+    """Fingerprint the request; the run's evidence tag and generated row ids are masked."""
     tools = sorted(
         (
             {
@@ -195,7 +226,7 @@ def request_hash(request: LLMRequest, *, model: str = MODEL) -> str:
     blob = json.dumps({
         "system": request.system,
         "system_run": request.system_run,
-        "messages": [message.model_dump(mode="json") for message in request.messages],
+        "messages": _stable_messages(request),
         "tools": tools,
         "model": model,
         "max_tokens": request.max_tokens,
@@ -442,7 +473,9 @@ def get_provider(settings: Settings) -> LLMProvider:
     """Build the configured adapter. Fixture mode never reads credentials."""
     name = settings.llm_provider
     if settings.llm_mode == "fixture":
-        return FixtureProvider(model=settings.llm_model or MODEL)
+        # Fixtures are recorded against MODEL; a stray LLM_MODEL must not break a replay
+        # (the hash covers the model, so honouring it here would fail every fixture).
+        return FixtureProvider()
     effort = settings.llm_effort
     if name == "anthropic":
         return AnthropicProvider(
