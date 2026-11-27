@@ -283,6 +283,9 @@ class AnthropicProvider:
     """Live provider. `client` is injectable so tests use a fake and never reach the network."""
 
     requires_continuation_key = True
+    # Before the provider settings (PR #155) Anthropic was the only live provider, and its
+    # checkpoints were saved without a key: they can still be answered.
+    accepts_unkeyed_checkpoints = True
 
     def __init__(
         self,

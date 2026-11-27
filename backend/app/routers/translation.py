@@ -71,25 +71,33 @@ def translate_excerpt(
         raise _refuse(f"Unknown language: {language}")
     if excerpt_translation.unchanged(language, payload.excerpt):
         return ExcerptTranslation(text_en=payload.excerpt)
-    text_en = excerpt_translation.cached(session, language, payload.excerpt)
+    # Issue #60: a reply revealed with this case's details is cached for this case only.
+    scope = case.id if get_settings().privacy_placeholders else None
+    text_en = excerpt_translation.cached(session, language, payload.excerpt, scope)
     if text_en is not None:
         return ExcerptTranslation(text_en=text_en)
     provider = placeholders.for_case(session, case, SqlTextStore(session), provider)  # issue #60
     # Give the connection back while the model runs: a slow call must not hold a DB connection.
     session.commit()
     text_en = asyncio.run(excerpt_translation.translate(provider, language, payload.excerpt))
-    _save(session, case.id, user.name, language, payload.excerpt, text_en)
+    _save(session, case.id, user.name, language, payload.excerpt, text_en, scope)
     return ExcerptTranslation(text_en=text_en)
 
 
 def _save(
-    session: Session, case_id: str, actor_name: str, language: str, excerpt: str, text_en: str
+    session: Session,
+    case_id: str,
+    actor_name: str,
+    language: str,
+    excerpt: str,
+    text_en: str,
+    scope: str | None,
 ) -> None:
     """Cache the translation and log it. Two requests for the same new quote can race; the second
     insert loses and keeps the translation the first one saved."""
     session.add(
         ExcerptTranslationRow(
-            key=excerpt_translation.key_for(language, excerpt),
+            key=excerpt_translation.key_for(language, excerpt, scope),
             language=language,
             text_en=text_en,
         )

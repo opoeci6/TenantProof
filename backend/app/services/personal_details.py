@@ -51,6 +51,16 @@ _STREET_SUFFIX = (
 _UNIT_PREFIX = r"(?:(?:Unit|Apt|Apartment|Suite|Ste)\.?\s*#?\s*[A-Za-z0-9-]{1,6},?\s+)?"
 _POSTAL = r"[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z][ -]?\d[ABCEGHJ-NPRSTV-Z]\d"
 _UNIT_PART = re.compile(r"(?i)^(?:unit|apt|apartment|suite|ste|#)\b")
+# A day and a month are a date, not a house number and a street: "15 May Dr. Patel" and
+# "3 December Court Room 2". "123 March Road" is still an address.
+_MONTH = (
+    r"(?:January|February|March|April|May|June|July|August|September|October|November|December"
+    r"|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)\.?(?![A-Za-z])"
+)
+_DAY_MONTH = r"(?!(?:0?[1-9]|[12]\d|3[01])\s+" + _MONTH + r")"
+# Dates written with hyphens, year first or last: a range of two looks like a card number.
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}")
+_AMOUNT = re.compile(r"^\+\d+\.\d{2}(?![\d.])")
 
 
 def _luhn(digits: str) -> bool:
@@ -69,7 +79,15 @@ def _id_number(surface: str) -> bool:
 
 def _card_number(surface: str) -> bool:
     digits = re.sub(r"\D", "", surface)
-    return 13 <= len(digits) <= 19 and _luhn(digits)
+    # Two dates side by side ("2026-08-14 2026-08-18") are a date range, not a card.
+    return 13 <= len(digits) <= 19 and not _DATE.search(surface) and _luhn(digits)
+
+
+def _international_phone(surface: str) -> bool:
+    """Not an amount ("+850.00 2026-09-01") and not a run that holds a date."""
+    if _AMOUNT.search(surface) or _DATE.search(surface):
+        return False
+    return 8 <= len(re.sub(r"\D", "", surface)) <= 15
 
 
 @dataclass(frozen=True)
@@ -84,8 +102,12 @@ PATTERNS: tuple[_Pattern, ...] = (
     _Pattern("EMAIL", "email", re.compile(
         r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}" + _AFTER)),
     _Pattern("PHONE", "phone", re.compile(
-        _NUM_BEFORE + r"(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
-        + _NUM_AFTER)),
+        _NUM_BEFORE + r"(?:(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
+        r"|\+?1?[2-9]\d{2}[2-9]\d{6})" + _NUM_AFTER)),
+    # Outside North America: always written with the country code (+86 138 0013 8000).
+    _Pattern("PHONE", "phone", re.compile(
+        r"(?<![A-Za-z0-9_+])\+(?!1[ .-]?\d{3})\d{1,3}(?:[ .-]?\d{2,4}){2,5}" + _NUM_AFTER),
+        _international_phone),
     _Pattern("CARD_NUMBER", "id_number", re.compile(
         _NUM_BEFORE + r"\d(?:[ -]?\d){12,18}" + _NUM_AFTER), _card_number),
     _Pattern("ID_NUMBER", "id_number", re.compile(
@@ -93,8 +115,8 @@ PATTERNS: tuple[_Pattern, ...] = (
     _Pattern("POSTAL_CODE", "postal_code", re.compile(
         _BEFORE + _POSTAL + _AFTER, re.IGNORECASE)),
     _Pattern("ADDRESS", "address", re.compile(
-        _BEFORE + _UNIT_PREFIX + r"\d{1,6}[A-Za-z]?(?:\s+[A-Z][A-Za-z'’.-]*){1,4}?\s+"
-        + _STREET_SUFFIX + r"\b\.?")),
+        _BEFORE + _UNIT_PREFIX + _DAY_MONTH + r"\d{1,6}[A-Za-z]?"
+        + r"(?:\s+[A-Z][A-Za-z'’.-]*){1,4}?\s+" + _STREET_SUFFIX + r"\b\.?")),
 )  # fmt: skip
 
 
