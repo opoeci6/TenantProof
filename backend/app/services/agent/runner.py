@@ -420,7 +420,11 @@ PLACEHOLDERS_KEY = "placeholders"  # on the first step: the run's placeholder nu
 def _store_steps(run: RunRow, all_steps: list[dict[str, Any]], provider: LLMProvider) -> None:
     """Save the steps with the run's placeholder numbering, so a resume can reuse it."""
     if all_steps and isinstance(provider, placeholders.PlaceholderProvider):
-        all_steps[0][PLACEHOLDERS_KEY] = provider.placeholders.snapshot()
+        # The map holds real names and numbers: keep it only while a pause or a crash can resume.
+        if any(s.get("checkpoint") for s in all_steps):
+            all_steps[0][PLACEHOLDERS_KEY] = provider.snapshot()
+        else:
+            all_steps[0].pop(PLACEHOLDERS_KEY, None)
     run.steps = copy.deepcopy(all_steps)
 
 
@@ -621,7 +625,7 @@ async def execute_run(
     if all_steps and isinstance(provider, placeholders.PlaceholderProvider):
         saved_map = all_steps[0].get(PLACEHOLDERS_KEY)
         if saved_map:
-            provider.placeholders.restore(saved_map)
+            provider.restore(saved_map)
     if all_steps:
         all_steps[0].setdefault(PRIVACY_KEY, isinstance(provider, placeholders.PlaceholderProvider))
     stored = next((s["nonce"] for s in all_steps if s.get("nonce")), None)
