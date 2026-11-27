@@ -1303,6 +1303,8 @@ function stats() {
 /* ---------- login (M1) ---------- */
 function showLogin(msg) {
   S.needLogin = true; stopRunPolling();
+  tenantDraftSavesByCase.clear();
+  S.draftSaves = null;
   $("#layout").classList.add("single"); $("#topnav").innerHTML = ""; $("#rail").innerHTML = "";
   $("#ctx").innerHTML = `<strong>Sign in</strong><span></span>`;
   $("#view").innerHTML = `<form class="panel panel-pad" data-action="login" style="max-width:380px;display:grid;gap:12px">
@@ -1358,8 +1360,13 @@ function renderChrome() {
 /* --- new case (#41): POST /cases, CONTRACT_CHANGES #35 --- */
 // State that belongs to one case. Kept across a switch, the last case's package, confirmations
 // and run poller would show on the next case. (The intake link is kept per case: sessionLink.)
+const tenantDraftSavesByCase = new Map();
 function resetCaseState() {
   stopRunPolling();
+  const saves = S.draftSaves;
+  if (CASE_ID && !landlordApplication() && (saves?.pending.size || saves?.failed.size || saves?.invalid.size)) {
+    tenantDraftSavesByCase.set(CASE_ID, saves);
+  }
   S.privacy = null;
   S.draftSaves = null;
   S.intake.view = null; S.intake.answers = {}; S.pkg = null; S.pkgError = null; S.run = null;
@@ -1727,11 +1734,15 @@ function viewForm() {
       || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== saved
       || saved < minTenancyDate || saved > fieldMaxDate(x.key));
     const confirm = x.status === "needs_confirmation" && saved;
-    const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"`;
+    // A partially typed native date can report an empty value. Its segments cannot be restored.
+    const reenterDate = date && !landlordApplication() && S.draftSaves?.invalid.has(x.key)
+      && S.draftSaves.attempted.get(x.key) === "";
+    const displayed = reenterDate ? saved : draftFieldValue(x);
+    const attrs = `class="field" id="fld-${esc(x.key)}" data-action="${date ? "date-field" : "field"}" data-key="${esc(x.key)}"${reenterDate ? " data-draft-reenter-date" : ""}`;
     const control = options
       ? `<select ${attrs}><option value="">Choose an answer</option>${Object.entries(options).map(([value, label]) =>
-          `<option value="${value}" ${saved === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
-      : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate ? "" : saved)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
+          `<option value="${value}" ${displayed === value ? "selected" : ""}>${label}</option>`).join("")}</select>`
+      : `<input ${attrs} ${caseFieldAttrs(x.key)} value="${esc(legacyDate && displayed === saved ? "" : displayed)}" placeholder="${x.required && x.status === "missing" ? "Not found in the files" : ""}">`;
     return `<div class="frow"><label class="fl" for="fld-${esc(x.key)}">${esc(partyFields[x.key]?.label || x.label)}${money ? " (CAD)" : ""}${x.required ? "<small>Required</small>" : ""}</label>
       <div style="display:grid;gap:6px;min-width:0">${control}
         ${legacyDate ? `<span class="muted">Saved date: ${esc(saved)}</span>` : ""}
@@ -1763,11 +1774,11 @@ function viewForm() {
     const selection = fieldsByKey.get(`${prefix}_${key}`);
     const reason = fieldsByKey.get(`${prefix}_${key}_reason`);
     if (!applies(`${prefix}_${key}`)) return "";
-    const selected = selection.value === "yes";
+    const selected = draftFieldValue(selection) === "yes";
     return `<div class="form-request">
       <label><input type="checkbox" id="fld-${selection.key}" data-action="field" data-key="${selection.key}" value="yes" ${selected ? "checked" : ""}> ${title}</label>
       ${applies(reason.key) ? `<label class="request-reason" for="fld-${reason.key}">Reason for ${title.toLowerCase()}
-        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(reason.value || "")}</textarea></label>` : ""}
+        <textarea class="field" id="fld-${reason.key}" data-action="field" data-key="${reason.key}" rows="3">${esc(draftFieldValue(reason))}</textarea></label>` : ""}
       ${key === "payment" && selected ? `<div class="request-options" role="group" aria-label="Payment options">${Object.entries(paymentOptions).map(renderRequest).join("")}</div>` : ""}
     </div>`;
   };
@@ -1779,6 +1790,7 @@ function viewForm() {
   return `<div class="view-head" data-form-draft="${esc(CASE_ID)}"><div><h1>Form draft</h1><p>${esc(f.form_name)}. Review the details with the applicant before completing the official form.</p></div>
     ${landlord && !USE_MOCK ? `<button class="btn" type="button" data-action="download-form-draft"${S.draftSaves?.downloading ? " disabled" : ""}>Download draft PDF</button>` : ""}
     </div>
+    <div id="draft-save-notice">${draftSaveNotice()}</div>
     <div class="note warn"><span class="note-ico">!</span><span>${esc(f.disclaimer)}</span></div>
     ${partySections ? `<h2 class="section-h">Parties and premises (Form J F1)</h2>${partySections}` : ""}
     ${leaseRows ? `<h2 class="section-h">Lease information (Form J F2)</h2>
@@ -1818,6 +1830,7 @@ function viewPackage() {
   // Same two reasons, same words, as the server's 409 (services/package.py).
   const noAnalysis = !doneRun ? "No analysis has been completed for this case yet. Run the analysis first." : !acceptedN ? "No timeline events have been accepted yet. Review the timeline first." : null;
   const ready = !noAnalysis && !st.blocking && !st.reqMissing && ik.tenant_attested_genuine;
+  const draftBlock = draftPackageBlock();
   // #93: say how many events the build will leave out, before the caseworker clicks Build.
   const unreviewed = st.total - st.reviewed;
   const allAttest = Object.values(S.attest).every(Boolean);
@@ -1855,7 +1868,8 @@ function viewPackage() {
     ${S.pkgError ? `<div class="note bad"><span class="note-ico">×</span><span>${esc(S.pkgError)}</span></div>` : ""}
     ${analysisNote(S.run)}
     ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
-    <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
+    ${draftBlock ? `<div class="note warn" role="status"><span class="note-ico">!</span><span>${draftBlock} <a href="#form">Go to Form draft</a>.</span></div>` : ""}
+    <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest && !draftBlock ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint && !draftBlock ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
     ${latest ? packageResult(latest) : ""}
     ${manifest}
     <h2 class="section-h">Audit log</h2>
@@ -1978,7 +1992,11 @@ function render() {
     const mode = formRefreshMode({ focused: !!focused, composing: formComposing, downloading: !!saves?.downloading,
       unsaved: !!(saves?.pending.size || saves?.failed.size || saves?.invalid.size) });
     formRenderDeferred = mode === "after-composition";
-    if (mode === "skip" || mode === "after-composition") return;
+    if (mode === "skip" || mode === "after-composition") {
+      const notice = $("#draft-save-notice");
+      if (notice) notice.innerHTML = draftSaveNotice();
+      return;
+    }
     // A focused text field missing from the new view keeps the old view, so its text is not lost.
     if (mode === "keep-focus" && (renderAroundFocus(view, focused, banner + VIEWS[r]()) || editing)) return;
   }
@@ -1997,7 +2015,13 @@ function writeCaseToUrl(id) {
   if (url.href !== location.href) history.replaceState(history.state, "", url);
 }
 /* caseInUrl:end */
-const setCase = id => { CASE_ID = id; C = `/cases/${id}`; writeCaseToUrl(id); };
+const setCase = id => {
+  CASE_ID = id;
+  C = `/cases/${id}`;
+  S.draftSaves = tenantDraftSavesByCase.get(id) ?? null;
+  tenantDraftSavesByCase.delete(id);
+  writeCaseToUrl(id);
+};
 // The server returns the raw link only from POST /intake-link, so a caseworker can preview
 // the tenant view only after sending a link in this session.
 const tokenOf = url => (url ? url.split("/").pop() : null);
@@ -2030,6 +2054,8 @@ const CASELESS_LOADERS = ["me", "cases"];
 // If the selected case is gone (404), forget it and go back to the caseload instead of an empty shell.
 async function dropCase(why) {
   stopRunPolling();
+  tenantDraftSavesByCase.delete(CASE_ID);
+  S.draftSaves = null;
   CASE_ID = null; C = ""; writeCaseToUrl(null); S.case = null; S.evidence = []; S.privacy = null; S.run = null; S.timeline = []; S.gaps = []; S.sources = []; S.form = null; S.activity = []; S.pkg = null;
   S.intake.view = null; S.lastLink = null;
   location.hash = "cases";
@@ -2182,18 +2208,39 @@ document.addEventListener("compositionend", () => {
 });
 
 function draftSaveState() {
-  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), downloading: false };
+  return S.draftSaves ??= { pending: new Map(), confirmed: new Map(), failed: new Set(), invalid: new Set(), attempted: new Map(), downloading: false };
+}
+
+// #204: retain tenant edits across navigation within a case and keep stale drafts out of new packages.
+function draftFieldValue(field) {
+  return (!landlordApplication() ? S.draftSaves?.attempted.get(field.key) : undefined) ?? field.value ?? "";
+}
+
+function draftProblemLabels() {
+  const state = S.draftSaves;
+  if (!state || !S.form) return [];
+  const fields = new Map(S.form.fields.map(field => [field.key, field]));
+  return [...new Set([...state.failed, ...state.invalid])]
+    .filter(key => fields.has(key) && formFieldApplies(key, fields, false))
+    .map(key => fields.get(key).label);
+}
+
+function draftSaveNotice() {
+  if (landlordApplication()) return "";
+  const labels = draftProblemLabels();
+  return labels.length ? `<div class="note warn" role="status">Unsaved changes: ${esc(labels.join(", "))}. Correct invalid values or revisit the field and leave it to retry.</div>` : "";
+}
+
+function draftPackageBlock() {
+  if (S.draftSaves?.pending.size) return "Wait for the draft to finish saving before building.";
+  if (draftProblemLabels().length) return "Resolve unsaved draft changes before building.";
+  return "";
 }
 
 async function saveDraftField(key, value) {
   const path = `${C}/form-draft/fields/${key}`;
-  if (!landlordApplication()) {
-    await request("PATCH", path, { value });
-    await refresh(["form", "gaps"]);
-    return;
-  }
-
   const state = draftSaveState();
+  state.attempted.set(key, value);
   const previous = state.pending.get(key);
   const save = (async () => {
     // Preserve edit order if the same field is changed again while a save is pending.
@@ -2205,12 +2252,16 @@ async function saveDraftField(key, value) {
   try {
     await save;
     state.confirmed.set(key, value);
-    if (state.pending.get(key) === entry) state.failed.delete(key);
+    if (state.pending.get(key) === entry) {
+      state.failed.delete(key);
+      if (!state.invalid.has(key)) state.attempted.delete(key);
+    }
   } catch (error) {
     if (state.pending.get(key) === entry) state.failed.add(key);
     throw error;
   } finally {
     if (state.pending.get(key) === entry) state.pending.delete(key);
+    if (S.draftSaves === state && state.failed.has(key) && !landlordApplication()) render();
   }
   if (S.draftSaves === state) await refresh(["form", "gaps"]);
 }
@@ -2219,12 +2270,14 @@ async function saveDraftControl(input) {
   const { key } = input.dataset;
   const value = input.type === "checkbox" ? (input.checked ? input.value : "") : input.value.trim();
   const saved = S.form.fields.find(field => field.key === key)?.value;
-  const state = landlordApplication() ? draftSaveState() : null;
+  const state = draftSaveState();
   if (!input.reportValidity() || !validCaseField(key, value, saved)) {
-    state?.invalid.add(key);
+    state.invalid.add(key);
+    state.attempted.set(key, value);
+    if (!landlordApplication()) render();
     return;
   }
-  state?.invalid.delete(key);
+  state.invalid.delete(key);
   await saveDraftField(key, value);
 }
 
@@ -2377,6 +2430,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "send-request") return sendDraft(id);
   if (a === "gap") { const st = b.dataset.status; await request("PATCH", `/gaps/${id}`, { status: st, resolution_note: st === "resolved" ? "Marked done" : st === "dismissed" ? "Dismissed by caseworker" : null }); await refresh(["gaps", "form", "intake"]); }
   if (a === "build") {
+    if (draftPackageBlock()) return render();
     let built = false;
     try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; toast(`Package v${S.pkg.version} built`); }
     catch (err) { S.pkgError = err.status === 409 ? `Can't build yet: ${err.message}.` : err.message; }
@@ -2468,6 +2522,7 @@ document.addEventListener("submit", guarded(async ev => {
 }));
 document.addEventListener("input", ev => {
   const t = ev.target;
+  if (t.dataset?.draftReenterDate !== undefined) delete t.dataset.draftReenterDate;
   if (!t.dataset || t.dataset.action !== "intake-answer") return;
   S.intake.answers = S.intake.answers || {};
   S.intake.answers[t.dataset.id] = t.value;
@@ -2482,22 +2537,28 @@ document.addEventListener("focusout", guarded(async ev => {
   const input = ev.target;
   const { action, key } = input.dataset;
   if (input.contains(ev.relatedTarget)) return;
-  const state = landlordApplication() ? S.draftSaves : null;
+  const state = S.draftSaves;
   if (action === "field" && (state?.failed.has(key) || state?.invalid.has(key))
       && !state.pending.has(key)) {
     return saveDraftControl(input);
   }
-  if (action !== "date-field") return;
-  const dateState = landlordApplication() ? draftSaveState() : null;
+  if (action !== "date-field" || input.dataset.draftReenterDate !== undefined) return;
+  const dateState = draftSaveState();
   if (!input.reportValidity()) {
-    dateState?.invalid.add(key);
+    dateState.invalid.add(key);
+    dateState.attempted.set(key, input.value);
+    if (!landlordApplication()) render();
     return;
   }
-  dateState?.invalid.delete(key);
-  const pending = dateState?.pending.get(key);
-  const saved = pending?.value ?? dateState?.confirmed.get(key) ?? input.defaultValue;
+  dateState.invalid.delete(key);
+  const pending = dateState.pending.get(key);
+  const saved = pending?.value ?? dateState.confirmed.get(key) ?? input.defaultValue;
+  if (dateState.failed.has(key) && !pending) return saveDraftField(key, input.value);
   if (input.value === saved) {
-    if (!pending) dateState?.failed.delete(key);
+    if (!pending) dateState.attempted.delete(key);
+    if (!landlordApplication() && route() === "form" && $("#draft-save-notice")) {
+      $("#draft-save-notice").innerHTML = draftSaveNotice();
+    }
     return;
   }
   await saveDraftField(key, input.value);
