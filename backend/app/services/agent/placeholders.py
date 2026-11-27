@@ -194,6 +194,19 @@ class PlaceholderProvider:
             raise AttributeError(name)
         return getattr(self.inner, name)
 
+    def snapshot(self) -> dict[str, Any]:
+        """The numbering and what the model wrote, as JSON, to save with a run (#163, #164)."""
+        return {
+            **self.placeholders.snapshot(),
+            "sent": {"text": dict(self._sent_text), "inputs": dict(self._sent_inputs)},
+        }
+
+    def restore(self, saved: dict[str, Any]) -> None:
+        self.placeholders.restore(saved)
+        sent = saved.get("sent") or {}
+        self._sent_text.update(sent.get("text") or {})
+        self._sent_inputs.update(sent.get("inputs") or {})
+
     def _hide_content(self, role: str, content: str | list[dict[str, Any]]) -> Any:
         """One message's content with personal details swapped. What the model itself wrote goes
         back as it wrote it: `reveal` puts the real value in, and a placeholder written against

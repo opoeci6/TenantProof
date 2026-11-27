@@ -111,6 +111,7 @@ main{min-width:0;display:flex;flex-direction:column;gap:20px}
 /* #90: the built package, right under the Build button */
 .btn.big{padding:11px 20px;font-size:15px}
 .pkg-result{display:grid;gap:12px;justify-items:start;border-color:var(--ok)}
+.pkg-result.is-stale{border-color:var(--warn)}
 .pkg-result h2{margin:0;font-size:16px}
 .pkg-result p{margin:0}
 .pkg-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:0;width:100%;font-size:13.5px}
@@ -508,7 +509,7 @@ const ENDPOINTS = {
   timeline: ["GET /cases/{id}/timeline", "PATCH /timeline/{event_id}"],
   gaps: ["GET /cases/{id}/gaps", "PATCH /gaps/{gap_id}", "POST /gaps/{gap_id}/tenant-request", "POST /gaps/{gap_id}/tenant-request/translate", "POST /cases/{id}/translate-excerpt", "GET /cases/{id}/sources"],
   form: ["GET /cases/{id}/form-draft", "PATCH /cases/{id}/form-draft/fields/{key}", "GET /cases/{id}/form-draft/pdf"],
-  package: ["POST /cases/{id}/package", "GET /cases/{id}/activity"],
+  package: ["POST /cases/{id}/package", "GET /cases/{id}/package", "GET /cases/{id}/package/download", "GET /cases/{id}/package/files/{filename}", "GET /cases/{id}/activity"],
   intake: ["GET /intake/{token}", "POST /intake/{token}/files (multipart)", "POST /intake/{token}/submit"]
 };
 
@@ -724,7 +725,7 @@ const db = JSON.parse(JSON.stringify(SEED));
 for (const [key, field] of Object.entries(fieldControls)) {
   if (field.label && !key.startsWith("landlord_request_")) db.fields.push({ key, label: field.label, value: null, required: false, status: "missing", sources: [] });
 }
-db.runs = {}; db.intakeRequests = []; let runCounter = 0;
+db.runs = {}; db.intakeRequests = []; db.packages = []; let runCounter = 0;  // #200: built packages, newest last
 const log = (actor, action) => db.activity.unshift({ at: new Date().toISOString(), actor, actor_name: actor === "agent" ? "TenantProof agent" : actor === "tenant" ? db.case.tenant.name : ME.name, action });
 
 const RUN_SCRIPT = [
@@ -838,7 +839,10 @@ function mockRoute(method, path, body) {
     const e = db.timeline.find(x => x.id === m[1]); Object.assign(e, body);
     e.reviewed_by = e.review_status === "pending" ? null : ME.name;
     db.timeline.sort((a, b) => (a.date.value || "9").localeCompare(b.date.value || "9"));
-    log("caseworker", { accepted: "Accepted", edited: "Edited", rejected: "Rejected", pending: "Reopened" }[e.review_status] + ` event “${e.title}”` + (body.caseworker_note ? " and added a note" : ""));
+    // A note on its own is "Noted on", as the server says (services/review.py), and never a change
+    // to what the package would contain (#201).
+    const verb = body.review_status ? { accepted: "Accepted", edited: "Edited", rejected: "Rejected", pending: "Reopened" }[e.review_status] : "Noted on";
+    log("caseworker", `${verb} ${body.review_status ? "event" : "timeline event:"} “${e.title}”` + (body.caseworker_note ? " and added a note" : ""));
     return clone(e);
   }
   if (method === "GET" && path === `${C}/gaps`) return clone(db.gaps);
@@ -886,6 +890,11 @@ function mockRoute(method, path, body) {
     return clone(f);
   }
   if (method === "GET" && path === `${C}/activity`) return clone(db.activity);
+  if (method === "GET" && (m = path.match(/^\/cases\/[^/]+\/package(?:\?version=(\d+))?$/))) {  /* #200 */
+    const wanted = m[1] ? db.packages.find(p => p.version === Number(m[1])) : db.packages[db.packages.length - 1];
+    if (!wanted) throw Object.assign(new Error("Package not found"), { status: 404 });
+    return clone(wanted);
+  }
   if (method === "POST" && path === `${C}/package`) {
     const open = db.gaps.filter(g => g.severity === "blocking" && isOpen(g));
     if (open.length) throw Object.assign(new Error(`${plural(open.length, "required item")} still open`), { status: 409 });
@@ -894,9 +903,13 @@ function mockRoute(method, path, body) {
     if (!a.reviewed_fields || !a.remedy_confirmed_with_tenant || !a.explained_not_legal_advice) throw Object.assign(new Error("All caseworker confirmations are required"), { status: 400 });
     const files = db.evidence.filter(e => e.format_check.accepted).map(e => ({ label: e.label, filename: e.format_check.action === "converted" ? e.filename.replace(/\.(heic|heif)$/i, ".jpg") : e.format_check.action === "will_export_pdf" ? e.filename.replace(/\.\w+$/, ".pdf") : e.filename, sha256: e.sha256, note: e.format_check.action === "converted" ? "Converted from HEIC" : e.format_check.action === "will_export_pdf" ? "Exported to PDF" : (e.kind === "photo" && e.metadata.software ? "Saved by editing app" : e.kind === "photo" && !e.metadata.captured_at ? "No capture metadata" : "") }));
     files.unshift({ label: "—", filename: "application_draft.pdf", sha256: "generated at build time", note: "Form fields + narrative" }, { label: "—", filename: "evidence_manifest.pdf", sha256: "generated at build time", note: "SHA-256, receipt time and uploader of every file" });
-    log("caseworker", "Built the filing package");
-    db.pkgVersion = (db.pkgVersion || 0) + 1;  // #90: each build is a new version, as on the server
-    return { version: db.pkgVersion, sha256: "generated at build time", built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+    const version = (db.pkgVersion || 0) + 1;  // #90: each build is a new version, as on the server
+    const pkg = { version, sha256: String(version).padStart(64, "0"), built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
+    db.pkgVersion = version;
+    db.packages.push(pkg);  // #200: GET /cases/{id}/package reads it back after a reload
+    // #199: the line the page reads versions from, as the server writes it.
+    log("caseworker", `Built filing package v${version} (sha256 ${pkg.sha256})`);
+    return clone(pkg);
   }
   if (method === "GET" && path === `/intake/${INTAKE_TOKEN}`) return clone({ org_name: ORG.name, tenant_first_name: db.case.tenant.name.split(" ")[0], unit: "Unit 4B, 100 Example Street", language: db.case.tenant.preferred_language, requests: db.intakeRequests });
   if (method === "POST" && path === `/intake/${INTAKE_TOKEN}/submit`) {
@@ -1014,9 +1027,27 @@ function formFieldCounts(fields) {
 // #177: a blocking gap the tenant was asked about is still blocking, but it is not also "still
 // open": the page counts those two apart so one gap is never counted twice.
 const openBlocking = st => st.blocking - (st.blockingWaiting || 0);
-function railMeta(st, evidenceCount, landlord = false) {
+// #198: what the Evidence rail says. A mixed case says how many files each side added, and a case
+// with no files says "0 files" rather than "0 files · from tenant". A caller may pass a count
+// instead of the list (mock data or a case that has not loaded yet).
+function evidenceMeta(evidence, landlord = false) {
+  if (typeof evidence === "number") {
+    return landlord ? `${plural(evidence, "file")} · caseworker uploads` : plural(evidence, "file");
+  }
+  const list = Array.isArray(evidence) ? evidence : [];
+  const n = list.length;
+  if (landlord) return `${plural(n, "file")} · caseworker uploads`;
+  if (n === 0) return plural(0, "file");
+  const tenant = list.filter(e => e.uploaded_by === "tenant").length;
+  const caseworker = list.filter(e => e.uploaded_by === "caseworker").length;
+  if (tenant === n) return `${plural(n, "file")} · from tenant`;
+  if (caseworker === n) return `${plural(n, "file")} · added by caseworker`;
+  if (tenant > 0 && caseworker > 0) return `${plural(n, "file")} · ${tenant} tenant, ${caseworker} caseworker`;
+  return plural(n, "file");
+}
+function railMeta(st, evidence, landlord = false) {
   return {
-    evidence: `${plural(evidenceCount, "file")} · ${landlord ? "caseworker uploads" : "from tenant"}`,
+    evidence: evidenceMeta(evidence, landlord),
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
     gaps: st.gaps === 0 ? NOTHING : openBlocking(st) ? `${openBlocking(st)} required open` : st.blockingWaiting ? `${st.blockingWaiting} waiting for tenant` : plural(st.recommended, "suggestion"),
     form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
@@ -1058,13 +1089,63 @@ const costNote = u => u.est_cost_usd == null
 // #90: the case's newest package. No endpoint lists packages, so after a reload the audit line the
 // server writes for each build (services/package.py) is what the page knows about them.
 const PACKAGE_BUILT = /^Built filing package v(\d+) \(sha256 ([0-9a-f]{64})\)$/;
-function latestPackage(pkg, activity) {
-  let latest = pkg ? { version: pkg.version, sha256: pkg.sha256, built_by: pkg.prepared_by, built_at: pkg.built_at } : null;
-  for (const a of activity) {
+// #199: every version the page knows about, newest first. Each build's audit line is one, and
+// `pkg` is the version just built or read back; when both name a version, `pkg` has the details.
+function packageVersions(pkg, activity) {
+  const byVersion = new Map();
+  if (pkg) byVersion.set(pkg.version, { version: pkg.version, sha256: pkg.sha256, built_by: pkg.prepared_by, built_at: pkg.built_at });
+  for (const a of Array.isArray(activity) ? activity : []) {
     const m = a.actor === "caseworker" && PACKAGE_BUILT.exec(a.action);
-    if (m && (!latest || Number(m[1]) > latest.version)) latest = { version: Number(m[1]), sha256: m[2], built_by: a.actor_name, built_at: a.at };
+    if (m && !byVersion.has(Number(m[1]))) {
+      byVersion.set(Number(m[1]), { version: Number(m[1]), sha256: m[2], built_by: a.actor_name, built_at: a.at });
+    }
   }
-  return latest;
+  return [...byVersion.values()].sort((a, b) => b.version - a.version);
+}
+function latestPackage(pkg, activity) {
+  return packageVersions(pkg, activity)[0] || null;
+}
+// One place for the zip address, so the result panel and the earlier versions cannot drift.
+const packageDownloadUrl = version => `${API_BASE}${C}/package/download?version=${version}`;
+// #201: does this activity line change what a built package would contain? Internal notes, requests
+// to the tenant, intake links, translations, privacy choices, source checks, dismissals and the
+// build itself never reach the zip, so they do not make a built version out of date.
+const NOT_PACKAGE_CHANGES = [
+  /^Noted on timeline event:/,
+  /^(?:Sent|Edited|Approved and sent) (?:a|the) request to the tenant:/,
+  /^(?:Created|Sent|Re-sent) the intake link/,
+  /^Translated a quoted source/,
+  /^(?:Hid|Let|Undid) a personal[- ]detail/,
+  /^Checked the official sources:/,
+  /^(?:Dismissed item:|Marked waiting on tenant)/,
+  /^(?:Built filing package v|Built the filing package)/,
+  /^(?:Started|Closed|Paused) run_/,
+  /^Answered the agent's question/,
+];
+const PACKAGE_CHANGES = [
+  /^(?:Edited form field:|Updated form field\b|Drafted form field\b|Added the \d+ Form J fields\b)/,
+  /^(?:Resolved item:|Reopened item:|Resolved “|Reopened “|Confirmed the files are genuine)/,
+  /^(?:Accepted|Edited|Rejected|Reset|Reopened) (?:timeline )?event\b/,
+  /^(?:Uploaded |Added \d+ files?\b)/,
+  /^(?:Finished run_|Removed \d+ unreviewed\b|Extracted facts:)/,
+  // services/evidence/ingest.py: the tenant's confirmation no longer covers the case.
+  /^New files arrived after the confirmation\b/,
+];
+function isPackageChangeAction(action) {
+  const text = String(action || "");
+  if (NOT_PACKAGE_CHANGES.some(pattern => pattern.test(text))) return false;
+  return PACKAGE_CHANGES.some(pattern => pattern.test(text));
+}
+// #201: what changed after `latest` was built, newest first as the activity log is. A line with the
+// same timestamp as the build is older only when it sits further down the list.
+function packageChangesAfter(latest, activity) {
+  if (!latest || !Array.isArray(activity)) return [];
+  const buildIdx = activity.findIndex(a => a.actor === "caseworker" && PACKAGE_BUILT.test(a.action)
+    && Number(PACKAGE_BUILT.exec(a.action)[1]) === latest.version);
+  const buildAt = buildIdx >= 0 ? activity[buildIdx].at : latest.built_at;
+  const buildMs = Date.parse(buildAt);
+  return activity.filter((a, i) => isPackageChangeAction(a.action)
+    && (Date.parse(a.at) > buildMs || (buildIdx >= 0 && Date.parse(a.at) === buildMs && i < buildIdx)));
 }
 const buildButton = latest => latest
   ? { label: "Build a new version", hint: `This makes v${latest.version + 1}. v${latest.version} stays available.` }
@@ -1344,14 +1425,17 @@ function renderChrome() {
     : `<strong>${esc(S.me ? S.me.org.name : "")}</strong><span>${S.me ? `Signed in as ${esc(S.me.name)}, caseworker` : ""}</span>`;
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
-  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length, landlordApplication());
+  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence, landlordApplication());
+  // #201: the rail says so when the case changed after the latest build.
+  const latestPkg = latestPackage(S.pkg, S.activity);
+  const pkgStale = !!(latestPkg && packageChangesAfter(latestPkg, S.activity).length);
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
     { id: "timeline", name: "Review timeline", meta: rm.timeline, done: rm.doneTimeline, attn: st.reviewed < st.total },
     { id: "gaps", name: "Missing info", meta: rm.gaps, done: rm.doneGaps, attn: st.blocking > 0 },
     { id: "form", name: "Form draft", meta: rm.form, done: rm.doneForm, attn: st.reqMissing > 0 },
-    { id: "package", name: "Package", meta: latestPackage(S.pkg, S.activity) ? "Built" : "Not built", done: !!latestPackage(S.pkg, S.activity) }
+    { id: "package", name: "Package", meta: !latestPkg ? "Not built" : pkgStale ? "Out of date" : "Built", done: !!latestPkg && !pkgStale, attn: pkgStale }
   ];
   $("#rail").innerHTML = `<a class="rail-back" href="#cases">← Caseload</a><div class="rail-label">Case workflow</div>` + items.filter(it => !landlordApplication() || ["evidence", "form"].includes(it.id)).map((it, i) => `<a class="step-link${it.done ? " is-done" : it.attn ? " is-attn" : ""}" href="#${it.id}" ${r === it.id ? 'aria-current="page"' : ""}><span class="step-no">${it.done ? "✓" : i + 1}</span><span class="step-name">${it.name}</span><span class="step-meta">${esc(it.meta)}</span></a>`).join("")
     + (landlordApplication() ? "" : `<div class="rail-label rail-sub">Tenant</div><a class="step-link" href="#intake" ${r === "intake" ? 'aria-current="page"' : ""}><span class="step-no" aria-hidden="true">↗</span><span class="step-name">Tenant view</span><span class="step-meta">${esc(INTAKE_STATUS[c ? c.intake.status : ""] || "")}</span></a>`);
@@ -1805,12 +1889,16 @@ function viewForm() {
     ${contract("form", f)}`;
 }
 
-/* #90: the result of a build, under the Build button */
-function packageResult(p) {
+/* #90: the result of a build, under the Build button. #201: it says so when the case changed after
+   that version was built, and keeps the zip as it is. */
+function packageResult(p, changes = packageChangesAfter(p, S.activity)) {
   const zip = `Download the zip (v${p.version})`;
-  return `<section class="panel panel-pad pkg-result" id="pkg-result" aria-label="Built package">
-    <h2>Package v${p.version} is ready</h2>
-    ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${API_BASE}${C}/package/download?version=${p.version}" download>${zip}</a>`}
+  const stale = changes.length > 0;
+  const changed = changes.slice(0, 2).map(a => stripRunIds(a.action)).join("; ");
+  return `<section class="panel panel-pad pkg-result${stale ? " is-stale" : ""}" id="pkg-result" aria-label="Built package">
+    <h2>Package v${p.version} is ${stale ? "out of date" : "ready"}</h2>
+    ${stale ? `<div class="note warn" role="status"><span class="note-ico">!</span><span>The case changed after v${p.version} was built (${esc(changed)}${changes.length > 2 ? `; +${changes.length - 2} more` : ""}). The v${p.version} zip stays unchanged for your records; build a new version to include the latest changes.</span></div>` : ""}
+    ${USE_MOCK ? `<button class="btn ${stale ? "" : "primary "}big" type="button" disabled>${zip}</button>` : `<a class="btn ${stale ? "" : "primary "}big" id="pkg-download" href="${packageDownloadUrl(p.version)}" download>${zip}</a>`}
     <dl class="pkg-meta"><dt>Version</dt><dd>v${p.version}</dd><dt>Built by</dt><dd>${esc(p.built_by)}</dd><dt>Built</dt><dd>${fmtTime(p.built_at)}</dd><dt>SHA-256</dt><dd class="mono">${esc(p.sha256)}</dd></dl>
     <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records. The Program does not accept zip files: in the real app, each file can be downloaded from the table below and uploaded on its own." : "The zip is for your records. The Program does not accept zip files: download each file from the table below and upload it on its own."}</p></section>`;
 }
@@ -1825,6 +1913,10 @@ function showPackageResult() {
 function viewPackage() {
   const st = stats(), ik = S.case.intake;
   const latest = latestPackage(S.pkg, S.activity), build = buildButton(latest);
+  // #201: the case changed after the latest build, so the panel says it is out of date.
+  const stale = latest ? packageChangesAfter(latest, S.activity).length > 0 : false;
+  // #199: the versions kept for the record, newest first. The latest is what the panel above shows.
+  const earlier = packageVersions(S.pkg, S.activity).slice(1);
   const doneRun = S.run && ["done", "needs_review"].includes(S.run.status) && S.run.finished_at;
   const acceptedN = S.timeline.filter(e => ["accepted", "edited"].includes(e.review_status)).length;
   // Same two reasons, same words, as the server's 409 (services/package.py).
@@ -1849,10 +1941,16 @@ function viewPackage() {
     const path = r.filename.split("/").map(encodeURIComponent).join("/");
     return `<a href="${API_BASE}${C}/package/files/${path}?version=${S.pkg.version}" download>${esc(r.filename)}</a>`;
   };
-  const manifest = S.pkg ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
+  // #200: the ZIP panel and the contents table always describe the same version.
+  const manifest = S.pkg && latest && S.pkg.version === latest.version ? `<h2 class="section-h">Package contents (v${S.pkg.version})</h2>
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${fileCell(r)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
     ${unreadableLeftOut(S.pkg)}
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
+  // #199: every version still kept, each with its own zip. Mock mode has no real zip to fetch.
+  const earlierSection = earlier.length ? `<h2 class="section-h">Earlier versions</h2>
+    <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Version</th><th>Built</th><th>Built by</th><th>SHA-256</th><th><span aria-hidden="true"></span></th></tr></thead><tbody>${earlier.map(v => `<tr>
+      <td>v${v.version}</td><td>${esc(fmtTime(v.built_at))}</td><td>${esc(v.built_by)}</td><td class="mono" title="${esc(v.sha256)}">${esc(v.sha256.slice(0, 12))}…</td>
+      <td>${USE_MOCK ? `<button class="btn small" type="button" disabled>Download zip (v${v.version})</button>` : `<a class="btn small" href="${packageDownloadUrl(v.version)}" download>Download zip (v${v.version})</a>`}</td></tr>`).join("")}</tbody></table></div>` : "";
   return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>
     <div class="panel panel-pad"><ul class="checklist">
       <li>${ck(!noAnalysis)}<span>Analysis: ${noAnalysis ? `<a href="${doneRun ? "#timeline" : "#run"}">${esc(noAnalysis)}</a>` : "done, with accepted events"}</span></li>
@@ -1869,9 +1967,10 @@ function viewPackage() {
     ${analysisNote(S.run)}
     ${unreviewed ? `<div class="note warn"><span class="note-ico">!</span><span>${unreviewed === 1 ? "1 timeline event is not reviewed and is left out of the application draft" : `${unreviewed} timeline events are not reviewed and are left out of the application draft`}. <a href="#timeline">Review the timeline</a>.</span></div>` : ""}
     ${draftBlock ? `<div class="note warn" role="status"><span class="note-ico">!</span><span>${draftBlock} <a href="#form">Go to Form draft</a>.</span></div>` : ""}
-    <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest && !draftBlock ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint && !draftBlock ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
+    <div class="btn-row"><button class="btn${!latest || stale ? " primary" : ""}" data-action="build" ${ready && allAttest && !draftBlock ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint && !draftBlock ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
     ${latest ? packageResult(latest) : ""}
     ${manifest}
+    ${earlierSection}
     <h2 class="section-h">Audit log</h2>
     <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(stripRunIds(a.action))}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
     ${contract("package", { request: { attestations: S.attest }, response: S.pkg, activity: S.activity })}`;
@@ -2042,6 +2141,18 @@ const LOADERS = {
   sources: () => request("GET", `${C}/sources`).then(d => S.sources = d),
   form: () => request("GET", `${C}/form-draft`).then(d => S.form = d),
   activity: () => request("GET", `${C}/activity`).then(d => S.activity = d),
+  // #200: the built package, so a reload or a case switch keeps its contents and file links.
+  // 404 (nothing built yet) and 409 (a landlord case) mean "no package", not a failed load.
+  pkg: async () => {
+    const caseId = CASE_ID;
+    try {
+      const pkg = await request("GET", `${C}/package`);
+      if (CASE_ID === caseId) S.pkg = pkg;
+    } catch (err) {
+      if (err && (err.status === 404 || err.status === 409)) { if (CASE_ID === caseId) S.pkg = null; }
+      else throw err;
+    }
+  },
   // A revoked or expired link is a 404 here; for the caseworker that means "send a new link", not "case gone".
   // For the tenant, a 404 is a wrong, expired or replaced link: say so on the page, not only in a toast.
   intake: async () => { const tok = intakeTok(); try { S.intake.view = tok ? await request("GET", `/intake/${tok}`) : { noLink: true }; } catch (err) {
