@@ -148,6 +148,77 @@ def test_stopped_replies_never_expose_executable_tool_calls(finish, extra, stop_
     assert all(block["type"] != "tool_use" for block in result.content)
 
 
+def test_stop_with_tool_calls_is_accepted() -> None:
+    """Gemini's compatibility endpoint reports "stop" for a function-call turn."""
+    provider = adapter(lambda _: response({
+        "content": None, "tool_calls": [tool_call()],
+    }, "stop"))
+    result = asyncio.run(provider.complete(request()))
+    assert result.stop_reason == "tool_use"
+    assert [use.name for use in result.tool_uses] == ["record_fact"]
+
+
+def test_tool_calls_with_no_calls_still_fail_closed() -> None:
+    provider = adapter(lambda _: response({"content": "No calls."}, "tool_calls"))
+    with pytest.raises(llm.LLMCallError, match="unsupported completion state"):
+        asyncio.run(provider.complete(request()))
+
+
+def test_chat_output_tokens_are_capped_at_the_provider_safe_limit() -> None:
+    payloads: list[dict[str, Any]] = []
+
+    def handler(sent: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(sent.content))
+        return response({"content": "ok"})
+
+    asyncio.run(adapter(handler).complete(request()))
+    large = request().model_copy(update={"max_tokens": 16000})
+    asyncio.run(adapter(handler).complete(large))
+    assert chat.CHAT_MAX_OUTPUT_TOKENS == 8000
+    assert payloads[0]["max_completion_tokens"] == 1300  # below the cap: unchanged
+    assert payloads[1]["max_completion_tokens"] == chat.CHAT_MAX_OUTPUT_TOKENS
+
+
+def test_provider_status_error_carries_the_message_but_not_the_key() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={
+            "error": {"message": "max_tokens must be <= 8192", "type": "invalid_request_error"},
+        })
+
+    with pytest.raises(llm.LLMCallError) as err:
+        asyncio.run(adapter(handler).complete(request()))
+    text = str(err.value)
+    assert "Provider HTTP status 400" in text
+    assert "max_tokens must be <= 8192" in text
+    assert SECRET not in text
+
+
+def test_provider_status_error_scrubs_echoed_secret_even_at_truncation_edge() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={
+            "error": {"message": ("x" * 190) + f" bad key {SECRET}"},
+        })
+
+    with pytest.raises(llm.LLMCallError) as err:
+        asyncio.run(adapter(handler).complete(request()))
+    text = str(err.value)
+    assert "Provider HTTP status 400" in text
+    assert SECRET not in text
+    assert SECRET[:8] not in text
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_provider_auth_status_errors_never_echo_body(code: int) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(code, json={
+            "error": {"message": f"Incorrect API key provided: {SECRET[:6]}****{SECRET[-4:]}"},
+        })
+
+    with pytest.raises(llm.LLMCallError) as err:
+        asyncio.run(adapter(handler).complete(request()))
+    assert str(err.value) == f"Provider HTTP status {code}"
+
+
 @pytest.mark.parametrize("arguments", ['{"fact":', '["not a named arguments object"]'])
 def test_invalid_tool_arguments_fail_closed(arguments: str) -> None:
     provider = adapter(lambda _: response({
