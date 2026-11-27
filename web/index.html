@@ -903,7 +903,8 @@ function mockRoute(method, path, body) {
     const pkg = { version, sha256: String(version).padStart(64, "0"), built_at: new Date().toISOString(), prepared_by: `${ME.name}, ${ORG.name}`, files, reminders: ["Evidence must be received at least 5 days before the hearing date on the Notice of Hearing (Evidence Policy #42, Regulations s. 25A). Evidence sent by registered mail, express post or courier counts as received on the 3rd day after it is sent. E-mail counts as received the same day if sent before 4 p.m., and the next day if sent at or after 4 p.m.", "Submit text messages and emails digitally or printed. Don't forward them to the officer.", "Keep an exact copy of everything submitted."] };
     db.pkgVersion = version;
     db.packages.push(pkg);  // #200: GET /cases/{id}/package reads it back after a reload
-    log("caseworker", "Built the filing package");
+    // #199: the line the page reads versions from, as the server writes it.
+    log("caseworker", `Built filing package v${version} (sha256 ${pkg.sha256})`);
     return clone(pkg);
   }
   if (method === "GET" && path === `/intake/${INTAKE_TOKEN}`) return clone({ org_name: ORG.name, tenant_first_name: db.case.tenant.name.split(" ")[0], unit: "Unit 4B, 100 Example Street", language: db.case.tenant.preferred_language, requests: db.intakeRequests });
@@ -1084,14 +1085,24 @@ const costNote = u => u.est_cost_usd == null
 // #90: the case's newest package. No endpoint lists packages, so after a reload the audit line the
 // server writes for each build (services/package.py) is what the page knows about them.
 const PACKAGE_BUILT = /^Built filing package v(\d+) \(sha256 ([0-9a-f]{64})\)$/;
-function latestPackage(pkg, activity) {
-  let latest = pkg ? { version: pkg.version, sha256: pkg.sha256, built_by: pkg.prepared_by, built_at: pkg.built_at } : null;
-  for (const a of activity) {
+// #199: every version the page knows about, newest first. Each build's audit line is one, and
+// `pkg` is the version just built or read back; when both name a version, `pkg` has the details.
+function packageVersions(pkg, activity) {
+  const byVersion = new Map();
+  if (pkg) byVersion.set(pkg.version, { version: pkg.version, sha256: pkg.sha256, built_by: pkg.prepared_by, built_at: pkg.built_at });
+  for (const a of Array.isArray(activity) ? activity : []) {
     const m = a.actor === "caseworker" && PACKAGE_BUILT.exec(a.action);
-    if (m && (!latest || Number(m[1]) > latest.version)) latest = { version: Number(m[1]), sha256: m[2], built_by: a.actor_name, built_at: a.at };
+    if (m && !byVersion.has(Number(m[1]))) {
+      byVersion.set(Number(m[1]), { version: Number(m[1]), sha256: m[2], built_by: a.actor_name, built_at: a.at });
+    }
   }
-  return latest;
+  return [...byVersion.values()].sort((a, b) => b.version - a.version);
 }
+function latestPackage(pkg, activity) {
+  return packageVersions(pkg, activity)[0] || null;
+}
+// One place for the zip address, so the result panel and the earlier versions cannot drift.
+const packageDownloadUrl = version => `${API_BASE}${C}/package/download?version=${version}`;
 const buildButton = latest => latest
   ? { label: "Build a new version", hint: `This makes v${latest.version + 1}. v${latest.version} stays available.` }
   : { label: "Build package", hint: "" };
@@ -1824,7 +1835,7 @@ function packageResult(p) {
   const zip = `Download the zip (v${p.version})`;
   return `<section class="panel panel-pad pkg-result" id="pkg-result" aria-label="Built package">
     <h2>Package v${p.version} is ready</h2>
-    ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${API_BASE}${C}/package/download?version=${p.version}" download>${zip}</a>`}
+    ${USE_MOCK ? `<button class="btn primary big" type="button" disabled>${zip}</button>` : `<a class="btn primary big" id="pkg-download" href="${packageDownloadUrl(p.version)}" download>${zip}</a>`}
     <dl class="pkg-meta"><dt>Version</dt><dd>v${p.version}</dd><dt>Built by</dt><dd>${esc(p.built_by)}</dd><dt>Built</dt><dd>${fmtTime(p.built_at)}</dd><dt>SHA-256</dt><dd class="mono">${esc(p.sha256)}</dd></dl>
     <p class="muted">${USE_MOCK ? "In the real app this downloads as one zip, for the caseworker's records. The Program does not accept zip files: in the real app, each file can be downloaded from the table below and uploaded on its own." : "The zip is for your records. The Program does not accept zip files: download each file from the table below and upload it on its own."}</p></section>`;
 }
@@ -1839,6 +1850,8 @@ function showPackageResult() {
 function viewPackage() {
   const st = stats(), ik = S.case.intake;
   const latest = latestPackage(S.pkg, S.activity), build = buildButton(latest);
+  // #199: the versions kept for the record, newest first. The latest is what the panel above shows.
+  const earlier = packageVersions(S.pkg, S.activity).slice(1);
   const doneRun = S.run && ["done", "needs_review"].includes(S.run.status) && S.run.finished_at;
   const acceptedN = S.timeline.filter(e => ["accepted", "edited"].includes(e.review_status)).length;
   // Same two reasons, same words, as the server's 409 (services/package.py).
@@ -1867,6 +1880,11 @@ function viewPackage() {
     <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Exhibit</th><th>File</th><th>SHA-256</th><th>Note</th></tr></thead><tbody>${S.pkg.files.map(r => `<tr><td>${r.label === "—" ? "—" : `<span class="exhibit">${esc(r.label)}</span>`}</td><td>${fileCell(r)}</td><td class="mono">${esc(r.sha256.length === 64 ? r.sha256.slice(0, 16) + "…" : r.sha256)}</td><td>${esc(r.note)}</td></tr>`).join("")}</tbody></table></div>
     ${unreadableLeftOut(S.pkg)}
     <div class="panel panel-pad"><ul class="checklist">${S.pkg.reminders.map(r => `<li><span class="ck maybe">!</span>${esc(r)}</li>`).join("")}</ul></div>` : "";
+  // #199: every version still kept, each with its own zip. Mock mode has no real zip to fetch.
+  const earlierSection = earlier.length ? `<h2 class="section-h">Earlier versions</h2>
+    <div class="panel tbl-wrap"><table class="manifest"><thead><tr><th>Version</th><th>Built</th><th>Built by</th><th>SHA-256</th><th><span aria-hidden="true"></span></th></tr></thead><tbody>${earlier.map(v => `<tr>
+      <td>v${v.version}</td><td>${esc(fmtTime(v.built_at))}</td><td>${esc(v.built_by)}</td><td class="mono" title="${esc(v.sha256)}">${esc(v.sha256.slice(0, 12))}…</td>
+      <td>${USE_MOCK ? `<button class="btn small" type="button" disabled>Download zip (v${v.version})</button>` : `<a class="btn small" href="${packageDownloadUrl(v.version)}" download>Download zip (v${v.version})</a>`}</td></tr>`).join("")}</tbody></table></div>` : "";
   return `<div class="view-head"><div><h1>Package</h1><p>Bundle the form draft, the evidence and a fingerprint log for filing. The tenant or the clinic files it. TenantProof never submits anything.</p></div>${briefButton()}</div>
     <div class="panel panel-pad"><ul class="checklist">
       <li>${ck(!noAnalysis)}<span>Analysis: ${noAnalysis ? `<a href="${doneRun ? "#timeline" : "#run"}">${esc(noAnalysis)}</a>` : "done, with accepted events"}</span></li>
@@ -1885,6 +1903,7 @@ function viewPackage() {
     <div class="btn-row"><button class="btn${latest ? "" : " primary"}" data-action="build" ${ready && allAttest ? "" : "disabled"}>${build.label}</button>${!ready ? `<span class="muted">${esc(noAnalysis || "Resolve the required items first.")}</span>` : !allAttest ? `<span class="muted">Tick all three confirmations.</span>` : build.hint ? `<span class="muted">${esc(build.hint)}</span>` : ""}</div>
     ${latest ? packageResult(latest) : ""}
     ${manifest}
+    ${earlierSection}
     <h2 class="section-h">Audit log</h2>
     <ul class="panel log">${S.activity.map(a => `<li><time>${fmtTime(a.at)}</time><span class="who ${whoCls[a.actor]}">${esc(a.actor)}</span><span>${esc(stripRunIds(a.action))}${a.actor !== "agent" ? ` <span class="muted">· ${esc(a.actor_name)}</span>` : ""}</span></li>`).join("")}</ul>
     ${contract("package", { request: { attestations: S.attest }, response: S.pkg, activity: S.activity })}`;

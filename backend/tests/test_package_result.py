@@ -32,6 +32,10 @@ def latest(pkg: dict | None, activity: list[dict]) -> dict | None:
     return js(f"latestPackage({json.dumps(pkg)}, {json.dumps(activity)})")  # type: ignore[return-value]
 
 
+def versions(pkg: dict | None, activity: list[dict]) -> list[dict]:
+    return js(f"packageVersions({json.dumps(pkg)}, {json.dumps(activity)})")  # type: ignore[return-value]
+
+
 def test_no_package_yet() -> None:
     assert latest(None, []) is None
     assert js("buildButton(null)") == {"label": "Build package", "hint": ""}
@@ -94,3 +98,53 @@ def test_the_panel_sits_between_the_button_and_the_contents() -> None:
     panel = view.index("packageResult(latest)", button)
     assert button < panel < view.index("${manifest}", button)
     assert source.count("/package/download?version=") == 1  # one download link, in the panel
+
+
+# --- #199: every version kept, each with its own download --------------------------------
+
+
+def test_versions_are_newest_first_and_listed_once() -> None:
+    found = versions(None, [line(1, SHA_1), line(2), line(1, SHA_1)])
+    assert [v["version"] for v in found] == [2, 1]
+    assert found[0] == {"version": 2, "sha256": SHA_2, "built_by": "Jo Tran",
+                        "built_at": "2026-11-18T11:00:00Z"}
+
+
+def test_the_package_just_built_wins_over_its_audit_line() -> None:
+    pkg = {**PKG, "version": 1, "sha256": SHA_2, "prepared_by": "Sam Rivera"}
+    assert versions(pkg, [line(1, SHA_1)]) == [{
+        "version": 1, "sha256": SHA_2, "built_by": "Sam Rivera", "built_at": PKG["built_at"],
+    }]
+
+
+def test_a_version_only_the_audit_log_knows_is_kept() -> None:
+    assert versions(PKG, [line(2)]) == [
+        {"version": 2, "sha256": SHA_2, "built_by": "Jo Tran", "built_at": "2026-11-18T11:00:00Z"},
+        {"version": 1, "sha256": SHA_1, "built_by": "Sam Rivera", "built_at": PKG["built_at"]},
+    ]
+
+
+@pytest.mark.parametrize("entry", [
+    line(9, actor="agent"),
+    line(9, actor="tenant"),
+    {**line(9), "action": "Built filing package v9"},
+    {**line(9), "action": f"Built filing package v9 (sha256 {SHA_2}) and more"},
+    {**line(9), "action": "Built the filing package"},
+])
+def test_other_activity_is_not_a_version(entry: dict) -> None:
+    assert versions(None, [entry]) == []
+
+
+def test_no_package_is_no_versions() -> None:
+    assert versions(None, []) == []
+    assert latest(None, []) is None
+
+
+def test_the_page_lists_earlier_versions_with_their_own_download() -> None:
+    source = INDEX.read_text(encoding="utf-8")
+    view = source[source.index("function viewPackage()"):source.index("function reqHtml(")]
+    assert "const earlier = packageVersions(S.pkg, S.activity).slice(1);" in view
+    assert '<h2 class="section-h">Earlier versions</h2>' in view
+    assert "packageDownloadUrl(v.version)" in view
+    assert "packageDownloadUrl(p.version)" in source  # the result panel uses the same helper
+    assert source.count("/package/download?version=") == 1
