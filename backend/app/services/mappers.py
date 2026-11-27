@@ -200,7 +200,9 @@ def to_summary(
     return summary, sort_key(result.priority, result.days_to_deadline, blocking, pending)
 
 
-def to_case(case: CaseRow, assignee_name: str) -> Case:
+def to_case(
+    case: CaseRow, assignee_name: str, *, has_run: bool = False, has_package: bool = False
+) -> Case:
     return Case.model_validate(
         {
             "id": case.id,
@@ -213,6 +215,9 @@ def to_case(case: CaseRow, assignee_name: str) -> Case:
             "intake": to_intake(case).model_dump(),
             "created_at": iso_req(case.created_at),
             "synthetic": case.synthetic,
+            # #218: the page asks for a run or a package only when the case has one.
+            "has_run": has_run,
+            "has_package": has_package,
         }
     )
 

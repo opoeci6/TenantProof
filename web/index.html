@@ -830,7 +830,7 @@ function mockRoute(method, path, body) {
   if (method === "GET" && path === "/me") return clone(ME);
   if (method === "GET" && path === "/cases") return clone(caseload());
   if (method === "POST" && path === "/cases") return mockNewCase(body);  /* #41 */
-  if (method === "GET" && path === C) return clone(db.case);
+  if (method === "GET" && path === C) return clone({ ...db.case, has_run: !!db.latestRun, has_package: db.packages.length > 0 });  /* #218 */
   if (method === "POST" && path === `${C}/intake-link`) { db.case.intake.sent_at = new Date().toISOString(); log("caseworker", "Re-sent the intake link in Chinese (中文)"); return clone(db.case.intake); }
   if (method === "GET" && path === `${C}/evidence`) return clone(db.evidence);
   if (path.startsWith(`${C}/privacy`) || /\/model-text$/.test(path)) return mockPrivacy(method, path, body);  /* #60 */
@@ -2228,6 +2228,9 @@ const LOADERS = {
   privacy: () => request("GET", `${C}/privacy`).then(d => S.privacy = d).catch(() => S.privacy = null),  /* #60 */
   run: async () => {
     const caseId = CASE_ID;
+    // #218: a landlord case has no run and an empty case has nothing to read, so the page does
+    // not ask for one: no 404 the browser reports as a failed request. The endpoint is unchanged.
+    if (S.case && S.case.id === caseId && (S.case.applicant_role === "landlord" || S.case.has_run === false)) { S.run = null; return; }
     const run = await request("GET", `${C}/runs/latest`).catch(() => null);
     if (CASE_ID === caseId) S.run = run;
   },
@@ -2240,6 +2243,9 @@ const LOADERS = {
   // 404 (nothing built yet) and 409 (a landlord case) mean "no package", not a failed load.
   pkg: async () => {
     const caseId = CASE_ID;
+    // #218: same rule as the run: nothing built (or a landlord case) means no request at all,
+    // so the 404/409 that would follow never reaches the console.
+    if (S.case && S.case.id === caseId && (S.case.applicant_role === "landlord" || S.case.has_package === false)) { S.pkg = null; return; }
     try {
       const pkg = await request("GET", `${C}/package`);
       if (CASE_ID === caseId) S.pkg = pkg;
@@ -2283,7 +2289,16 @@ async function loadAndRender(parts) {
   const caseId = CASE_ID;
   let keys = TENANT_MODE ? ["intake"] : parts ? [...new Set([...parts, "activity", "cases"])] : Object.keys(LOADERS);
   if (!TENANT_MODE && !CASE_ID) keys = keys.filter(k => CASELESS_LOADERS.includes(k));
-  try { await Promise.all(keys.map(k => LOADERS[k]())); }
+  try {
+    // #218: the case says whether it has a run and a package, so it is read before either, and
+    // an empty or landlord case never asks for a run or a package it does not have.
+    if (keys.includes("case") && (keys.includes("run") || keys.includes("pkg"))) {
+      await Promise.all(keys.filter(k => k !== "run" && k !== "pkg").map(k => LOADERS[k]()));
+      if (CASE_ID === caseId) await Promise.all(keys.filter(k => k === "run" || k === "pkg").map(k => LOADERS[k]()));
+    } else {
+      await Promise.all(keys.map(k => LOADERS[k]()));
+    }
+  }
   catch (err) {
     if (err.status === 401 && !TENANT_MODE) return showLogin();
     // Not awaited: dropCase queues its own refresh, which runs once this one has finished.
@@ -2676,7 +2691,7 @@ document.addEventListener("click", guarded(async ev => {
     if (!validCaseField(key, value, saved)) return;
     return saveDraftField(key, value);
   }
-  if (a === "run") { S.run = await request("POST", `${C}/runs`); location.hash = "run"; render(); pollRun(); }
+  if (a === "run") { S.run = await request("POST", `${C}/runs`); if (S.case && S.case.id === CASE_ID) S.case.has_run = true; location.hash = "run"; render(); pollRun(); }
   if (a === "review") { await request("PATCH", `/timeline/${id}`, { review_status: b.dataset.status }); S.editing = null; await refresh(["timeline", "form"]); }
   if (a === "edit") { S.editing = id; render(); const el = document.getElementById("ed-desc-" + id); el && el.focus(); }
   if (a === "cancel-edit") { S.editing = null; render(); }
@@ -2698,7 +2713,7 @@ document.addEventListener("click", guarded(async ev => {
   if (a === "build") {
     if (draftPackageBlock()) return render();
     let built = false;
-    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; toast(`Package v${S.pkg.version} built`); }
+    try { S.pkg = await request("POST", `${C}/package`, { attestations: S.attest }); S.pkgError = null; built = true; if (S.case && S.case.id === CASE_ID) S.case.has_package = true; toast(`Package v${S.pkg.version} built`); }
     catch (err) { S.pkgError = err.status === 409 ? `Can't build yet: ${err.message}.` : err.message; }
     await refresh([]);
     if (built) showPackageResult();

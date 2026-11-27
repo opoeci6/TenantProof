@@ -2,12 +2,21 @@
 Fixture providers only, so nothing reaches the network."""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from sqlmodel import Session, select
 
 from app.main import api
-from app.models import ActivityRow, CaseRow, FormFieldRow, GapRow, IntakeTokenRow, RunRow
+from app.models import (
+    ActivityRow,
+    CaseRow,
+    FormFieldRow,
+    GapRow,
+    IntakeTokenRow,
+    PackageRow,
+    RunRow,
+)
 from app.routers import runs as runs_router
 from app.services import cases as cases_service
 from app.services.agent import llm
@@ -246,6 +255,28 @@ def test_every_page_of_an_empty_case_answers(fresh_db, client):
     assert client.get(base + "/evidence").json() == []
     assert client.get(base + "/form-draft").json()["fields"] == []
     assert client.get(base + "/runs/latest").status_code == 404  # API_CONTRACT: 404 if none
+
+
+def test_the_case_says_whether_it_has_a_run_and_a_package(fresh_db, client, session: Session):
+    """#218: the page reads these flags instead of asking for a run and a package it has not got.
+    The two endpoints keep their 404 answers for a caller that does ask."""
+    body = create(client)
+    base = f"{URL}/{body['id']}"
+    assert (body["has_run"], body["has_package"]) == (False, False)
+    assert client.get(f"{base}/runs/latest").status_code == 404
+    assert client.get(f"{base}/package").status_code == 404
+    session.add(RunRow(
+        id="run_flag", case_id=body["id"], status="running", started_at=datetime.now(UTC),
+    ))
+    session.add(PackageRow(
+        id="pkg_flag", case_id=body["id"], version=1, sha256="0" * 64, storage_key="blob",
+        size_bytes=1, prepared_by="Sam Rivera", attestations={},
+    ))
+    session.commit()
+    flags = client.get(base).json()
+    assert (flags["has_run"], flags["has_package"]) == (True, True)
+    assert client.get(f"{base}/runs/latest").status_code == 200
+    assert client.get(f"{base}/package").status_code == 200
 
 
 def test_the_intake_link_works_on_a_new_case(fresh_db, client):

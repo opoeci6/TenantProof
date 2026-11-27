@@ -13,6 +13,7 @@ from tests.node_support import node_json
 
 INDEX = Path(__file__).resolve().parents[2] / "web" / "index.html"
 CASE_IN_URL = re.compile(r"/\* caseInUrl:start.*?\*/(.*?)/\* caseInUrl:end \*/", re.S)
+RUN_POLLING = re.compile(r"/\* runPolling:start.*?\*/(.*?)/\* runPolling:end \*/", re.S)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 
@@ -121,3 +122,70 @@ def test_the_caseload_shows_the_missing_case_notice() -> None:
 ])
 def test_signing_out_leaves_the_page_without_the_case_or_the_hash(href: str, left: str) -> None:
     assert js(f"signOutUrl({json.dumps(href)})") == left
+
+
+# --------------------------------------------------------------------------- #218
+
+LOADERS_HARNESS = """
+let CASE_ID = "case-a", TENANT_MODE = false;
+const C = "/cases/case-a";
+const calls = [];
+const S = { run: "kept", pkg: "kept", case: null };
+const request = async (method, path) => { calls.push(path); return null; };
+"""
+
+def loaders(script: str) -> object:
+    """Runs `script` with the page's real LOADERS in scope and returns what it prints."""
+    html = source()
+    block = html[html.index("const LOADERS = {"):html.index("function prioritizeClient(")]
+    assert "run: async () => {" in block and "pkg: async () => {" in block
+    return node_json(LOADERS_HARNESS + block + f"\n(async () => {{{script}}})();")
+
+
+@pytest.mark.parametrize(("case", "paths"), [
+    ({"id": "case-a", "applicant_role": "tenant", "has_run": False, "has_package": False}, []),
+    ({"id": "case-a", "applicant_role": "landlord"}, []),
+    ({"id": "case-a", "applicant_role": "tenant", "has_run": True, "has_package": True},
+     ["/cases/case-a/runs/latest", "/cases/case-a/package"]),
+])
+def test_a_case_is_asked_for_its_run_and_package_only_when_it_has_them(
+    case: dict, paths: list[str],
+) -> None:
+    """#218: no request means no 404 or 409 in the browser console; the endpoints are unchanged."""
+    info = loaders(f"""
+      S.case = {json.dumps(case)};
+      await LOADERS.run();
+      await LOADERS.pkg();
+      console.log(JSON.stringify({{calls, run: S.run, pkg: S.pkg}}));
+    """)
+    assert info["calls"] == paths  # type: ignore[index]
+    assert info["run"] is None and info["pkg"] is None  # type: ignore[index]
+
+
+def test_the_case_is_loaded_before_its_run_and_package() -> None:
+    """`loadAndRender` reads "case" first, so the flags are there when "run" and "pkg" decide."""
+    match = RUN_POLLING.search(source())
+    assert match, "runPolling block not found in web/index.html"
+    harness = """
+    let CASE_ID = "case-a", TENANT_MODE = false, CASELESS_LOADERS = ["me", "cases"];
+    const order = [], S = { case: null, run: null, pkg: null };
+    const LOADERS = {
+      case: async () => { order.push("case"); S.case = {id: "case-a"}; },
+      run: async () => { order.push("run"); },
+      pkg: async () => { order.push("pkg"); },
+      me: async () => { order.push("me"); },
+      cases: async () => { order.push("cases"); },
+      activity: async () => { order.push("activity"); },
+    };
+    const render = () => {}, renderChrome = () => {}, route = () => "package";
+    const $ = () => ({}), toast = () => {}, refresh = async () => {}, request = () => null;
+    """
+    info = node_json(harness + match.group(1) + """
+      (async () => {
+        await loadAndRender(["case", "run", "pkg"]);
+        console.log(JSON.stringify({order}));
+      })();
+    """)
+    order = info["order"]  # type: ignore[index]
+    assert order[0] == "case"
+    assert order.index("case") < order.index("run") < order.index("pkg")

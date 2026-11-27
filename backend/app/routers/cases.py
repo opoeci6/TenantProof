@@ -5,10 +5,11 @@ from typing import Annotated, Any
 import segno
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import ValidationError
+from sqlmodel import Session, select
 
 from app.config import Settings, get_settings
 from app.deps import CaseDep, SessionDep, UserDep
-from app.models import UserRow
+from app.models import CaseRow, PackageRow, RunRow, UserRow
 from app.schemas import ApplicantCaseCreate, Case, CaseSummary, Intake
 from app.services import activity
 from app.services import cases as cases_service
@@ -71,13 +72,28 @@ def create_case(
     case = cases_service.create_case(session, user, parsed)
     session.commit()
     session.refresh(case)
-    return to_case(case, user.name)
+    return _case_out(session, case)
+
+
+def _case_out(session: Session, case: CaseRow) -> Case:
+    """The case as the contract shows it, saying whether it has a run and a built package, so the
+    page does not ask for either when there is nothing there (#218). `GET /runs/latest` and
+    `GET /package` keep their 404/409 answers; they are simply not called."""
+    assignee = session.get(UserRow, case.assigned_to_id)
+    has_run = session.exec(
+        select(RunRow.id).where(RunRow.case_id == case.id).limit(1)
+    ).first() is not None
+    has_package = session.exec(
+        select(PackageRow.id).where(PackageRow.case_id == case.id).limit(1)
+    ).first() is not None
+    return to_case(
+        case, assignee.name if assignee else "", has_run=has_run, has_package=has_package
+    )
 
 
 @router.get("/cases/{case_id}", response_model=Case)
 def get_case(case: CaseDep, session: SessionDep) -> Case:
-    assignee = session.get(UserRow, case.assigned_to_id)
-    return to_case(case, assignee.name if assignee else "")
+    return _case_out(session, case)
 
 
 def qr_data_uri(url: str) -> str:
