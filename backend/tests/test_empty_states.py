@@ -17,8 +17,8 @@ BLOCK = re.compile(r"/\* pure:start.*?\*/(.*?)/\* pure:end \*/", re.S)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
 
-EMPTY = {"gaps": 0, "total": 0, "reviewed": 0, "blocking": 0, "recommended": 0, "waiting": 0,
-         "filled": 0, "fieldsTotal": 0, "reqMissing": 0}
+EMPTY = {"gaps": 0, "total": 0, "reviewed": 0, "blocking": 0, "blockingWaiting": 0,
+         "recommended": 0, "waiting": 0, "filled": 0, "fieldsTotal": 0, "reqMissing": 0}
 
 
 def stats(**kw: int) -> dict:
@@ -115,16 +115,56 @@ def test_resolved_items_are_still_green() -> None:
 
 
 def test_open_items_stay_red_or_amber_and_link_to_the_page() -> None:
-    st = stats(gaps=3, blocking=2, waiting=1, recommended=1, total=4, reviewed=1,
-               fieldsTotal=5, filled=3, reqMissing=2)
+    st = stats(gaps=3, blocking=2, blockingWaiting=1, waiting=1, recommended=1, total=4,
+               reviewed=1, fieldsTotal=5, filled=3, reqMissing=2)
     result = checks(st)
     assert result["missing"] == {"state": "no", "href": "#gaps",
-                                 "text": "2 still open, 1 waiting for tenant"}
+                                 "text": "1 still open, 1 waiting for tenant"}
     assert result["fields"] == {"state": "no", "href": "#form", "text": "2 empty"}
     assert result["timeline"]["state"] == "maybe"
     assert "left out of the form" in result["timeline"]["text"]
     assert result["suggestions"] == {"state": "maybe", "text": "1 open (optional)"}
+    assert rail(st)["gaps"] == "1 required open"
+
+
+# --------------------------------------------------------------------------- #177: count once
+
+
+def test_a_waiting_blocking_gap_is_not_also_still_open() -> None:
+    """One required gap sent to the tenant: it is blocking, but only "waiting for tenant"."""
+    st = stats(gaps=1, blocking=1, blockingWaiting=1, waiting=1)
+    assert checks(st)["missing"] == {"state": "no", "href": "#gaps",
+                                     "text": "1 waiting for tenant"}
+    assert rail(st)["gaps"] == "1 waiting for tenant"
+
+
+def test_one_open_and_one_waiting_are_counted_apart() -> None:
+    st = stats(gaps=2, blocking=2, blockingWaiting=1, waiting=1)
+    assert checks(st)["missing"] == {"state": "no", "href": "#gaps",
+                                     "text": "1 still open, 1 waiting for tenant"}
+    assert rail(st)["gaps"] == "1 required open"
+
+
+def test_blocking_gaps_nobody_was_asked_about_are_all_still_open() -> None:
+    st = stats(gaps=2, blocking=2)
+    assert checks(st)["missing"] == {"state": "no", "href": "#gaps", "text": "2 still open"}
     assert rail(st)["gaps"] == "2 required open"
+
+
+def test_the_package_stays_blocked_while_a_gap_waits() -> None:
+    """Both #177 wordings keep the item red: the tenant has not answered yet."""
+    waiting_only = stats(gaps=1, blocking=1, blockingWaiting=1, waiting=1)
+    open_and_waiting = stats(gaps=2, blocking=2, blockingWaiting=1, waiting=1)
+    assert checks(waiting_only)["missing"]["state"] == "no"
+    assert checks(open_and_waiting)["missing"]["state"] == "no"
+
+
+def test_a_recommended_gap_waiting_for_the_tenant_is_not_blocking() -> None:
+    """A waiting gap counts as blocking only when its severity is blocking."""
+    st = stats(gaps=1, recommended=1, waiting=1)  # what stats() counts for it: no blocking gap
+    assert checks(st)["missing"] == {"state": "yes", "text": "all resolved"}
+    assert checks(st)["suggestions"] == {"state": "maybe", "text": "1 open (optional)"}
+    assert rail(st)["gaps"] == "1 suggestion" and rail(st)["doneGaps"]
 
 
 def test_a_partly_reviewed_timeline_is_not_done() -> None:

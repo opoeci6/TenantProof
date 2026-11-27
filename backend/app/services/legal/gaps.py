@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 from app.models import (
     ActivityRow,
     CaseRow,
+    EvidencePageRow,
     EvidenceRow,
     FormFieldRow,
     GapRow,
@@ -26,7 +27,14 @@ from app.models import (
 )
 from app.services import activity
 from app.services.agent.tools import clean_text, strip_text
-from app.services.form_fields import MANUAL_FIELDS_BY_KEY, covered_legacy_fields, is_required
+from app.services.evidence.ingest import OCR_SKIPPED, PHOTO_OCR_LOCATOR
+from app.services.form_fields import (
+    MANUAL_FIELDS_BY_KEY,
+    covered_legacy_fields,
+    field_allowed_for_case,
+    is_required,
+    remedy_input,
+)
 from app.services.legal import corpus, gap_checks, rules
 from app.services.legal.gap_checks import CaseFacts, EventFact, EvidenceFact, FieldFact, GapSpec
 from app.services.review import request_sent_line, sync_attestation_gap
@@ -34,6 +42,7 @@ from app.services.strength import SourceFacts
 
 ACTOR_NAME = "TenantProof gaps"
 EVENT_TITLE_CHARS = 80  # an event title inside a gap title
+MIN_SCREENSHOT_OCR_CHARS = 20
 
 
 @dataclass(frozen=True)
@@ -58,10 +67,22 @@ def case_facts(session: Session, case: CaseRow) -> CaseFacts:
     fields = tuple(
         FieldFact(key=row.key, label=row.label, required=is_required(row, covered_fields),
                   status=row.status)
-        for row in rows if row.key not in MANUAL_FIELDS_BY_KEY
+        for row in rows
+        if row.key not in MANUAL_FIELDS_BY_KEY and field_allowed_for_case(case, row.key)
     )
+    ocr_rows = session.exec(
+        select(EvidencePageRow.evidence_id, EvidencePageRow.text).where(
+            EvidencePageRow.case_id == case.id,
+            EvidencePageRow.locator == PHOTO_OCR_LOCATOR,
+        )
+    ).all()
+    ocr_evidence_ids = {
+        evidence_id for evidence_id, page_text in ocr_rows if _has_ocr_text(page_text)
+    }
     evidence = tuple(
-        _evidence_fact(row)
+        _evidence_fact(
+            row, has_ocr_text=(row.id in ocr_evidence_ids and row.error != OCR_SKIPPED)
+        )
         for row in session.exec(
             select(EvidenceRow)
             .where(EvidenceRow.case_id == case.id)
@@ -87,15 +108,26 @@ def case_facts(session: Session, case: CaseRow) -> CaseFacts:
     )  # fmt: skip
 
 
-def _evidence_fact(row: EvidenceRow) -> EvidenceFact:
+def _has_ocr_text(page_text: str) -> bool:
+    if page_text.strip() == OCR_SKIPPED:
+        return False
+    return sum(not ch.isspace() for ch in page_text) >= MIN_SCREENSHOT_OCR_CHARS
+
+
+def _evidence_fact(row: EvidenceRow, *, has_ocr_text: bool = False) -> EvidenceFact:
     meta = row.metadata_ or {}
     facts = SourceFacts(
         evidence_id=row.id, kind=row.kind, uploaded_by=row.uploaded_by,
         captured_at=meta.get("captured_at"), software=meta.get("software"),
     )  # fmt: skip
+    has_device = bool(str(meta.get("device") or "").strip())
+    # Trade-off, accepted (#173): a forwarded photo of a printed notice with its metadata
+    # stripped also has no capture time or device and >= 20 OCR chars, so it counts as a
+    # screenshot and skips the "Original photo" request too.
+    screenshot = row.kind == "photo" and facts.no_metadata and not has_device and has_ocr_text
     return EvidenceFact(
         evidence_id=row.id, label=row.label, kind=row.kind,
-        no_metadata=facts.no_metadata, edited=facts.edited,
+        no_metadata=facts.no_metadata, edited=facts.edited, screenshot=screenshot,
     )  # fmt: skip
 
 
@@ -110,16 +142,19 @@ def ensure_form_fields(session: Session, case: CaseRow) -> int:
     if any(field.key not in MANUAL_FIELDS_BY_KEY for field in existing):
         return 0
     form = next(entry for entry in corpus.CORPUS if entry.kind == "form")
-    for position, field in enumerate(form.form_fields):
+    added = [
+        field for field in form.form_fields if field_allowed_for_case(case, field.key)
+    ]
+    for position, field in enumerate(added):
         session.add(FormFieldRow(
             case_id=case.id, key=field.key, position=position, label=field.label,
             required=field.required, status="missing",
         ))  # fmt: skip
     activity.log(
         session, case.id, "agent", ACTOR_NAME,
-        f"Added the {len(form.form_fields)} Form J fields to the form",
+        f"Added the {len(added)} Form J fields to the form",
     )  # fmt: skip
-    return len(form.form_fields)
+    return len(added)
 
 
 def write_gaps(session: Session, case: CaseRow, specs: list[GapSpec]) -> list[GapRow]:
@@ -146,8 +181,11 @@ def write_gaps(session: Session, case: CaseRow, specs: list[GapSpec]) -> list[Ga
             severity=spec.severity, title=spec.title, why=spec.why, how_to_fix=spec.how_to_fix,
             source_id=sources.get(spec.source) if spec.source else None,
             input=(
-                {"type": "text", "field_key": spec.field_key, "placeholder": ""}
-                if spec.field_key is not None else None
+                remedy_input()
+                if spec.field_key == "remedy"
+                else {"type": "text", "field_key": spec.field_key, "placeholder": ""}
+                if spec.field_key is not None
+                else None
             ),
             status="open",
         )  # fmt: skip

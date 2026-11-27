@@ -49,6 +49,7 @@ from app.services.form_fields import (
     covered_legacy_field_for_case,
     covered_legacy_fields,
     lock_alternative_fields,
+    remedy_input,
 )
 from app.services.legal import corpus
 from app.services.strength import SourceFacts, compute_strength, event_flags
@@ -945,8 +946,11 @@ class CreateGap(BaseTool):
             title=title, why=why, how_to_fix=how_to_fix, status="open",
             source_id=source.id if source is not None else None,
             input=(
-                {"type": "text", "field_key": args.field_key, "placeholder": ""}
-                if args.field_key is not None else None
+                remedy_input()
+                if args.field_key == "remedy"
+                else {"type": "text", "field_key": args.field_key, "placeholder": ""}
+                if args.field_key is not None
+                else None
             ),
         )  # fmt: skip
         ctx.session.add(gap)
