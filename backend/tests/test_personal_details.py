@@ -164,3 +164,59 @@ def test_phone_numbers_without_separators_or_with_a_country_code_are_hidden() ->
     assert p.hide("Tel +44 20 7946 0958\n12 Oak Drive, Halifax") == (
         "Tel [PHONE_5]\n[ADDRESS_1], Halifax"
     )
+
+
+# --- #166: the caseworker hides a value the case already hides
+
+
+def listed(p: Placeholders) -> list[tuple[str, str, str, int, str | None]]:
+    return [(e.value, e.placeholder, e.source, e.count, e.term_id) for e in p.entries()]
+
+
+def test_a_term_for_a_known_value_is_listed_on_it_and_hides_exactly_as_before() -> None:
+    plain = case_placeholders()
+    terms = [caseworker_known("mei  chen", "person", "pt_full"),  # the full name, as typed
+             caseworker_known("Chen", "tenant", "pt_last"),  # the last name: "Ms. Chen"
+             caseworker_known("Mei", "tenant", "pt_first")]  # never on its own  # fmt: skip
+    p = case_placeholders(*terms)
+    assert p.hide(LETTER, count=True) == plain.hide(LETTER, count=True)
+    assert p.hide(CHAT) == plain.hide(CHAT)
+    without = {e[0]: e for e in listed(plain)}
+    rows = {e[0]: e for e in listed(p)}
+    assert rows["Mei Chen"] == ("Mei Chen", "[TENANT_NAME]", "caseworker", 1, "pt_full")
+    assert rows["Chen"] == ("Chen", "[TENANT_LAST_NAME]", "caseworker", 1, "pt_last")
+    assert rows["Mei"] == ("Mei", "[TENANT_FIRST_NAME]", "caseworker", 0, "pt_first")
+    assert {v: e[1] for v, e in rows.items() if v in without} == {
+        v: e[1] for v, e in without.items()}  # no placeholder moved
+
+
+def test_an_unseen_piece_shows_no_number_that_later_text_could_change() -> None:
+    # Two first names share the stem: whichever is read first gets [TENANT_FIRST_NAME].
+    p = Placeholders(known=[*name_variants("Mei Chen", "TENANT"),
+                            *name_variants("Meiling Chen", "TENANT"),
+                            caseworker_known("Mei", "tenant", "pt_1")])  # fmt: skip
+    p.hide(LETTER, count=True)
+    assert ("Mei", "", "caseworker", 0, "pt_1") in listed(p)
+    # An address piece matches in any case, so another spelling could be read first.
+    q = case_placeholders(caseworker_known("UNIT 9", "address", "pt_2"))
+    assert q.hide("Mei Chen, Unit 9, 77 Fictional Lane") == "[TENANT_NAME], [RENTAL_ADDRESS]"
+    assert ("Unit 9", "", "caseworker", 0, "pt_2") in listed(q)
+
+
+def test_a_merged_term_matches_exactly_as_the_case_value_does() -> None:
+    # Known limit, kept on purpose (#166): the case's first name matches only as written, and a
+    # term merged onto it does too, so a placeholder number never moves. Not less hidden than
+    # without the term; a wider match is a separate decision.
+    text = "Mei: hi. MEI CHEN signed. mei said ok. Ms. Chen and ms. chen."
+    plain = case_placeholders()
+    p = case_placeholders(caseworker_known("mei", "tenant", "pt_1"),
+                          caseworker_known("CHEN", "tenant", "pt_2"))  # fmt: skip
+    assert p.hide(text, count=True) == plain.hide(text, count=True) == (
+        "[TENANT_FIRST_NAME]: hi. [TENANT_NAME_2] signed. mei said ok. "
+        "Ms. [TENANT_LAST_NAME] and ms. chen."
+    )
+    # Without the terms (after Remove) the same values are the case's own again.
+    assert {(e.value, e.source, e.term_id) for e in plain.entries()} >= {
+        ("Mei", "case", None), ("Chen", "case", None)}
+    assert {(e.value, e.source, e.term_id) for e in p.entries()} >= {
+        ("Mei", "caseworker", "pt_1"), ("Chen", "caseworker", "pt_2")}

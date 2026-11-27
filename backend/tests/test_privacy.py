@@ -9,7 +9,7 @@ import pytest
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.models import ActivityRow, CaseRow, RunRow, TimelineEventRow
+from app.models import ActivityRow, CaseRow, PrivacyTermRow, RunRow, TimelineEventRow
 from app.services.agent import llm, placeholders, runner
 from app.services.agent.evidence_text import InMemoryTextStore, Page
 from tests.agent_support import (
@@ -242,3 +242,107 @@ def test_model_text_shows_placeholders_only_when_the_setting_is_on(
         "[2026-08-15 09:12] [TENANT_FIRST_NAME]: Hi"
     )
     assert client.get(f"/api/cases/{CASE}/evidence/ev_missing/model-text").status_code == 404
+
+
+# --- #166: hiding a value the case already hides
+
+
+def terms(session: Session) -> list[PrivacyTermRow]:
+    session.expire_all()
+    return list(session.exec(select(PrivacyTermRow).where(PrivacyTermRow.case_id == CASE)))
+
+
+def rows_for(view: dict, value: str) -> list[dict]:
+    return [d for d in view["details"] if d["value"] == value and not d["shown"]]
+
+
+def placeholder_map(view: dict) -> dict[str, str]:
+    return {d["value"]: d["placeholder"] for d in view["details"] if not d["shown"]}
+
+
+@pytest.mark.parametrize(("value", "placeholder"), [
+    ("Jordan Lee", "[TENANT_NAME]"),  # the tenant's name, exactly as the case has it
+    ("Jordan", "[TENANT_FIRST_NAME]"),  # only inside the name in the seeded case: count 0
+])  # fmt: skip
+def test_hiding_a_value_the_case_already_hides_lists_the_term_until_it_is_removed(
+    fresh_db: None, client, session: Session, on: None, value: str, placeholder: str
+) -> None:
+    before = placeholder_map(privacy(client))
+    r = client.post(f"/api/cases/{CASE}/privacy/terms",
+                    json={"value": value, "action": "hide", "role": "tenant"})  # fmt: skip
+    assert r.status_code == 200, r.text
+    [row] = terms(session)
+    term_id = row.id
+    for view in (r.json(), privacy(client)):  # the reply and the list agree with the table
+        [added] = rows_for(view, value)
+        assert (added["term_id"], added["source"]) == (term_id, "caseworker")
+        assert added["placeholder"] == placeholder
+        assert {v: p for v, p in placeholder_map(view).items() if v in before} == before
+    r = client.delete(f"/api/cases/{CASE}/privacy/terms/{term_id}")
+    assert r.status_code == 200, r.text
+    assert terms(session) == []
+    for view in (r.json(), privacy(client)):
+        assert not any(d["term_id"] == term_id for d in view["details"])
+        assert placeholder_map(view) == before
+    [name] = rows_for(privacy(client), "Jordan Lee")  # still hidden by the case itself
+    assert (name["placeholder"], name["source"], name["term_id"]) == ("[TENANT_NAME]", "case", None)
+
+
+def test_a_duplicate_term_changes_nothing_the_model_receives(
+    fresh_db: None, client, session: Session, on: None
+) -> None:
+    def sent() -> str:
+        provider = RecordingProvider(script())
+        execute(session, provider)
+        return sent_text(provider)
+
+    def hidden() -> str:
+        case = session.get(CaseRow, CASE)
+        assert case is not None
+        session.expire_all()
+        return placeholders.build(session, case, store()).hide(f"{LETTER}\n{MSG1}")
+
+    def check(text: str) -> None:
+        assert "[TENANT_FIRST_NAME]: Hi, there is water leaking" in text
+        assert "[TENANT_NAME], [RENTAL_ADDRESS], Halifax, NS" in text
+        for value in PERSONAL:
+            assert value not in text, value
+
+    baseline = hidden()
+    for value in ("Jordan Lee", "Jordan"):
+        r = client.post(f"/api/cases/{CASE}/privacy/terms",
+                        json={"value": value, "action": "hide", "role": "person"})  # fmt: skip
+        assert r.status_code == 200, r.text
+    assert len(terms(session)) == 2
+    assert hidden() == baseline
+    check(sent())  # with the terms
+    for row in terms(session):
+        assert client.delete(f"/api/cases/{CASE}/privacy/terms/{row.id}").status_code == 200
+    assert terms(session) == []
+    assert hidden() == baseline
+    check(sent())  # after Remove, the model still gets the case's own placeholders
+
+
+def test_hiding_the_same_value_twice_keeps_one_term(
+    fresh_db: None, client, session: Session, on: None
+) -> None:
+    for value in ("Jordan", "JORDAN"):
+        r = client.post(f"/api/cases/{CASE}/privacy/terms",
+                        json={"value": value, "action": "hide", "role": "tenant"})  # fmt: skip
+        assert r.status_code == 200, r.text
+    [row] = terms(session)
+    listed = [d for d in privacy(client)["details"] if d["term_id"] == row.id]
+    assert [(d["value"], d["placeholder"]) for d in listed] == [("Jordan", "[TENANT_FIRST_NAME]")]
+
+
+def test_a_new_value_is_listed_as_before(
+    fresh_db: None, client, session: Session, on: None
+) -> None:
+    before = placeholder_map(privacy(client))
+    body = {"value": "Example Street", "action": "hide", "role": "other"}
+    r = client.post(f"/api/cases/{CASE}/privacy/terms", json=body)
+    [row] = terms(session)
+    [added] = rows_for(r.json(), "Example Street")  # only inside the rental address: count 0
+    assert (added["placeholder"], added["source"], added["count"], added["term_id"]) == (
+        "[DETAIL_1]", "caseworker", 0, row.id)
+    assert {v: p for v, p in placeholder_map(r.json()).items() if v in before} == before
