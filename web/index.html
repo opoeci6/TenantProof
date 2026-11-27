@@ -436,7 +436,7 @@ body.dev .contract{display:block}
     <div class="ctx" id="ctx"><strong>Loading…</strong><span></span></div>
     <nav class="topnav" id="topnav" aria-label="App"></nav>
     <div class="topbar-tools">
-      <span class="demo-pill" title="All names, addresses, organizations and files are invented for the demo">Synthetic demo data</span>
+      <span class="demo-pill" id="demoPill" title="All names, addresses, organizations and files are invented for the demo">Synthetic demo data</span>
       <button class="btn small" type="button" data-action="logout" id="logoutBtn" hidden>Sign out</button>
       <label class="switch" for="devToggle"><input type="checkbox" id="devToggle"> Show data contract</label>
     </div>
@@ -492,7 +492,7 @@ async function uploadFiles(path, files) {
   if (!USE_MOCK) {
     const fd = new FormData(); for (const f of files) fd.append("file", f);
     const res = await fetch(API_BASE + path, { method: "POST", credentials: "include", body: fd });
-    if (!res.ok) throw new Error(errorMessage(await res.json().catch(() => ({})), res));
+    if (!res.ok) throw Object.assign(new Error(errorMessage(await res.json().catch(() => ({})), res)), { status: res.status });
     return res.json();
   }
   return mockUpload(path, files);
@@ -899,15 +899,40 @@ const LANGS = { en: "English", zh: "中文", fr: "Français", es: "Español", ru
 const LANG_EN = { en: "English", zh: "Chinese", fr: "French", es: "Spanish", ru: "Russian", hi: "Hindi", ar: "Arabic" };
 const langLabel = k => k === "en" ? "English" : LANG_EN[k] ? `${LANG_EN[k]} (${LANGS[k]})` : (k || "");
 const I18N = {
-  en: { showEn: "Show in English", title: "Share evidence for your case", intro: "{org} is helping you with the repair problem at {unit}. Upload what you have. You don't need to organize anything.", what: "What helps", items: ["Photos of the problem. Use the originals from your camera roll, not copies from chat apps.", "Your lease", "Messages or emails with your landlord", "Receipts for costs you paid"], req: "{org} asked for", choose: "Choose files", selected: "{n} file(s) selected", privacy: "Location and device data are removed before any file is analyzed by AI. Only {org} can see your files.", attest: "These files are genuine and I haven't changed what they show.", consent: "I agree to share these files with {org} for my case.", send: "Send to {org}", sent: "Sent. {org} will contact you after reviewing your files.", lang: "Language", answerLabel: "Your answer (optional)", answerHint: "If you can answer in a few words, type it here.", sendHint: "To send, add at least one file or a short answer, and tick both boxes above.", sendHint: "To send, add at least one file or a short answer, and tick both boxes above." },
-  zh: { showEn: "显示英文", title: "为你的案件提交证据", intro: "{org} 正在协助处理你在 {unit} 的维修问题。把你手上的材料上传就行，不需要自己整理。", what: "有用的材料", items: ["问题的照片。请上传相册里的原图，不要用聊天软件转发的图片。", "租约", "和房东的聊天记录或邮件", "你自己垫付费用的收据"], req: "{org} 需要你补充", choose: "选择文件", selected: "已选择 {n} 个文件", privacy: "在 AI 分析之前，会先删除文件里的位置和设备信息。只有 {org} 能看到你的文件。", attest: "这些文件是真实的，我没有修改过其中的内容。", consent: "我同意把这些文件提供给 {org}，用于处理我的案件。", send: "发送给 {org}", sent: "已发送。{org} 审核文件后会联系你。", lang: "语言", answerLabel: "你的回答（可选）", answerHint: "如果能用几句话回答，请写在这里。", sendHint: "要发送，请至少添加一个文件或写一句回答，并勾选上面的两个框。", sendHint: "要发送，请至少添加一个文件或写一句回答，并勾选上面的两个框。" },
-  fr: { showEn: "Afficher en anglais", title: "Partagez vos preuves pour votre dossier", intro: "{org} vous aide avec votre problème de réparation au {unit}. Téléversez ce que vous avez. Vous n'avez rien à organiser.", what: "Ce qui aide", items: ["Des photos du problème. Utilisez les originaux de votre galerie, pas des copies envoyées par messagerie.", "Votre bail", "Vos messages ou courriels avec le propriétaire", "Les reçus des dépenses que vous avez payées"], req: "{org} vous demande", choose: "Choisir des fichiers", selected: "{n} fichier(s) sélectionné(s)", privacy: "Les données de localisation et d'appareil sont retirées avant toute analyse par l'IA. Seul {org} peut voir vos fichiers.", attest: "Ces fichiers sont authentiques et je n'ai pas modifié ce qu'ils montrent.", consent: "J'accepte de partager ces fichiers avec {org} pour mon dossier.", send: "Envoyer à {org}", sent: "Envoyé. {org} vous contactera après avoir examiné vos fichiers.", lang: "Langue", answerLabel: "Votre réponse (facultatif)", answerHint: "Si vous pouvez répondre en quelques mots, écrivez-le ici.", sendHint: "Pour envoyer, ajoutez au moins un fichier ou une courte réponse, et cochez les deux cases ci-dessus.", sendHint: "Pour envoyer, ajoutez au moins un fichier ou une courte réponse, et cochez les deux cases ci-dessus." },
-  es: { showEn: "Ver en inglés", title: "Comparta pruebas para su caso", intro: "{org} le está ayudando con su problema de reparación en {unit}. Suba lo que tenga. No necesita organizar nada.", what: "Lo que ayuda", items: ["Fotos del problema. Use las originales de su galería, no copias de aplicaciones de chat.", "Su contrato de arrendamiento", "Mensajes o correos con su arrendador", "Recibos de gastos que usted pagó"], req: "{org} le pide", choose: "Elegir archivos", selected: "{n} archivo(s) seleccionado(s)", privacy: "Los datos de ubicación y del dispositivo se eliminan antes de que la IA analice cualquier archivo. Solo {org} puede ver sus archivos.", attest: "Estos archivos son auténticos y no he cambiado lo que muestran.", consent: "Acepto compartir estos archivos con {org} para mi caso.", send: "Enviar a {org}", sent: "Enviado. {org} se comunicará con usted después de revisar sus archivos.", lang: "Idioma", answerLabel: "Su respuesta (opcional)", answerHint: "Si puede responder en pocas palabras, escríbalo aquí.", sendHint: "Para enviar, añada al menos un archivo o una respuesta breve, y marque las dos casillas de arriba." },
+  en: { showEn: "Show in English", demoPill: "Synthetic demo data", demoPillTitle: "All names, addresses, organizations and files are invented for the demo", title: "Share evidence for your case", intro: "{org} is helping you with the repair problem at {unit}. Upload what you have. You don't need to organize anything.", what: "What helps", items: ["Photos of the problem. Use the originals from your camera roll, not copies from chat apps.", "Your lease", "Messages or emails with your landlord", "Receipts for costs you paid"], req: "{org} asked for", choose: "Choose files", selectedOne: "1 file selected", selectedMany: "{n} files selected", badType: "{name} is not an accepted file type (JPG, PNG, HEIC, PDF or TXT).", uploadFailed: "The upload didn't work. Try again in a moment.", privacy: "Location and device data are removed before any file is analyzed by AI. Only {org} can see your files.", attest: "These files are genuine and I haven't changed what they show.", consent: "I agree to share these files with {org} for my case.", send: "Send to {org}", sent: "Sent. {org} will contact you after reviewing your files.", lang: "Language", answerLabel: "Your answer (optional)", answerHint: "If you can answer in a few words, type it here.", sendHint: "To send, add at least one file or a short answer, and tick both boxes above.", deadTitle: "This link isn't working", deadBody1: "It may have been typed wrongly, it may have expired, or your caseworker may have sent you a newer link that replaces it.", deadBody2: "Please contact your caseworker and ask for a new link. Nothing you sent before is lost." },
+  zh: { showEn: "显示英文", demoPill: "合成演示数据", demoPillTitle: "演示中的所有姓名、地址、机构和文件均为虚构", title: "为你的案件提交证据", intro: "{org} 正在协助处理你在 {unit} 的维修问题。把你手上的材料上传就行，不需要自己整理。", what: "有用的材料", items: ["问题的照片。请上传相册里的原图，不要用聊天软件转发的图片。", "租约", "和房东的聊天记录或邮件", "你自己垫付费用的收据"], req: "{org} 需要你补充", choose: "选择文件", selectedOne: "已选择 1 个文件", selectedMany: "已选择 {n} 个文件", badType: "{name} 不是可接受的文件类型（JPG、PNG、HEIC、PDF 或 TXT）。", uploadFailed: "上传没有成功。请稍后重试。", privacy: "在 AI 分析之前，会先删除文件里的位置和设备信息。只有 {org} 能看到你的文件。", attest: "这些文件是真实的，我没有修改过其中的内容。", consent: "我同意把这些文件提供给 {org}，用于处理我的案件。", send: "发送给 {org}", sent: "已发送。{org} 审核文件后会联系你。", lang: "语言", answerLabel: "你的回答（可选）", answerHint: "如果能用几句话回答，请写在这里。", sendHint: "要发送，请至少添加一个文件或写一句回答，并勾选上面的两个框。", deadTitle: "此链接无法使用", deadBody1: "可能是输入有误，也可能已经过期，或者工作人员给您发了一个更新的链接来替代它。", deadBody2: "请联系工作人员，索取一个新链接。您之前发送的内容都不会丢失。" },
+  fr: { showEn: "Afficher en anglais", demoPill: "Données fictives de démonstration", demoPillTitle: "Tous les noms, adresses, organismes et fichiers sont inventés pour la démonstration", title: "Partagez vos preuves pour votre dossier", intro: "{org} vous aide avec un problème de réparation dans votre logement ({unit}). Téléversez ce que vous avez. Vous n'avez rien à organiser.", what: "Ce qui aide", items: ["Des photos du problème. Utilisez les originaux de votre galerie, pas des copies envoyées par messagerie.", "Votre bail", "Vos messages ou courriels avec le propriétaire", "Les reçus des dépenses que vous avez payées"], req: "{org} vous demande", choose: "Choisir des fichiers", selectedOne: "1 fichier sélectionné", selectedMany: "{n} fichiers sélectionnés", badType: "« {name} » n'est pas un type de fichier accepté (JPG, PNG, HEIC, PDF ou TXT).", uploadFailed: "L'envoi n'a pas fonctionné. Réessayez dans un moment.", privacy: "Les données de localisation et d'appareil sont retirées avant toute analyse par l'IA. Seul {org} peut voir vos fichiers.", attest: "Ces fichiers sont authentiques et je n'ai pas modifié ce qu'ils montrent.", consent: "J'accepte de partager ces fichiers avec {org} pour mon dossier.", send: "Envoyer à {org}", sent: "Envoyé. {org} vous contactera après avoir examiné vos fichiers.", lang: "Langue", answerLabel: "Votre réponse (facultatif)", answerHint: "Si vous pouvez répondre en quelques mots, écrivez-le ici.", sendHint: "Pour envoyer, ajoutez au moins un fichier ou une courte réponse, et cochez les deux cases ci-dessus.", deadTitle: "Ce lien ne fonctionne pas", deadBody1: "Il a peut-être été mal saisi, il a peut-être expiré, ou la personne qui s'occupe de votre dossier vous en a envoyé un plus récent qui le remplace.", deadBody2: "Communiquez avec la personne qui s'occupe de votre dossier et demandez un nouveau lien. Rien de ce que vous avez envoyé n'est perdu." },
+  es: { showEn: "Ver en inglés", demoPill: "Datos ficticios de demostración", demoPillTitle: "Todos los nombres, direcciones, organizaciones y archivos son inventados para la demostración", title: "Comparta pruebas para su caso", intro: "{org} le está ayudando con su problema de reparación en {unit}. Suba lo que tenga. No necesita organizar nada.", what: "Lo que ayuda", items: ["Fotos del problema. Use las originales de su galería, no copias de aplicaciones de chat.", "Su contrato de arrendamiento", "Mensajes o correos con su arrendador", "Recibos de gastos que usted pagó"], req: "{org} le pide", choose: "Elegir archivos", selectedOne: "1 archivo seleccionado", selectedMany: "{n} archivos seleccionados", badType: "{name} no es un tipo de archivo aceptado (JPG, PNG, HEIC, PDF o TXT).", uploadFailed: "El envío no funcionó. Inténtelo de nuevo en un momento.", privacy: "Los datos de ubicación y del dispositivo se eliminan antes de que la IA analice cualquier archivo. Solo {org} puede ver sus archivos.", attest: "Estos archivos son auténticos y no he cambiado lo que muestran.", consent: "Acepto compartir estos archivos con {org} para mi caso.", send: "Enviar a {org}", sent: "Enviado. {org} se comunicará con usted después de revisar sus archivos.", lang: "Idioma", answerLabel: "Su respuesta (opcional)", answerHint: "Si puede responder en pocas palabras, escríbalo aquí.", sendHint: "Para enviar, añada al menos un archivo o una respuesta breve, y marque las dos casillas de arriba.", deadTitle: "Este enlace no funciona", deadBody1: "Puede que se haya escrito mal, que haya caducado, o que la persona que atiende su caso le haya enviado un enlace más reciente que lo sustituye.", deadBody2: "Comuníquese con la persona que atiende su caso y pida un enlace nuevo. No se ha perdido nada de lo que envió." },
   // ru reviewed by Lameda12 2026-11-17
-  ru: { showEn: "Показать на английском", title: "Отправьте доказательства по вашему делу", intro: "{org} помогает вам решить проблему с ремонтом по адресу {unit}. Загрузите всё, что у вас есть. Ничего сортировать не нужно.", what: "Что пригодится", items: ["Фотографии проблемы. Загружайте оригиналы из галереи телефона, а не копии из мессенджеров.", "Ваш договор аренды", "Переписка с арендодателем: сообщения или письма", "Чеки за то, что вы оплатили сами"], req: "{org} просит прислать", choose: "Выбрать файлы", selected: "Выбрано файлов: {n}", privacy: "Перед анализом файлов искусственным интеллектом данные о местоположении и устройстве удаляются. Ваши файлы видит только {org}.", attest: "Подтверждаю, что эти файлы подлинные и в них ничего не изменено.", consent: "Даю согласие передать эти файлы организации {org} для моего дела.", send: "Отправить организации {org}", sent: "Отправлено. {org} свяжется с вами после проверки файлов.", lang: "Язык", answerLabel: "Ваш ответ (необязательно)", answerHint: "Если можете ответить в двух словах, напишите здесь.", sendHint: "Чтобы отправить, добавьте хотя бы один файл или короткий ответ и отметьте обе галочки выше." },
+  ru: { showEn: "Показать на английском", demoPill: "Синтетические демонстрационные данные", demoPillTitle: "Все имена, адреса, организации и файлы придуманы для демонстрации", title: "Отправьте доказательства по вашему делу", intro: "{org} помогает вам решить проблему с ремонтом по адресу {unit}. Загрузите всё, что у вас есть. Ничего сортировать не нужно.", what: "Что пригодится", items: ["Фотографии проблемы. Загружайте оригиналы из галереи телефона, а не копии из мессенджеров.", "Ваш договор аренды", "Переписка с арендодателем: сообщения или письма", "Чеки за то, что вы оплатили сами"], req: "{org} просит прислать", choose: "Выбрать файлы", selectedOne: "Выбран 1 файл", selectedMany: "Выбрано файлов: {n}", badType: "{name} — недопустимый тип файла (JPG, PNG, HEIC, PDF или TXT).", uploadFailed: "Не удалось отправить файл. Повторите попытку через минуту.", privacy: "Перед анализом файлов искусственным интеллектом данные о местоположении и устройстве удаляются. Ваши файлы видит только {org}.", attest: "Подтверждаю, что эти файлы подлинные и в них ничего не изменено.", consent: "Даю согласие передать эти файлы организации {org} для моего дела.", send: "Отправить организации {org}", sent: "Отправлено. {org} свяжется с вами после проверки файлов.", lang: "Язык", answerLabel: "Ваш ответ (необязательно)", answerHint: "Если можете ответить в двух словах, напишите здесь.", sendHint: "Чтобы отправить, добавьте хотя бы один файл или короткий ответ и отметьте обе галочки выше.", deadTitle: "Эта ссылка не работает", deadBody1: "Возможно, она набрана с ошибкой, срок её действия истёк или специалист прислал вам новую ссылку взамен этой.", deadBody2: "Свяжитесь со специалистом и попросите новую ссылку. Всё, что вы отправили раньше, не потеряно." },
   // machine-translated, needs native-speaker review
-  hi: { showEn: "अंग्रेज़ी में देखें", title: "अपने मामले के लिए सबूत भेजें", intro: "{org} आपकी {unit} की मरम्मत की समस्या में आपकी मदद कर रहा है। जो भी आपके पास है, अपलोड करें। आपको कुछ भी व्यवस्थित करने की ज़रूरत नहीं है।", what: "क्या काम आएगा", items: ["समस्या की तस्वीरें। अपने फ़ोन की गैलरी से असली तस्वीरें लें, चैट ऐप से आई नकल नहीं।", "आपका किराये का अनुबंध", "मकान मालिक के साथ संदेश या ईमेल", "आपने जो खर्च चुकाया उसकी रसीदें"], req: "{org} ने यह माँगा है", choose: "फ़ाइलें चुनें", selected: "{n} फ़ाइल चुनी गई", privacy: "AI से फ़ाइलों की जाँच होने से पहले लोकेशन और डिवाइस की जानकारी हटा दी जाती है। आपकी फ़ाइलें सिर्फ़ {org} देख सकता है।", attest: "ये फ़ाइलें असली हैं और मैंने इनमें दिखाई गई चीज़ों को बदला नहीं है।", consent: "मैं अपने मामले के लिए ये फ़ाइलें {org} के साथ साझा करने के लिए सहमत हूँ।", send: "{org} को भेजें", sent: "भेज दिया गया। फ़ाइलें देखने के बाद {org} आपसे संपर्क करेगा।", lang: "भाषा", answerLabel: "आपका जवाब (वैकल्पिक)", answerHint: "अगर आप कुछ शब्दों में जवाब दे सकते हैं, तो यहाँ लिखें।", sendHint: "भेजने के लिए कम से कम एक फ़ाइल या छोटा जवाब जोड़ें और ऊपर के दोनों बॉक्स पर टिक करें।" },
+  hi: { showEn: "अंग्रेज़ी में देखें", demoPill: "काल्पनिक डेमो डेटा", demoPillTitle: "डेमो के लिए सभी नाम, पते, संस्थाएँ और फ़ाइलें काल्पनिक हैं", title: "अपने मामले के लिए सबूत भेजें", intro: "{org} आपकी {unit} की मरम्मत की समस्या में आपकी मदद कर रहा है। जो भी आपके पास है, अपलोड करें। आपको कुछ भी व्यवस्थित करने की ज़रूरत नहीं है।", what: "क्या काम आएगा", items: ["समस्या की तस्वीरें। अपने फ़ोन की गैलरी से असली तस्वीरें लें, चैट ऐप से आई नकल नहीं।", "आपका किराये का अनुबंध", "मकान मालिक के साथ संदेश या ईमेल", "आपने जो खर्च चुकाया उसकी रसीदें"], req: "{org} ने यह माँगा है", choose: "फ़ाइलें चुनें", selectedOne: "1 फ़ाइल चुनी गई", selectedMany: "{n} फ़ाइलें चुनी गईं", badType: "{name} स्वीकार्य फ़ाइल प्रकार नहीं है (JPG, PNG, HEIC, PDF या TXT)।", uploadFailed: "फ़ाइल नहीं भेजी जा सकी। थोड़ी देर बाद फिर कोशिश करें।", privacy: "AI से फ़ाइलों की जाँच होने से पहले लोकेशन और डिवाइस की जानकारी हटा दी जाती है। आपकी फ़ाइलें सिर्फ़ {org} देख सकता है।", attest: "ये फ़ाइलें असली हैं और मैंने इनमें दिखाई गई चीज़ों को बदला नहीं है।", consent: "मैं अपने मामले के लिए ये फ़ाइलें {org} के साथ साझा करने के लिए सहमत हूँ।", send: "{org} को भेजें", sent: "भेज दिया गया। फ़ाइलें देखने के बाद {org} आपसे संपर्क करेगा।", lang: "भाषा", answerLabel: "आपका जवाब (वैकल्पिक)", answerHint: "अगर आप कुछ शब्दों में जवाब दे सकते हैं, तो यहाँ लिखें।", sendHint: "भेजने के लिए कम से कम एक फ़ाइल या छोटा जवाब जोड़ें और ऊपर के दोनों बॉक्स पर टिक करें।", deadTitle: "यह लिंक काम नहीं कर रहा", deadBody1: "हो सकता है यह गलत टाइप किया गया हो, इसकी अवधि खत्म हो गई हो, या आपके केसवर्कर ने आपको इसकी जगह एक नया लिंक भेजा हो।", deadBody2: "कृपया अपने केसवर्कर से संपर्क करें और नया लिंक माँगें। आपने पहले जो भेजा था, वह खोया नहीं है।" },
 };
+
+/* tenantText:start (#174, pure; tests/test_tenant_text.py runs it under node) */
+// "1 fichier sélectionné" / "3 fichiers sélectionnés": one key for each, since "(s)" reads badly
+// in every language.
+const tCount = (t, n) => String(n === 1 ? t.selectedOne : t.selectedMany).replace("{n}", String(n));
+// The tenant page's language when nobody chose one: the first browser language the page has text
+// for, else English.
+function pickLang(list, langs) {
+  for (const code of list || []) {
+    const base = String(code || "").toLowerCase().split("-")[0];
+    if (langs && langs[base]) return base;
+  }
+  return "en";
+}
+// #174: the server's 415 names a file by its position ("File 1 is not an accepted type"). Say it
+// in the tenant's language, naming the file; any other upload error gets the short message.
+function uploadErrorText(err, files, t) {
+  const list = files || [];
+  const m = /File (\d+)/.exec(String((err && err.message) || ""));
+  const at = m ? Number(m[1]) - 1 : list.length === 1 ? 0 : -1;
+  const file = at >= 0 && at < list.length ? list[at] : null;
+  if (err && err.status === 415 && file) return String(t.badType).replace("{name}", file.name);
+  return t.uploadFailed;
+}
+/* tenantText:end */
 
 /* =====================================================================
    UI
@@ -1253,7 +1278,14 @@ function renderChrome() {
   const r = route(), inCase = !TENANT_MODE && IN_CASE.includes(r);  // the tenant's own page has no case rail
   $("#layout").classList.toggle("single", !inCase);
   $("#logoutBtn").hidden = USE_MOCK || TENANT_MODE || !S.me;
-  if (TENANT_MODE) { $("#topnav").innerHTML = ""; $("#ctx").innerHTML = `<strong>${esc((S.intake.view && S.intake.view.org_name) || "")}</strong><span></span>`; $("#rail").innerHTML = ""; return; }
+  if (TENANT_MODE) {
+    // #174: the pill and the page's language are the tenant's, not the caseworker's.
+    const lang = tenantLang(), t = I18N[lang];
+    document.documentElement.lang = lang;
+    const pill = $("#demoPill");
+    if (pill) { pill.textContent = t.demoPill; pill.title = t.demoPillTitle; }
+    $("#topnav").innerHTML = ""; $("#ctx").innerHTML = `<strong>${esc((S.intake.view && S.intake.view.org_name) || "")}</strong><span></span>`; $("#rail").innerHTML = ""; return;
+  }
   $("#topnav").innerHTML = `<a href="#cases" ${r === "cases" || inCase ? 'aria-current="page"' : ""}>Caseload</a>`;
   const c = S.case;
   $("#ctx").innerHTML = inCase && c ? `<strong>${landlordApplication() ? "Tenant: " : ""}${esc(c.tenant.name)} · ${esc(c.title)}</strong><span>${esc(c.unit)} · ${landlordApplication() ? "Landlord application" : "Maintenance dispute"}</span>`
@@ -1798,22 +1830,31 @@ function previewBar(v, lang) {
     <span class="muted">${english ? `You are reading it in English. ${esc(v.tenant_first_name)}'s page opens in ${esc(LANG_EN[v.language] || v.language)}, with each request's English under “${esc((I18N[v.language] || I18N.en).showEn)}” (Show in English).` :`Switch to English to read the page and each request in English.`}</span></div>`;
 }
 
+// The language the tenant page shows: the one they picked, else the case's, else the browser's.
+function tenantLang() {
+  const k = S.intake.lang || (S.intake.view && S.intake.view.language) || pickLang(navigator.languages, I18N);
+  return I18N[k] ? k : "en";
+}
 function viewIntake() {
   const v = S.intake.view; if (!v) return "<p>Loading…</p>";
-  // English only: with no working link there is no case, so no tenant language to use.
-  if (v.deadLink) return `<div class="panel panel-pad" style="max-width:560px"><h1>This link isn't working</h1><p>It may have been typed wrongly, it may have expired, or your caseworker may have sent you a newer link that replaces it.</p><p>Please contact your caseworker and ask for a new link. Nothing you sent before is lost.</p></div>`;
+  // #174: with no working link there is no case, so the browser's language picks the page's.
+  if (v.deadLink) {
+    const lang = tenantLang(), t = I18N[lang];
+    document.documentElement.lang = lang;
+    return `<div class="panel panel-pad" style="max-width:560px"><h1>${esc(t.deadTitle)}</h1><p>${esc(t.deadBody1)}</p><p>${esc(t.deadBody2)}</p></div>`;
+  }
   if (v.loadFailed) return `<div class="panel panel-pad" style="max-width:560px"><h1>This page couldn't load</h1><p>Check your internet connection, then reload the page.</p><div class="btn-row"><button class="btn primary" type="button" data-action="reload">Reload</button></div></div>`;
   if (v.noLink && !S.case) return `<div class="view-head"><div><h1>Tenant view</h1><p>Open a case first: this page previews one case's tenant page.</p></div></div><div class="btn-row"><a class="btn primary" href="#cases">Go to the caseload</a></div>`;
   if (v.noLink) { const ik = S.case.intake, name = S.case.tenant.name;  // a sent link is never shown again, so it can't be previewed
     return ik.status === "not_sent"
       ? `<div class="view-head"><div><h1>Tenant view</h1><p>Send ${esc(name)} the intake link first, then you can preview what they see.</p></div></div><div class="btn-row"><button class="btn primary" type="button" data-action="resend">Send intake link</button></div>`
       : `<div class="view-head"><div><h1>Tenant view</h1><p>${esc(name)} was sent a link (${esc(fmtTime(ik.sent_at))}). For security a link is shown only when it is created, so this page can't open it now. Re-sending makes a new link that you can preview, and the link ${esc(name)} has stops working.</p></div></div><div class="btn-row"><button class="btn" type="button" data-action="resend">Re-send link</button></div>`; }
-  const lang = S.intake.lang || v.language, t = I18N[lang] || I18N.en, vars = { org: v.org_name, unit: v.unit };
+  const lang = tenantLang(), t = I18N[lang], vars = { org: v.org_name, unit: v.unit };
   const reqs = v.requests.map(r => reqHtml(r, lang, v.language, t, vars)).join("");  /* #48: the English too */
   const body = S.intake.sent ? `<div class="done">${esc(tpl(t.sent, vars))}</div>` : `
       <p>${esc(tpl(t.intro, vars))}</p>${reqs}
       <div><strong style="font-size:14.5px">${esc(t.what)}</strong><ul>${t.items.map(i => `<li>${esc(i)}</li>`).join("")}</ul></div>
-      ${UPLOADS_ENABLED ? `<label class="up" for="intakeFiles"><input class="file-in" type="file" id="intakeFiles" multiple accept="${UPLOAD_ACCEPT}">${S.intake.files.length ? esc(tpl(t.selected, { n: S.intake.files.length })) : esc(t.choose)}</label>` : `<p class="muted">${esc(UPLOAD_SOON[lang] || UPLOAD_SOON.en)}</p>`}
+      ${UPLOADS_ENABLED ? `<label class="up" for="intakeFiles"><input class="file-in" type="file" id="intakeFiles" multiple accept="${UPLOAD_ACCEPT}">${S.intake.files.length ? esc(tCount(t, S.intake.files.length)) : esc(t.choose)}</label>` : `<p class="muted">${esc(UPLOAD_SOON[lang] || UPLOAD_SOON.en)}</p>`}
       <p style="font-size:13px">${esc(tpl(t.privacy, vars))}</p>
       <form class="attest" data-action="intake-attest">
         <label><input type="checkbox" id="in-attest" name="attest" ${S.intake.attest ? "checked" : ""}>${esc(t.attest)}</label>
@@ -2209,7 +2250,13 @@ document.addEventListener("click", guarded(async ev => {
         .map(([request_id, text]) => ({ request_id, text: text.trim() })).filter(a => a.text);
       await request("POST", `/intake/${intakeTok()}/submit`, { attest_genuine: S.intake.attest, consent_share: S.intake.consent, language: S.intake.lang || S.intake.view.language, answers });
       S.intake.sent = true; S.intake.answers = {}; await refresh(["evidence", "case", "privacy"]);
-    } catch (err) { toast(err.message); }
+    } catch (err) {
+      // #174: on the tenant's own page the server's English upload error is not shown; the page
+      // says it in the tenant's language. The server text stays in the console.
+      if (!TENANT_MODE) return toast(err.message);
+      console.warn(err && err.message);
+      toast(uploadErrorText(err, S.intake.files, I18N[tenantLang()]), 6000);
+    }
   }
   if (a === "answer-none") return sendAnswer("none");
   if (a === "intake-reset") { S.intake = { ...S.intake, files: [], answers: {}, attest: false, consent: false, sent: false }; render(); }
