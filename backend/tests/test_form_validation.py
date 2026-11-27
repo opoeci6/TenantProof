@@ -137,6 +137,6 @@ def test_date_save_reads_data_saved_and_form_marks_invalid_fields() -> None:
                        source.index('document.addEventListener("change"')]
     assert "dateState.confirmed.get(key) ?? input.dataset.saved" in focusout
 
-    hashchange = source[source.index('window.addEventListener("hashchange"'):
-                         source.index("/* #179:")]
+    hash_start = source.index('window.addEventListener("hashchange"')
+    hashchange = source[hash_start:source.index("/* #179:", hash_start)]
     assert "S.draftSaves.errors?.clear()" in hashchange
