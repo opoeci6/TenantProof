@@ -30,9 +30,9 @@ def key_for(language: str, excerpt: str, case_id: str | None = None) -> str:
     return hashlib.sha256(f"{scope}{language}\n{excerpt}".encode()).hexdigest()
 
 
-def unchanged(language: str, excerpt: str) -> bool:
-    """Nothing to translate: an English case, or a quote that is already plain English."""
-    return language == "en" or excerpt.isascii()
+def unchanged(language: str, excerpt: str) -> bool:  # noqa: ARG001
+    """Nothing to translate when the language is English."""
+    return language == "en"
 
 
 def cached(
