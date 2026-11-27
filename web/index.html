@@ -1179,8 +1179,9 @@ function humanRunText(text, { fields = [], gaps = [] } = {}) {
     out = out.replace(/"run_[0-9a-f]{2,}"/g, '""').replace(RUN_ID_RE, "");
     out = out.replace(/"src_[A-Za-z0-9_]+"/g, '""').replace(SRC_ID_RE, "");
     // A whole Form J field key becomes its label. One pass, longest key first, so a label that
-    // happens to contain another key is never replaced again.
-    const keys = [...labels.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+    // happens to contain another key is never replaced again. Only snake_case keys: a one-word
+    // key such as `remedy` is also an ordinary word ("the remedy is the tenant's choice").
+    const keys = [...labels.keys()].filter(k => k && k.includes("_")).sort((a, b) => b.length - a.length);
     if (keys.length) {
       const one = new RegExp(`\\b(?:${keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "g");
       out = out.replace(one, key => labels.get(key));

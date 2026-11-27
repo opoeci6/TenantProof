@@ -105,6 +105,13 @@ def test_a_field_key_in_json_becomes_its_label() -> None:
         '{"field_key": "Landlord address", "reason": "not on the lease"}')
 
 
+def test_a_one_word_key_is_an_ordinary_word_and_stays() -> None:
+    fields = [*FIELDS, {"key": "remedy", "label": "What the tenant is asking for"}]
+    text = "The remedy is the tenant's choice; left remedy empty. Filled monthly_rent."
+    assert human(text, fields=fields) == (
+        "The remedy is the tenant's choice; left remedy empty. Filled Monthly rent.")
+
+
 def test_a_key_the_form_does_not_have_stays_as_written() -> None:
     assert human("hearing_date is still missing") == "hearing_date is still missing"
 
