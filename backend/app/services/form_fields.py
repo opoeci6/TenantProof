@@ -1,6 +1,7 @@
 """Additional Form J fields that the caseworker completes directly."""
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, select
@@ -174,3 +175,7 @@ def is_required(field: FormFieldRow, covered_fields: set[str]) -> bool:
 def lock_alternative_fields(session: Session, case_id: str) -> None:
     # Serialize changes to alternative fields and their shared gaps.
     session.exec(select(CaseRow.id).where(CaseRow.id == case_id).with_for_update()).one()
+
+
+def remedy_input() -> dict[str, Any]:
+    return {"type": "choice", "field_key": "remedy", "options": list(F3_REQUESTS.values())}

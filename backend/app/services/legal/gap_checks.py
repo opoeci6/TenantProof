@@ -20,6 +20,7 @@ Severity = Literal["blocking", "recommended"]
 
 # The gap the intake page closes: services/review.py keeps it in step with the case's flag.
 UNATTESTED_TITLE = "The tenant must confirm their files"
+REMEDY_HOW_TO_FIX = "Discuss the options with the tenant and record their choice."
 
 
 @dataclass(frozen=True)
@@ -32,14 +33,16 @@ class FieldFact:
 
 @dataclass(frozen=True)
 class EvidenceFact:
-    """One item, with the two metadata facts the photo checks need. They are computed by
-    `services/strength.py` when the item is read, so this module does not repeat the rules."""
+    """One item, with the metadata facts the photo checks need. `no_metadata` and `edited` are
+    computed by `services/strength.py` when the item is read, so this module does not repeat the
+    rules."""
 
     evidence_id: str
     label: str
     kind: str
     no_metadata: bool = False  # a photo with no capture time
     edited: bool = False  # last saved by an image editor
+    screenshot: bool = False  # no camera metadata and OCR text found in the image
 
 
 @dataclass(frozen=True)
@@ -90,7 +93,11 @@ def _missing_fields(facts: CaseFacts) -> list[GapSpec]:
                 f"The application asks for {field.label.lower()}. It is empty on the form, and "
                 "the package cannot be filed with a required field missing."
             ),
-            how_to_fix="Ask the tenant, or take it from the lease and the messages.",
+            how_to_fix=(
+                REMEDY_HOW_TO_FIX
+                if field.key == "remedy"
+                else "Ask the tenant, or take it from the lease and the messages."
+            ),
             field_key=field.key,
             source=FORM_J,
         )
@@ -166,7 +173,7 @@ def _photo_originals(facts: CaseFacts) -> list[GapSpec]:
     for item in facts.evidence:
         if item.kind != "photo":
             continue
-        if item.no_metadata:
+        if item.no_metadata and not item.screenshot:
             out.append(
                 GapSpec(
                     severity="recommended",
