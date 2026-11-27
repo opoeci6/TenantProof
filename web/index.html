@@ -1014,9 +1014,27 @@ function formFieldCounts(fields) {
 // #177: a blocking gap the tenant was asked about is still blocking, but it is not also "still
 // open": the page counts those two apart so one gap is never counted twice.
 const openBlocking = st => st.blocking - (st.blockingWaiting || 0);
-function railMeta(st, evidenceCount, landlord = false) {
+// #198: what the Evidence rail says. A mixed case says how many files each side added, and a case
+// with no files says "0 files" rather than "0 files · from tenant". A caller may pass a count
+// instead of the list (mock data or a case that has not loaded yet).
+function evidenceMeta(evidence, landlord = false) {
+  if (typeof evidence === "number") {
+    return landlord ? `${plural(evidence, "file")} · caseworker uploads` : plural(evidence, "file");
+  }
+  const list = Array.isArray(evidence) ? evidence : [];
+  const n = list.length;
+  if (landlord) return `${plural(n, "file")} · caseworker uploads`;
+  if (n === 0) return plural(0, "file");
+  const tenant = list.filter(e => e.uploaded_by === "tenant").length;
+  const caseworker = list.filter(e => e.uploaded_by === "caseworker").length;
+  if (tenant === n) return `${plural(n, "file")} · from tenant`;
+  if (caseworker === n) return `${plural(n, "file")} · added by caseworker`;
+  if (tenant > 0 && caseworker > 0) return `${plural(n, "file")} · ${tenant} tenant, ${caseworker} caseworker`;
+  return plural(n, "file");
+}
+function railMeta(st, evidence, landlord = false) {
   return {
-    evidence: `${plural(evidenceCount, "file")} · ${landlord ? "caseworker uploads" : "from tenant"}`,
+    evidence: evidenceMeta(evidence, landlord),
     timeline: st.total === 0 ? NOTHING : `${st.reviewed} of ${st.total} reviewed`,
     gaps: st.gaps === 0 ? NOTHING : openBlocking(st) ? `${openBlocking(st)} required open` : st.blockingWaiting ? `${st.blockingWaiting} waiting for tenant` : plural(st.recommended, "suggestion"),
     form: st.fieldsTotal === 0 ? NOTHING : `${st.filled} of ${plural(st.fieldsTotal, "field")}${st.toConfirm ? ` · ${st.toConfirm} to confirm` : ""}`,
@@ -1342,7 +1360,7 @@ function renderChrome() {
     : `<strong>${esc(S.me ? S.me.org.name : "")}</strong><span>${S.me ? `Signed in as ${esc(S.me.name)}, caseworker` : ""}</span>`;
   if (!inCase) { $("#rail").innerHTML = ""; return; }
   const st = stats(), run = S.run;
-  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence.length, landlordApplication());
+  const rs = runState(run, openItems(st)), runMeta = rs.rail, rm = railMeta(st, S.evidence, landlordApplication());
   const items = [
     { id: "evidence", name: "Evidence", meta: rm.evidence, done: S.evidence.length > 0 },
     { id: "run", name: "Agent run", meta: runMeta, done: rs.done, attn: rs.attn },
