@@ -63,7 +63,7 @@ def test_the_rail_says_one_file_not_one_files() -> None:
     assert rail(stats(), evidence(3))["evidence"] == "3 files · from tenant"
 
 
-# --------------------------------------------------------------------------- #198: where files came from
+# --------------------------------------------------------------------------- #198: file sources
 
 
 def test_a_case_with_no_files_says_zero_files() -> None:
