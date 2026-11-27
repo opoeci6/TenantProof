@@ -220,3 +220,16 @@ def test_a_merged_term_matches_exactly_as_the_case_value_does() -> None:
         ("Mei", "case", None), ("Chen", "case", None)}
     assert {(e.value, e.source, e.term_id) for e in p.entries()} >= {
         ("Mei", "caseworker", "pt_1"), ("Chen", "caseworker", "pt_2")}
+
+
+def test_a_restored_run_keeps_its_numbers_and_new_values_get_the_next_free_one() -> None:
+    first = Placeholders()
+    assert first.hide("call 902-555-0187, then 9025550188") == "call [PHONE_1], then [PHONE_2]"
+    saved = first.snapshot()
+
+    second = Placeholders()  # a resume builds it again, and sees a different value first
+    assert second.hide("call 902-555-0199") == "call [PHONE_1]"
+    second.restore(saved)
+    assert second.hide("call 902-555-0187, then 9025550188") == "call [PHONE_1], then [PHONE_2]"
+    assert second.hide("and 902-555-0123") == "and [PHONE_3]"  # next free number, no collision
+    assert second.reveal("[PHONE_2] [PHONE_3]") == "9025550188 902-555-0123"

@@ -9,7 +9,14 @@ import pytest
 from sqlmodel import Session, select
 
 from app.config import get_settings
-from app.models import ActivityRow, CaseRow, PrivacyTermRow, RunRow, TimelineEventRow
+from app.models import (
+    ActivityRow,
+    CaseRow,
+    FormFieldRow,
+    PrivacyTermRow,
+    RunRow,
+    TimelineEventRow,
+)
 from app.services.agent import llm, placeholders, runner
 from app.services.agent.evidence_text import InMemoryTextStore, Page
 from tests.agent_support import (
@@ -197,6 +204,130 @@ def test_a_placeholder_written_against_a_letter_is_never_resent_as_the_real_valu
     assert wrapped.hide_request(resumed).messages[0].content == [
         {"type": "text", "text": "Hi [TENANT_NAME]"}
     ]
+
+
+# --- a run that pauses and resumes (issue #163)
+
+
+def pause_with_letter(session: Session) -> tuple[RunRow, RecordingProvider]:
+    """A timeline run that reads the letter, asks the caseworker a question and pauses."""
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    first = RecordingProvider({"timeline-turn1": turn(
+        tool_use("read_evidence", "u1", evidence_id="ev_02"),
+        tool_use("ask_caseworker", "u2", question="Is the hearing booked?"),
+    )})
+    row = runner.create_run(session, case)
+    row = run(runner.execute_run(session, row, first, store(), nonce=N, steps=("timeline",)))
+    assert row.steps[2]["status"] == "needs_input"
+    return row, first
+
+
+def resume_run(session: Session, row: RunRow) -> RecordingProvider:
+    second = RecordingProvider({"timeline-turn2": turn(tool_use("finish", "u3", summary="Done."))})
+    run(runner.execute_run(
+        session, row, second, store(), nonce=N, steps=("timeline",), answer="Yes",
+    ))
+    return second
+
+
+def test_a_resumed_run_keeps_the_placeholders_it_had_before_the_pause(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    """The saved conversation holds real text and is hidden again on every call. A value that
+    became a known one during the pause (the draft step filled the landlord's address) must not
+    get a new placeholder, or the model would see one value under two names."""
+    row, _ = pause_with_letter(session)
+    # The letter holds "22 Placeholder Road." and the pause saved it as [ADDRESS_1].
+    assert any(e[1] == "[ADDRESS_1]" and e[0] == "22 Placeholder Road."
+               for e in row.steps[0][runner.PLACEHOLDERS_KEY]["entries"])
+
+    field = session.exec(select(FormFieldRow).where(
+        FormFieldRow.case_id == CASE, FormFieldRow.key == "landlord_address")).one()
+    field.value = "22 Placeholder Road."  # as the draft step copies it from the letter
+    session.add(field)
+    session.commit()
+    session.refresh(row)
+
+    after = sent_text(resume_run(session, row))
+    assert "22 Placeholder Road" not in after
+    assert "[ADDRESS_1]" in after and "[LANDLORD_ADDRESS]" not in after
+
+
+def test_the_numbering_is_saved_with_the_run_and_stays_out_of_the_api(
+    fresh_db: None, session: Session, on: None, client
+) -> None:
+    row, _ = pause_with_letter(session)
+    saved = row.steps[0][runner.PLACEHOLDERS_KEY]
+    assert any(e[:2] == ["22 Placeholder Road.", "[ADDRESS_1]"] for e in saved["entries"])
+    assert row.steps[0][runner.PRIVACY_KEY] is True
+    body = client.get(f"/api/runs/{row.id}").json()
+    for step in body["steps"]:  # the map holds real values: the API never returns it
+        assert set(step) == {"key", "label", "status", "summary", "tool_calls"}
+
+
+def test_switching_the_setting_during_a_pause_refuses_the_resume(
+    fresh_db: None, session: Session, on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row, _ = pause_with_letter(session)
+    provider = RecordingProvider({"timeline-turn2": turn(tool_use("finish", "u3", summary="x"))})
+    assert runner.can_resume_with(row, provider)
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", False)
+    assert not runner.can_resume_with(row, provider)
+    with pytest.raises(llm.LLMConfigError):
+        run(runner.execute_run(
+            session, row, provider, store(), nonce=N, steps=("timeline",), answer="Yes"))
+    assert provider.requests == []  # nothing was sent, and no placeholder text was saved
+
+
+def test_a_run_paused_with_the_setting_off_refuses_when_it_is_turned_on(
+    fresh_db: None, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row, _ = pause_with_letter(session)
+    provider = RecordingProvider({})
+    assert runner.can_resume_with(row, provider)
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", True)
+    assert not runner.can_resume_with(row, provider)
+
+
+def test_a_run_saved_before_the_setting_was_recorded_still_resumes(
+    fresh_db: None, session: Session, on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row, _ = pause_with_letter(session)
+    row.steps = [{k: v for k, v in s.items() if k not in (runner.PRIVACY_KEY,
+                                                         runner.PLACEHOLDERS_KEY)}
+                 for s in row.steps]
+    assert runner.can_resume_with(row, RecordingProvider({}))
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", False)
+    assert runner.can_resume_with(row, RecordingProvider({}))  # no flag: not checked
+
+
+def test_the_saved_numbering_is_dropped_once_the_run_cannot_resume(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    row, _ = pause_with_letter(session)
+    assert runner.PLACEHOLDERS_KEY in row.steps[0]  # paused: it can resume
+    resume_run(session, row)
+    session.refresh(row)
+    assert runner.PLACEHOLDERS_KEY not in row.steps[0]  # finished: real values not kept
+
+
+def test_a_glued_placeholder_from_before_the_pause_is_still_not_resent_real(
+    fresh_db: None, session: Session, on: None
+) -> None:
+    """Issue #164 across a resume: what the model wrote is saved with the run."""
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    first = RecordingProvider({"timeline-turn1": turn(
+        {"type": "text", "text": "Note on the [TENANT_NAME]s unit."},
+        tool_use("ask_caseworker", "u2", question="Is the hearing booked?"),
+    )})
+    row = runner.create_run(session, case)
+    row = run(runner.execute_run(session, row, first, store(), nonce=N, steps=("timeline",)))
+    second = resume_run(session, row)
+    sent = sent_text(second)
+    assert "Note on the [TENANT_NAME]s unit." in sent
+    assert "Lees" not in sent and "Jordan" not in sent
 
 
 # --- the caseworker's list
