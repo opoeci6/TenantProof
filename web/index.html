@@ -1124,11 +1124,15 @@ function contract(key, data) {
   return `<details class="contract"><summary>Data contract <span class="eps">${ENDPOINTS[key].map(e => `<code class="ep">${esc(e)}</code>`).join("")}</span></summary><pre>${esc(JSON.stringify(data, null, 2))}</pre></details>`;
 }
 /* #96: a reading aid next to a quote in another language. Never the evidence itself. */
+/* translateToggle:start */
 const hasNonAscii = s => /[^\x00-\x7F]/.test(s || "");
 function englishToggle(text, language) {
-  if (!hasNonAscii(text)) return "";
+  const lang = (language || "").trim().toLowerCase().split("-")[0];
+  const show = hasNonAscii(text) || (Boolean(lang) && lang !== "en" && /\p{L}/u.test(text || ""));
+  if (!show) return "";
   return `<div class="tr" data-language="${esc(language || "")}"><button class="btn small" type="button" data-action="translate-excerpt" data-excerpt="${esc(text)}">Show in English</button><div class="tr-out" hidden></div></div>`;
 }
+/* translateToggle:end */
 async function translateExcerpt(btn) {
   const box = btn.closest(".tr"), out = box.querySelector(".tr-out");
   if (!out.hidden) { out.hidden = true; out.innerHTML = ""; btn.textContent = "Show in English"; return; }
