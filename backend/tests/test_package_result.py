@@ -179,7 +179,9 @@ def changes(pkg: dict | None, activity: list[dict] | None) -> list[dict]:
     "Resolved “Landlord's address for service”",
     "Reopened “Landlord's address for service”",
     "Confirmed the files are genuine and agreed to share them",
-    "New files arrived after the confirmation",
+    # The exact line services/evidence/ingest.py writes when tenant files arrive after a
+    # confirmation.
+    "New files arrived after the confirmation, so it must be given again",
     "Accepted event “Tenant reports the leak”",
     "Accepted timeline event: Tenant reports the leak",
     "Edited event “Tenant reports the leak”",
@@ -203,6 +205,7 @@ def test_export_relevant_actions_make_a_build_out_of_date(action: str) -> None:
     "Edited the request to the tenant: “Landlord's address for service”",
     "Approved and sent a request to the tenant: “Landlord's address for service”",
     "Created the intake link",
+    "Sent the intake link in French",  # routers/cases.py: the first send says "Sent"
     "Re-sent the intake link in Chinese (中文)",
     "Translated a quoted source",
     "Hid a personal detail from the AI model",

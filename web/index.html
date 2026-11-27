@@ -1112,10 +1112,10 @@ const packageDownloadUrl = version => `${API_BASE}${C}/package/download?version=
 // build itself never reach the zip, so they do not make a built version out of date.
 const NOT_PACKAGE_CHANGES = [
   /^Noted on timeline event:/,
-  /^(?:Sent|Edited|Approved and sent) a request to the tenant:/,
-  /^(?:Created|Re-sent) the intake link/,
+  /^(?:Sent|Edited|Approved and sent) (?:a|the) request to the tenant:/,
+  /^(?:Created|Sent|Re-sent) the intake link/,
   /^Translated a quoted source/,
-  /^(?:Hid|Let|Undid) a personal detail/,
+  /^(?:Hid|Let|Undid) a personal[- ]detail/,
   /^Checked the official sources:/,
   /^(?:Dismissed item:|Marked waiting on tenant)/,
   /^(?:Built filing package v|Built the filing package)/,
@@ -1128,11 +1128,12 @@ const PACKAGE_CHANGES = [
   /^(?:Accepted|Edited|Rejected|Reset|Reopened) (?:timeline )?event\b/,
   /^(?:Uploaded |Added \d+ files?\b)/,
   /^(?:Finished run_|Removed \d+ unreviewed\b|Extracted facts:)/,
+  // services/evidence/ingest.py: the tenant's confirmation no longer covers the case.
+  /^New files arrived after the confirmation\b/,
 ];
 function isPackageChangeAction(action) {
   const text = String(action || "");
   if (NOT_PACKAGE_CHANGES.some(pattern => pattern.test(text))) return false;
-  if (text === "New files arrived after the confirmation") return true;
   return PACKAGE_CHANGES.some(pattern => pattern.test(text));
 }
 // #201: what changed after `latest` was built, newest first as the activity log is. A line with the
