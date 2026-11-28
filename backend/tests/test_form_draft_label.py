@@ -1,5 +1,5 @@
-"""The Form J draft covers seven tenant-applicant fields, so wherever it shows it says so, and the
-two legal sources checked in issue #54 are confirmed by a person."""
+"""The Form J draft is labelled partial and the two legal sources checked in issue #54
+are confirmed by a person."""
 
 import io
 

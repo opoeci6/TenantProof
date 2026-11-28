@@ -2,9 +2,10 @@
 Stage is recomputed on every mutation by app.services.stage.refresh_stage; the caseload sort is
 the pure priority.sort_key applied to each CaseSummary."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -244,3 +245,29 @@ def test_mutation_on_hearing_case_keeps_hearing_scheduled(fresh_db, client):
     summary = next(c for c in client.get("/api/cases").json() if c["id"] == HEARING_CASE)
     assert summary["stage"] == "hearing_scheduled"
     assert summary["open_blocking"] == 0
+
+
+@pytest.mark.parametrize(("before", "after"), [
+    ("needs_review", "needs_review"),
+    ("hearing_scheduled", "hearing_scheduled"),
+    ("waiting_tenant", "needs_review"),
+])
+def test_landlord_stage_refresh_updates_timestamp_only_on_transition(
+    fresh_db, session, before, after,
+):
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    case.applicant_role = "landlord"
+    case.stage = before
+    previous = datetime(2026, 1, 1, tzinfo=UTC)
+    case.updated_at = previous
+    session.commit()
+
+    refresh_stage(session, case)
+    session.commit()
+    session.refresh(case)
+    assert case.stage == after
+    if before == after:
+        assert case.updated_at == previous
+    else:
+        assert case.updated_at > previous

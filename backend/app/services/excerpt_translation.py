@@ -22,18 +22,23 @@ TRANSLATE_MAX_TOKENS = 8000
 NO_MODEL = "Translation is not available right now. The original quote is unchanged below."
 
 
-def key_for(language: str, excerpt: str) -> str:
-    """The cache key: the same words in the same language are translated once."""
-    return hashlib.sha256(f"{language}\n{excerpt}".encode()).hexdigest()
+def key_for(language: str, excerpt: str, case_id: str | None = None) -> str:
+    """The cache key: the same words in the same language are translated once. With a `case_id`
+    the entry belongs to that case only: with PRIVACY_PLACEHOLDERS on, the model's reply is
+    revealed with the case's own details (issue #60), so it must not be served to another org."""
+    scope = f"case:{case_id}\n" if case_id else ""
+    return hashlib.sha256(f"{scope}{language}\n{excerpt}".encode()).hexdigest()
 
 
-def unchanged(language: str, excerpt: str) -> bool:
-    """Nothing to translate: an English case, or a quote that is already plain English."""
-    return language == "en" or excerpt.isascii()
+def unchanged(language: str, excerpt: str) -> bool:  # noqa: ARG001
+    """Nothing to translate when the language is English."""
+    return language == "en"
 
 
-def cached(session: Session, language: str, excerpt: str) -> str | None:
-    row = session.get(ExcerptTranslationRow, key_for(language, excerpt))
+def cached(
+    session: Session, language: str, excerpt: str, case_id: str | None = None
+) -> str | None:
+    row = session.get(ExcerptTranslationRow, key_for(language, excerpt, case_id))
     return row.text_en if row is not None else None
 
 

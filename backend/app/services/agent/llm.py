@@ -178,10 +178,39 @@ class LLMProvider(Protocol):
 # --------------------------------------------------------------------------- fixture hashing
 
 
-def request_hash(request: LLMRequest) -> str:
-    """12 hex chars over the system prompt (the run's evidence nonce masked) and each tool's
-    name, description and schema. It changes when a prompt or a tool definition changes, so
-    stale fixtures are noticed."""
+# Rows a run creates get a fresh uuid suffix, so a recorded response can never carry the
+# id a replay will see. Mask those ids in tool results before hashing, or every write step
+# (propose_event, create_gap, ...) would mismatch when replayed.
+_RUN_ROW_ID = re.compile(r"\b(te|gap)_[0-9a-f]{10}\b")
+
+
+def _mask_row_ids(value: Any) -> Any:
+    """Mask generated row ids inside tool result content (strings, or lists of blocks)."""
+    if isinstance(value, str):
+        return _RUN_ROW_ID.sub(r"\1_ID", value)
+    if isinstance(value, list):
+        return [_mask_row_ids(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _mask_row_ids(item) for key, item in value.items()}
+    return value
+
+
+def _stable_messages(request: LLMRequest) -> list[dict[str, Any]]:
+    """The conversation with the per-run parts of tool results masked."""
+    messages: list[dict[str, Any]] = []
+    for message in request.messages:
+        data = message.model_dump(mode="json")
+        content = data.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    block["content"] = _mask_row_ids(block.get("content"))
+        messages.append(data)
+    return messages
+
+
+def request_hash(request: LLMRequest, *, model: str = MODEL) -> str:
+    """Fingerprint the request; the run's evidence tag and generated row ids are masked."""
     tools = sorted(
         (
             {
@@ -193,16 +222,29 @@ def request_hash(request: LLMRequest) -> str:
         ),
         key=lambda t: str(t["name"]),
     )
-    # The evidence tag carries a per-run random suffix; it must not change the hash.
-    system = _EVIDENCE_TAG.sub("evidence-NONCE", request.system)
-    run_part = _EVIDENCE_TAG.sub("evidence-NONCE", request.system_run)
-    blob = json.dumps({"system": system, "system_run": run_part, "tools": tools}, sort_keys=True)
+    nonce_tags = set(_EVIDENCE_TAG.findall(request.system + "\n" + request.system_run))
+    blob = json.dumps({
+        "system": request.system,
+        "system_run": request.system_run,
+        "messages": _stable_messages(request),
+        "tools": tools,
+        "model": model,
+        "max_tokens": request.max_tokens,
+    }, sort_keys=True)
+    blob = _EVIDENCE_TAG.sub(
+        lambda match: "evidence-NONCE" if match[0] in nonce_tags else match[0], blob
+    )
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
 
 
-def fixture_document(request: LLMRequest, response: LLMResponse) -> dict[str, Any]:
+def fixture_document(
+    request: LLMRequest, response: LLMResponse, *, model: str = MODEL
+) -> dict[str, Any]:
     """The JSON stored in a fixture file."""
-    return {"request_hash": request_hash(request), "response": response.model_dump(mode="json")}
+    return {
+        "request_hash": request_hash(request, model=model),
+        "response": response.model_dump(mode="json"),
+    }
 
 
 def _fixture_path(directory: Path, key: str) -> Path:
@@ -227,11 +269,14 @@ class FixtureProvider:
         directory: Path | None = None,
         *,
         strict: bool | None = None,
+        model: str = MODEL,
         scripted: dict[str, LLMResponse] | None = None,
     ) -> None:
         self.directory = directory or FIXTURES_DIR
         self.strict = os.environ.get("FIXTURE_STRICT") == "1" if strict is None else strict
         self.scripted = scripted or {}
+        self.model = model
+        self.continuation_profile = ("fixture", model)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         if request.fixture_key in self.scripted:
@@ -244,12 +289,12 @@ class FixtureProvider:
         return LLMResponse.model_validate(doc["response"])
 
     def _check_hash(self, request: LLMRequest, recorded: str | None) -> None:
-        current = request_hash(request)
+        current = request_hash(request, model=self.model)
         if recorded == current:
             return
         msg = (
             f"fixture {request.fixture_key!r} was recorded for request_hash {recorded}, "
-            f"this request is {current}: the prompt or tool schemas changed, re-record it"
+            f"this request is {current}: the request or model changed, re-record it"
         )
         if self.strict:
             raise FixtureMismatch(msg)
@@ -268,6 +313,11 @@ _STOP_REASONS: dict[str, Literal["end_turn", "tool_use", "max_tokens", "refusal"
 class AnthropicProvider:
     """Live provider. `client` is injectable so tests use a fake and never reach the network."""
 
+    requires_continuation_key = True
+    # Before the provider settings (PR #155) Anthropic was the only live provider, and its
+    # checkpoints were saved without a key: they can still be answered.
+    accepts_unkeyed_checkpoints = True
+
     def __init__(
         self,
         api_key: str,
@@ -284,9 +334,13 @@ class AnthropicProvider:
         self.model = model
         self.effort = effort
         self.deadline_s = deadline_s
+        self.continuation_profile = ("anthropic", model, base_url or ANTHROPIC_API_URL, effort)
         self.client = client or anthropic.AsyncAnthropic(
             api_key=api_key, timeout=CALL_TIMEOUT_S, max_retries=MAX_RETRIES,
             base_url=base_url or ANTHROPIC_API_URL,
+            http_client=anthropic.DefaultAsyncHttpxClient(
+                timeout=CALL_TIMEOUT_S, follow_redirects=False,
+            ),
         )
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -388,23 +442,59 @@ def estimate_cost_usd(usage: Usage, model: str = MODEL) -> float | None:
     )
 
 
-def _live_api_key() -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+_CHAT_PROVIDERS = {
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+    "deepseek": ("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+    "grok": ("https://api.x.ai/v1", "XAI_API_KEY"),
+    "openai_compatible": ("", "OPENAI_COMPATIBLE_API_KEY"),
+}
+
+
+def continuation_key(provider: LLMProvider) -> str | None:
+    """Store a provider fingerprint with resumable history, without credentials or raw URLs."""
+    profile = getattr(provider, "continuation_profile", None)
+    return hashlib.sha256(json.dumps(profile).encode()).hexdigest() if profile is not None else None
+
+
+def _live_api_key(env_name: str = "ANTHROPIC_API_KEY") -> str:
+    key = os.environ.get(env_name, "").strip()
     if not key:
         raise LLMConfigError(
-            "LLM_MODE=live needs ANTHROPIC_API_KEY: export it in the process environment "
+            f"LLM_MODE=live needs {env_name}: export it in the process environment "
             "(backend/.env is not read for it yet)"
         )
     return key
 
 
 def get_provider(settings: Settings) -> LLMProvider:
-    """Fixture mode never reads the key. Live mode fails early if it is missing. The model
-    (LLM_MODEL) and the API address (ANTHROPIC_BASE_URL) come from the settings; empty means
-    the built-in default model and Anthropic's own API."""
+    """Build the configured adapter. Fixture mode never reads credentials."""
+    name = settings.llm_provider
     if settings.llm_mode == "fixture":
+        # Fixtures are recorded against MODEL; a stray LLM_MODEL must not break a replay
+        # (the hash covers the model, so honouring it here would fail every fixture).
         return FixtureProvider()
-    return AnthropicProvider(
-        api_key=_live_api_key(), model=settings.llm_model or MODEL,
-        base_url=settings.anthropic_base_url or None,
+    effort = settings.llm_effort
+    if name == "anthropic":
+        return AnthropicProvider(
+            api_key=_live_api_key(), model=settings.llm_model or MODEL,
+            base_url=settings.anthropic_base_url or None, effort=effort or EFFORT,
+        )
+
+    from app.services.agent.chat import ChatCompletionsProvider
+
+    if not settings.llm_model:
+        raise LLMConfigError(f"LLM_PROVIDER={name} requires LLM_MODEL")
+    base_url, key_env = _CHAT_PROVIDERS[name]
+    if name == "openai_compatible":
+        base_url = settings.openai_compatible_base_url
+        if not base_url:
+            raise LLMConfigError("openai_compatible requires OPENAI_COMPATIBLE_BASE_URL")
+    if name == "deepseek" and effort == "medium":
+        raise LLMConfigError("DeepSeek reasoning effort must be low or high")
+    return ChatCompletionsProvider(
+        _live_api_key(key_env), settings.llm_model, provider=name, base_url=base_url,
+        effort=effort,
     )

@@ -72,9 +72,9 @@ def test_deleting_the_evidence_removes_its_pages_and_facts(rows, session: Sessio
 def test_read_evidence_and_search_facts_serve_the_tables(rows, session: Session):
     ctx = make_ctx(session, SqlTextStore(session))  # type: ignore[arg-type]
     first = call("read_evidence", ctx, {"evidence_id": "ev_04"})
-    assert first.locator == "message 1" and MSG1 in first.block.content
+    assert first.pages[0].locator == "message 1" and MSG1 in first.pages[0].block.content
     second = call("read_evidence", ctx, {"evidence_id": "ev_04", "page": 2})
-    assert second.locator == "message 2" and "second" in second.block.content
+    assert second.pages[0].locator == "message 2" and "second" in second.pages[0].block.content
     found = call("search_facts", ctx, {"query": "water"})
     assert "water leak" in str(found)
 

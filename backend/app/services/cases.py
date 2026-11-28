@@ -7,25 +7,34 @@ yet. The org and the assignee are the signed-in caseworker's; nothing in the bod
 import unicodedata
 import uuid
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from app.models import CaseRow, UserRow
-from app.schemas import CaseCreate
+from app.models import CaseRow, FormFieldRow, UserRow
+from app.schemas import ApplicantCaseCreate, CaseCreate
 from app.services import activity
 from app.services.agent.tools import clean_text
-from app.services.legal.corpus import FORM_J_DRAFT_LABEL
+from app.services.form_fields import field_allowed_for_case
+from app.services.legal.corpus import FORM_J_DRAFT_LABEL, FORM_J_FIELDS
 
 FORM_NAME = FORM_J_DRAFT_LABEL
 FORM_DISCLAIMER = (
     "Prepared with the tenant to help fill in the official form. It is information, not legal "
     "advice, and is not submitted anywhere."
 )
+LANDLORD_FORM_DISCLAIMER = (
+    "Prepared by a caseworker to help fill in the official form. This draft is unsigned "
+    "and has not been submitted."
+)
 LIMITS = {"tenant_name": 120, "unit": 200, "title": 120}  # the CaseCreate limits
 LABELS = {
+    "applicant_role": "Applicant role",
     "tenant_name": "Tenant name",
     "tenant_language": "Preferred language",
     "unit": "Unit address",
     "title": "What is wrong",
+    # #202: the form's per-submission key. Labelled, not limited: it is an opaque token, so a bad
+    # one is "not valid" rather than too short or too long.
+    "idempotency_key": "Submission key",
 }
 # "<" and its look-alikes are refused, not escaped: escaped, a typed "Heat < 15C" would be stored
 # and shown (caseload, tenant page, filed PDF) as "Heat &lt; 15C".
@@ -63,10 +72,25 @@ def problems(body: CaseCreate) -> list[str]:
     return reasons
 
 
-def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
+def find_by_idempotency_key(
+    session: Session, org_id: str, idempotency_key: str | None
+) -> CaseRow | None:
+    """The case this key already made in the org, or None (#202). Keys are scoped per org, so the
+    same key in another org is a different submission."""
+    if not idempotency_key:
+        return None
+    return session.exec(
+        select(CaseRow).where(
+            CaseRow.org_id == org_id, CaseRow.idempotency_key == idempotency_key
+        )
+    ).first()
+
+
+def create_case(session: Session, user: UserRow, body: ApplicantCaseCreate) -> CaseRow:
     """The new case, in the user's org and assigned to them. Caller checks `problems` first, and
     commits."""
     text = cleaned(body)
+    landlord_applicant = body.applicant_role == "landlord"
     case = CaseRow(
         id=f"case_{uuid.uuid4().hex[:10]}",
         org_id=user.org_id,
@@ -76,14 +100,26 @@ def create_case(session: Session, user: UserRow, body: CaseCreate) -> CaseRow:
         unit=text["unit"],
         tenant_name=text["tenant_name"],
         tenant_language=body.tenant_language,
-        stage="waiting_tenant",
+        applicant_role=body.applicant_role,
+        stage="needs_review" if landlord_applicant else "waiting_tenant",
         synthetic=True,  # every case in this prototype is synthetic demo data
         has_demo_data=True,  # it has a case view: the caseload opens it like the live-demo case
         form_name=FORM_NAME,
-        form_disclaimer=FORM_DISCLAIMER,
+        form_disclaimer=LANDLORD_FORM_DISCLAIMER if landlord_applicant else FORM_DISCLAIMER,
         intake_status="not_sent",
+        idempotency_key=body.idempotency_key,
     )
     session.add(case)
     session.flush()  # the activity row's foreign key needs the case row first
+    if landlord_applicant:
+        values = {"tenant_name": case.tenant_name, "rental_address": case.unit}
+        for position, spec in enumerate(FORM_J_FIELDS):
+            if not field_allowed_for_case(case, spec.key):
+                continue
+            value = values.get(spec.key)
+            session.add(FormFieldRow(
+                case_id=case.id, key=spec.key, position=position, label=spec.label,
+                value=value, required=spec.required, status="user_entered" if value else "missing",
+            ))
     activity.log(session, case.id, "caseworker", user.name, "Created the case")
     return case

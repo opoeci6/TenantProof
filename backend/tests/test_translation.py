@@ -73,17 +73,37 @@ def test_a_quote_is_translated_once_and_the_second_request_is_free(
     assert row is not None and row.text_en == EN
 
 
-def test_an_english_quote_needs_no_model_call(fresh_db, client, provider) -> None:
-    r = _translate(client, "The landlord said he will fix it.", "en")
+@pytest.mark.parametrize("quote", ["The landlord said he will fix it.", "café"])
+def test_an_english_quote_needs_no_model_call(fresh_db, client, provider, quote: str) -> None:
+    r = _translate(client, quote, "en")
     assert r.status_code == 200
-    assert r.json() == {"text_en": "The landlord said he will fix it."}
+    assert r.json() == {"text_en": quote}
     assert provider[0].requests == []
 
 
-def test_a_plain_ascii_quote_is_returned_unchanged(fresh_db, client, provider) -> None:
-    r = _translate(client, "OK", "zh")
-    assert r.status_code == 200 and r.json()["text_en"] == "OK"
-    assert provider[0].requests == []
+def test_an_ascii_french_quote_is_translated_and_cached(
+    fresh_db, client, provider, session
+) -> None:
+    fr_ascii = "Notre plombier vous contactera avant le 5 septembre."
+    fr_en = "Our plumber will contact you before September 5."
+    provider.append(Provider(fr_en))
+
+    first = _translate(client, fr_ascii, "fr")
+    assert first.status_code == 200 and first.json() == {"text_en": fr_en}
+    assert len(provider[-1].requests) == 1
+
+    second = _translate(client, fr_ascii, "fr")
+    assert second.status_code == 200 and second.json() == {"text_en": fr_en}
+    assert len(provider[-1].requests) == 1
+
+    session.expire_all()
+    row = session.get(ExcerptTranslationRow, excerpt_translation.key_for("fr", fr_ascii))
+    assert row is not None and row.text_en == fr_en
+
+
+def test_translate_excerpt_prompt_keeps_english_verbatim() -> None:
+    assert prompts.TRANSLATE_EXCERPT_PROMPT_VERSION == "translate-excerpt-v2"
+    assert "already in English" in prompts.translate_excerpt_system()
 
 
 def test_the_quote_goes_to_the_model_inside_an_evidence_block(fresh_db, client, provider) -> None:
@@ -147,3 +167,18 @@ def test_the_translation_is_logged(fresh_db, client, provider, session) -> None:
         for row in session.exec(select(ActivityRow).where(ActivityRow.case_id == CASE)).all()
     ]
     assert "Translated a quoted source" in actions
+
+
+def test_with_placeholders_on_a_translation_is_cached_for_its_case_only(
+    fresh_db, client, provider, session, monkeypatch
+) -> None:
+    """Issue #60: the reply is revealed with this case's details, so another case (or org) asking
+    for the same words must not be served it from the cache."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "privacy_placeholders", True)
+    assert _translate(client).status_code == 200
+    session.expire_all()
+    assert session.get(ExcerptTranslationRow, excerpt_translation.key_for("zh", ZH)) is None
+    assert session.get(ExcerptTranslationRow, excerpt_translation.key_for("zh", ZH, CASE))
+    assert excerpt_translation.cached(session, "zh", ZH, "case_other") is None

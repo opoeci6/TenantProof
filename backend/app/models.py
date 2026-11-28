@@ -6,8 +6,10 @@ routers validate them through the Pydantic models in schemas.py."""
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Column, Index, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, Column, Index, String, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
+
+from app.schemas import ApplicantRole, PrivacyAction, PrivacyRole
 
 
 def utcnow() -> datetime:
@@ -42,6 +44,20 @@ class LoginSessionRow(SQLModel, table=True):
 
 class CaseRow(SQLModel, table=True):
     __tablename__ = "tenant_case"
+    __table_args__ = (
+        CheckConstraint(
+            "applicant_role IN ('tenant', 'landlord')", name="ck_tenant_case_applicant_role"
+        ),
+        # #202: a retried create with the same key returns the case the first attempt made. The
+        # key is per org, and rows without one (seeds, tests, older cases) never collide.
+        Index(
+            "uq_tenant_case_org_idempotency_key",
+            "org_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
     id: str = Field(primary_key=True)
     org_id: str = Field(foreign_key="org.id", index=True)
     assigned_to_id: str = Field(foreign_key="app_user.id")
@@ -50,8 +66,12 @@ class CaseRow(SQLModel, table=True):
     unit: str
     tenant_name: str
     tenant_language: str
+    applicant_role: ApplicantRole = Field(
+        default="tenant", sa_column=Column(String(8), nullable=False, server_default="tenant")
+    )
     stage: str
     hearing_date: str | None = None  # ISO date; drives deadline + priority
+    no_hearing_yet: bool = False  # a caseworker said there is no hearing scheduled yet (#124)
     next_deadline: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     synthetic: bool = True
     has_demo_data: bool = False
@@ -62,6 +82,11 @@ class CaseRow(SQLModel, table=True):
     intake_last_upload_at: datetime | None = None
     tenant_attested_genuine: bool = False
     tenant_attested_at: datetime | None = None
+    # #202: the key the new-case form minted for this submission; a retry with the same key
+    # returns this case instead of creating a second one. Null for seeds and older cases.
+    idempotency_key: str | None = Field(
+        default=None, sa_column=Column(String(64), nullable=True)
+    )
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -220,6 +245,31 @@ class FormFieldRow(SQLModel, table=True):
     status: str = "missing"
     sources: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     note: str | None = None
+
+
+class PrivacyTermRow(SQLModel, table=True):
+    """A caseworker's choice about one personal detail of a case (issue #60). `hide` adds a
+    value the finder missed (a name written in another script, a neighbour), so it is swapped
+    for a placeholder before anything goes to the model. `show` lets a value the finder found
+    go to the model as written. One row per value (compared case-insensitively, `value_key`)."""
+
+    __tablename__ = "privacy_term"
+    __table_args__ = (
+        UniqueConstraint("case_id", "value_key"),
+        CheckConstraint("action IN ('hide', 'show')", name="ck_privacy_term_action"),
+        CheckConstraint(
+            "role IN ('tenant', 'landlord', 'person', 'address', 'other')",
+            name="ck_privacy_term_role",
+        ),
+    )
+    id: str = Field(primary_key=True)
+    case_id: str = Field(foreign_key="tenant_case.id", index=True, ondelete="CASCADE")
+    value: str
+    value_key: str  # the value casefolded with its spaces collapsed
+    action: PrivacyAction = Field(sa_column=Column(String(4), nullable=False))
+    role: PrivacyRole = Field(sa_column=Column(String(8), nullable=False))
+    created_by: str  # the caseworker's display name, as in the activity log
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class ActivityRow(SQLModel, table=True):

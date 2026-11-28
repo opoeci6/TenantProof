@@ -170,3 +170,13 @@ def test_the_matched_span_keeps_the_original_case_and_spacing() -> None:
     pages = {"Page 1": "Intro.\nRent  is   $1,150\tper month. More."}
     v = verifier.verify_citation("rent is $1,150 per month", "page 1", pages)
     assert v.ok and v.matched == "Rent  is   $1,150\tper month" and v.locator == "Page 1"
+
+
+def test_entities_are_never_decoded_and_both_forms_of_a_page_match() -> None:
+    page = {"page 1": "Callback ?a=1&copy=2 and heat &lt; 15C and temperature < 10C today."}
+    typed = verifier.verify_citation("Callback ?a=1&copy=2 and heat", "page 1", page)
+    assert typed.ok and typed.matched == "Callback ?a=1&copy=2 and heat"
+    literal = verifier.verify_citation("heat &lt; 15C and temperature", "page 1", page)
+    assert literal.ok and literal.matched == "heat &lt; 15C and temperature"  # the stored text
+    wrapped = verifier.verify_citation("temperature &lt; 10C today.", "page 1", page)
+    assert wrapped.ok and wrapped.matched == "temperature < 10C today."

@@ -402,6 +402,41 @@ def test_text_upload_writes_one_evidence_page_per_message(fresh_db, client, sess
         ("message 3", "Tenant: thanks")]
 
 
+LETTER = b"""Jordan Lee
+Unit 4B, 100 Example Street, Halifax, NS
+Date: 2026-08-20
+
+To: Sample Property Management Ltd.
+Re: Repair request for the bathroom leak
+
+Dear Sample Property Management,
+
+On 2026-08-14 I told you that water was coming through the bathroom wall.
+Nobody has come to fix it, and there is now mould on the ceiling.
+Please repair the leak and the damaged wall within 14 days.
+
+Sincerely,
+Jordan Lee
+"""
+
+
+def test_a_letter_text_file_is_a_letter_not_messages(fresh_db, client, session):
+    """#125: a letter typed as a .txt was filed as "messages" with the text-messages note."""
+    r = upload(client, ("2_repair_request_letter.txt", LETTER, "text/plain"))
+    assert r.status_code == 200, r.text
+    [item] = r.json()
+    assert item["kind"] == "letter"
+    assert item["format_check"] == {
+        "accepted": True, "action": "will_export_pdf",
+        "note": "Digital documents must be Word, Excel or PDF (Evidence Policy #42). "
+                "The package adds a PDF copy."}
+    pages = pages_of(session, evidence_rows(session)[-1])
+    assert pages[0] == ("line 1", "Jordan Lee")
+    assert pages[6] == ("line 7", "On 2026-08-14 I told you that water was coming through the "
+                                  "bathroom wall.")
+    assert len(pages) == 11  # one per non-empty line
+
+
 def test_evidence_pages_go_with_their_evidence_and_case(fresh_db, client, session):
     upload(client, ("chat.txt", b"one\ntwo\n", "text/plain"))
     row = evidence_rows(session)[-1]
@@ -749,6 +784,9 @@ def test_package_zip_contains_the_uploaded_originals(fresh_db, client, session):
     by_label = {e["label"]: e for e in manifest["evidence"]}
     assert len(manifest["evidence"]) == SEEDED + 2
     assert by_label["E-08"]["sha256"] == sha(photo)  # what was received
+    assert by_label["E-08"]["location"] == {"present": True, "removed": True}
+    assert by_label["E-09"]["location"] == {"present": False, "removed": False}
+    # the older boolean stays for existing readers of the manifest
     assert by_label["E-08"]["location_data_removed"] is True
     assert by_label["E-09"]["location_data_removed"] is False
     assert by_label["E-08"]["in_zip"] == "evidence/E-08.jpg"
@@ -804,6 +842,23 @@ def test_a_tenant_uploaded_text_file_is_in_the_package_as_txt(
     entries = unzip(client.get(DOWNLOAD).content)
     assert entries["evidence/E-08.txt"] == chat
     assert entries["evidence/E-08.pdf"].startswith(b"%PDF-")  # text messages are filed as PDF
+    manifest = json.loads(entries["manifest.json"])
+    item = next(e for e in manifest["evidence"] if e["label"] == "E-08")
+    assert item["rendition"]["path"] == "evidence/E-08.pdf"
+
+
+def test_a_text_letter_is_in_the_package_as_txt_and_its_pdf_copy(fresh_db, client):
+    """#125: only the kind and the note change for a letter; it is filed like a chat."""
+    assert upload(client, ("letter.txt", LETTER, "text/plain")).json()[0]["kind"] == "letter"
+    make_ready(client)
+    client.post(BUILD, json=ATTESTATIONS)
+
+    entries = unzip(client.get(DOWNLOAD).content)
+    assert entries["evidence/E-08.txt"] == LETTER
+    assert entries["evidence/E-08.pdf"].startswith(b"%PDF-")
+    copy = " ".join(PdfReader(io.BytesIO(entries["evidence/E-08.pdf"])).pages[0]
+                    .extract_text().split())
+    assert "Re: Repair request for the bathroom leak" in copy
     manifest = json.loads(entries["manifest.json"])
     item = next(e for e in manifest["evidence"] if e["label"] == "E-08")
     assert item["rendition"]["path"] == "evidence/E-08.pdf"
@@ -998,7 +1053,7 @@ def test_heic_goes_in_the_package_only_as_a_jpg(fresh_db, client, session):
     assert listed["evidence/E-08.jpg"]["sha256"] == sha(entries["evidence/E-08.jpg"])
     assert "evidence/E-08.heic" not in listed
     assert "does not accept HEIC" in listed["evidence/E-08.jpg"]["note"]
-    assert item["location_data_removed"] is True
+    assert item["location"]["removed"] is True
     assert "location data removed" in listed["evidence/E-08.jpg"]["note"]
     assert "location data removed" in " ".join(manifest_text(entries).split())
     # the stored original still has its GPS
@@ -1121,7 +1176,7 @@ def test_a_gps_tagged_png_is_filed_without_gps_but_with_its_capture_time(fresh_d
     assert pixels(filed) == pixels(original)
     with Image.open(io.BytesIO(filed)) as img:
         img.load()  # the CRCs are right: it still decodes
-    assert json.loads(entries["manifest.json"])["evidence"][-1]["location_data_removed"] is True
+    assert json.loads(entries["manifest.json"])["evidence"][-1]["location"]["removed"] is True
 
 
 def test_the_exif_orientation_survives_the_gps_removal(fresh_db, client):
@@ -1140,7 +1195,8 @@ def test_an_image_without_gps_is_filed_byte_for_byte_and_not_marked(fresh_db, cl
     entries = package_entries(client)
 
     assert entries["evidence/E-08.jpg"] == original
-    assert json.loads(entries["manifest.json"])["evidence"][-1]["location_data_removed"] is False
+    assert json.loads(entries["manifest.json"])["evidence"][-1]["location"] == {
+        "present": False, "removed": False}
     assert "location data removed" not in " ".join(manifest_text(entries).split())
 
 

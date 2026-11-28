@@ -30,14 +30,23 @@ from app.services.agent.tools import (
 
 log = logging.getLogger(__name__)
 
-# 25 was too few (#118): `read_evidence` returns one page per call, and each message of a chat
-# export is a page, so five files with a few messages each used the whole budget on reading and the
-# timeline stopped after 4 of about 8 events. Reading many pages per call is the real fix; until
-# then the step gets more calls. A run used under 50k input tokens, far below the token budget.
+# 25 was too few (#118): `read_evidence` used to return one page per call, and each message of a
+# chat export is a page, so five files with a few messages each used the whole budget on reading
+# and the timeline stopped after 4 of about 8 events. It now reads a whole file per call (#137);
+# the higher cap stays as headroom. A five-file run uses about 50k input tokens over all its steps.
 MAX_TOOL_CALLS = 40
 MAX_TOTAL_TOKENS = 200_000  # input plus output, summed over the turns of one step
 MAX_TURNS = 50  # model calls, so a model that never calls a tool still stops; above the call cap
 SUMMARY_CHARS = 1000
+# The last few calls of a step are kept for what records its result (propose_event, create_gap,
+# fill_form_field, finish). Reading is cheap to postpone to the next step; a step that runs out
+# of calls before it can write anything is not (#118).
+RESERVED_READ_CALLS = 3
+# A model that keeps asking to read after the reserve must not spin. A turn that only reads past
+# the reserve gets "Skipped" results telling it to record what it has; if the next turn again only
+# reads, the step stops incomplete. Counted in turns, not calls, so the model always sees the
+# warning once before the stop: one turn of parallel reads over the line must not end the step.
+MAX_READ_ONLY_TURNS_PAST_RESERVE = 2
 
 # Called at the end of every turn that ran tools, just before the commit: (state, pending). The
 # runner saves the step (tool calls, usage, a checkpoint) there, so the turn's rows and the
@@ -52,6 +61,7 @@ class LoopBudget:
     max_tool_calls: int = MAX_TOOL_CALLS
     max_tokens: int = MAX_TOTAL_TOKENS
     max_turns: int = MAX_TURNS
+    reserved_read_calls: int = RESERVED_READ_CALLS
 
 
 @dataclass
@@ -62,6 +72,9 @@ class StepState:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     turns: int = 0
+    # Turns in a row whose only calls were reads skipped by the reserve. Not checkpointed: after a
+    # pause or crash it starts at 0 again, and MAX_TURNS still bounds the step.
+    read_only_turns_past_reserve: int = 0
 
 
 @dataclass(frozen=True)
@@ -182,6 +195,8 @@ async def run_agent_loop(
         asked: tuple[ToolUse, str] | None = None
         finished: str | None = None
         cut = False
+        skipped_read = False
+        ran = False  # any call that was not a skipped read ran this turn
         for use in response.tool_uses:
             if use.name == "ask_caseworker" and asked is not None:
                 results.append(_error_block(use, "Only one question per turn: one is pending."))
@@ -190,8 +205,20 @@ async def run_agent_loop(
                 results.append(_error_block(use, "Skipped: the step reached its tool-call limit."))
                 cut = True
                 continue
+            tool = TOOLS.get(use.name) if use.name in allowed else None
+            left = budget.max_tool_calls - len(state.tool_calls)
+            if tool is not None and tool.effect == "read" and left <= budget.reserved_read_calls:
+                skipped_read = True
+                results.append(_error_block(
+                    use,
+                    f"Skipped: only {left} tool calls are left in this step, and they are kept "
+                    "for what records your result. Do not read more: record what you have read "
+                    "with the tools that write, then call finish.",
+                ))
+                continue
             result = await _dispatch(ctx, use, allowed)
             state.tool_calls.append(to_tool_call(use.name, use.input, result))
+            ran = True
             failed = isinstance(result, ToolError)
             if use.name == "ask_caseworker" and not failed:
                 asked = (use, _short(str(use.input.get("question", ""))))
@@ -206,13 +233,25 @@ async def run_agent_loop(
             }
             _end_turn(ctx, state, on_turn, pending)
             return LoopResult("needs_input", question, pending=pending)
-        if finished is not None or cut:
+        if skipped_read and not ran:
+            state.read_only_turns_past_reserve += 1
+        else:
+            state.read_only_turns_past_reserve = 0
+        read_cut = state.read_only_turns_past_reserve >= MAX_READ_ONLY_TURNS_PAST_RESERVE
+        if finished is not None or cut or read_cut:
             _end_turn(ctx, state, on_turn, None)
             if finished is not None:
                 return LoopResult("finished", finished)
+            if cut:
+                return LoopResult(
+                    "budget",
+                    f"Stopped early: the step reached its limit of {budget.max_tool_calls} "
+                    "tool calls.",
+                )
             return LoopResult(
                 "budget",
-                f"Stopped early: the step reached its limit of {budget.max_tool_calls} tool calls.",
+                f"Stopped early: the step reached its read limit; the last "
+                f"{budget.reserved_read_calls} calls are kept for what records the result.",
             )
         state.messages.append(Message(role="user", content=results))
         _end_turn(ctx, state, on_turn, None)

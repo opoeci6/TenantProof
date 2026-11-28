@@ -18,6 +18,7 @@ import logging
 import re
 import uuid
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,20 +26,41 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from fpdf import FPDF
-from fpdf.enums import WrapMode
 from PIL import Image
 from sqlmodel import Session, col, select
 
 from app.models import CaseRow, EvidenceRow, FormFieldRow, GapRow, PackageRow, UserRow
-from app.schemas import Attestations, Package, PackageFile
+from app.schemas import ApplicantRole, Attestations, FormField, Package, PackageFile
 from app.services import activity, storage
 from app.services.evidence import gps, sniff  # also registers the HEIC opener
+from app.services.form_fields import (
+    EMAIL_CONSENT_LABEL,
+    F1_ADDRESS_GROUPS,
+    F1_CONTACT_GROUPS,
+    F2_FIELD_KEYS,
+    F3_PAYMENT_REQUESTS,
+    F3_REQUESTS,
+    F4_PAYMENT_REQUESTS,
+    F4_REQUESTS,
+    MANUAL_FIELDS_BY_KEY,
+    covered_legacy_fields,
+    is_required,
+)
+from app.services.form_values import (
+    DATE_ORDER_PAIRS,
+    F2_DEPENDENCIES,
+    FORM_CHOICES,
+    MONEY_KEYS,
+    cad_amount,
+    dates_out_of_order,
+)
 from app.services.gating import MissingField, OpenGap, package_blockers
 from app.services.mappers import (
     OPEN_GAP,
     build_form_draft,
     has_completed_run,
     iso_req,
+    latest_run_steps,
     reviewed_event_count,
 )
 
@@ -84,6 +106,41 @@ def attestation_reasons(att: Attestations) -> list[str]:
 
 NOT_ANALYSED = "No analysis has been completed for this case yet. Run the analysis first."
 NOTHING_REVIEWED = "No timeline events have been accepted yet. Review the timeline first."
+# #119. The same words as `analysisWarning` in web/index.html.
+STOPPED_TIMELINE = (
+    "The analysis stopped early: the timeline may be missing events. "
+    "Run the analysis again before relying on this."
+)
+STOPPED_OTHER = (
+    "The analysis stopped early: some results may be missing. "
+    "Run the analysis again before relying on this."
+)
+
+
+def incomplete_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [s for s in steps if s.get("status") == "incomplete"]
+
+
+def _step_labels(steps: list[dict[str, Any]]) -> str:
+    return ", ".join(s["label"] for s in steps)
+
+
+def analysis_warning(steps: list[dict[str, Any]]) -> list[str]:
+    """What the brief and the package say when a step of this run stopped early; empty when none
+    did. `steps` are all the run's steps, in order. The timeline sentence is for a timeline that
+    stopped or never ran. Steps still pending are "not run" only once nothing is in progress."""
+    stopped = incomplete_steps(steps)
+    if not stopped:
+        return []
+    timeline = next((s.get("status") for s in steps if s.get("key") == "timeline"), None)
+    lead = STOPPED_TIMELINE if timeline in ("incomplete", "pending") else STOPPED_OTHER
+    lines = [lead, f"Stopped early: {_step_labels(stopped)}"]
+    if not any(s.get("status") in ("running", "needs_input") for s in steps):
+        after = steps[steps.index(stopped[0]) + 1 :]
+        not_run = [s for s in after if s.get("status") == "pending"]
+        if not_run:
+            lines.append(f"Not run: {_step_labels(not_run)}")
+    return lines
 
 
 def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
@@ -98,46 +155,39 @@ def analysis_reasons(session: Session, case: CaseRow) -> list[str]:
 
 def state_reasons(session: Session, case: CaseRow) -> list[str]:
     fields = session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case.id)).all()
+    covered_fields = covered_legacy_fields(fields)
     gaps = session.exec(select(GapRow).where(GapRow.case_id == case.id)).all()
     reasons = package_blockers(
         [OpenGap(g.title, (g.input or {}).get("field_key"))
          for g in gaps if g.severity == "blocking" and g.status in OPEN_GAP],
-        [MissingField(f.key, f.label) for f in fields if f.required and not f.value],
+        [MissingField(f.key, f.label)
+         for f in fields if is_required(f, covered_fields) and not f.value],
         case.tenant_attested_genuine,
     )
-    if not fields:
+    if not any(f.key not in MANUAL_FIELDS_BY_KEY for f in fields):
         reasons.insert(0, "No form draft has been prepared for this case yet")
     return [*analysis_reasons(session, case), *reasons]
 
 
-# Hindi cannot be drawn correctly yet: the bundled fonts have the Devanagari glyphs, but fpdf2 only
-# joins consonants and places vowel signs with text shaping (`uharfbuzz`, not a dependency).
-# Unshaped Devanagari reads wrongly ("हिन्दी" comes out "हन्िदी"), which is worse than leaving it
-# out, so for a Hindi case every PDF shows a marker where Devanagari text would be, says so, and
-# the original files carry the text. Issue #68 keeps the real fix.
-HINDI_NOTE = "PDFs are in English; Hindi PDF rendering is not supported yet."
-HINDI_MARK = "[Hindi text, see the original file]"
 _DEVANAGARI = re.compile("[\u0900-\u097f]+")
-
-
-class TenantPdf(FPDF):
-    hindi_unsupported = False
 
 
 def has_devanagari(text: str) -> bool:
     return _DEVANAGARI.search(text) is not None
 
 
-def pdf_text(pdf: FPDF, text: str) -> str:
-    """The text as it goes in this PDF: Devanagari runs become a marker in a Hindi case's PDFs."""
-    if getattr(pdf, "hindi_unsupported", False):
-        return _DEVANAGARI.sub(HINDI_MARK, text)
+def shape_for(pdf: FPDF, text: str) -> str:
+    """Turn text shaping on (script `deva`) for a paragraph with Devanagari, off otherwise;
+    return the text unchanged."""
+    if has_devanagari(text):
+        pdf.set_text_shaping(True, script="deva")
+    else:
+        pdf.set_text_shaping(False)
     return text
 
 
-def new_pdf(language: str = "en") -> FPDF:
-    pdf = TenantPdf(format="Letter")
-    pdf.hindi_unsupported = language == "hi"
+def new_pdf() -> FPDF:
+    pdf = FPDF(format="Letter")
     pdf.add_font("NotoSans", "", FONT_DIR / "NotoSans-Regular.ttf")
     pdf.add_font("NotoSans", "B", FONT_DIR / "NotoSans-Bold.ttf")
     pdf.add_font("NotoSansSC", "", FONT_DIR / "NotoSansSC-Regular.ttf")
@@ -150,26 +200,133 @@ def new_pdf(language: str = "en") -> FPDF:
 
 def _write(pdf: FPDF, text: str, *, bold: bool = False, size: int = 10, gap: float = 1.5) -> None:
     pdf.set_font("NotoSans", "B" if bold else "", size)
-    # CHAR wrapping: Chinese text has no spaces to break on.
+    # Word wrapping still breaks long runs without spaces, including Chinese text.
     pdf.multi_cell(
-        0, size * 0.5 + 1.5, pdf_text(pdf, text),
-        new_x="LMARGIN", new_y="NEXT", wrapmode=WrapMode.CHAR,
+        0, size * 0.5 + 1.5, shape_for(pdf, text),
+        new_x="LMARGIN", new_y="NEXT",
     )
     pdf.ln(gap)
 
 
+def _write_f1_details(
+    pdf: FPDF, values: dict[str, str | None], applicant_role: ApplicantRole,
+) -> None:
+    for prefix, label in F1_ADDRESS_GROUPS.items():
+        street = values.get(f"{prefix}_street")
+        apartment = values.get(f"{prefix}_apartment")
+        city = values.get(f"{prefix}_city")
+        province = values.get(f"{prefix}_province")
+        postal = values.get(f"{prefix}_postal_code")
+        region = ", ".join(value for value in (city, province) if value)
+        locality = " ".join(value for value in (region, postal) if value)
+        lines = (street, f"Apartment or unit {apartment}" if apartment else "", locality)
+        if any(lines):
+            _write(pdf, label, bold=True, gap=0)
+            _write(pdf, "\n".join(line for line in lines if line))
+
+    consent = values.get("applicant_email_consent") or ""
+    rendered_consent = FORM_CHOICES["applicant_email_consent"].get(consent)
+    applicant_email_key = f"{applicant_role}_email"
+    for label, fields in F1_CONTACT_GROUPS.items():
+        details = []
+        for key, field_label in fields.items():
+            value = values.get(key)
+            if not value or (key == applicant_email_key and consent != "yes"):
+                continue
+            details.append(f"{field_label}  {value}")
+        if applicant_email_key in fields and rendered_consent:
+            details.append(f"{EMAIL_CONSENT_LABEL}  {rendered_consent}")
+        if details:
+            _write(pdf, label, bold=True, gap=0)
+            _write(pdf, "\n".join(details))
+
+
+def _write_form_fields(
+    pdf: FPDF, fields: Iterable[FormField], values: dict[str, str | None],
+) -> None:
+    warnings = {
+        end: message
+        for (start, end), message in DATE_ORDER_PAIRS.items()
+        if dates_out_of_order(values.get(start), values.get(end))
+    }
+    for field in fields:
+        dependency = F2_DEPENDENCIES.get(field.key)
+        if dependency is not None and values.get(dependency[0]) not in (None, "", dependency[1]):
+            continue
+        if not field.required and not field.value:
+            continue
+        _write(pdf, field.label, bold=True, gap=0)
+        value = field.value or "(not filled in)"
+        if field.key in MONEY_KEYS and (amount := cad_amount(value)) is not None:
+            value = f"CAD {amount:,.2f}"
+        value = FORM_CHOICES.get(field.key, {}).get(value, value)
+        _write(pdf, value)
+        if field.key in warnings:
+            _write(pdf, f"Check dates: {warnings[field.key]}.")
+
+
+def _write_requests(
+    pdf: FPDF, values: dict[str, str | None], applicant_role: ApplicantRole,
+) -> None:
+    landlord = applicant_role == "landlord"
+    requests = F4_REQUESTS if landlord else F3_REQUESTS
+    payment_options = F4_PAYMENT_REQUESTS if landlord else F3_PAYMENT_REQUESTS
+    payment_key = "landlord_request_payment" if landlord else "request_payment"
+    payment_selected = values.get(payment_key) == "yes"
+    selected = [
+        (key, label) for key, label in requests.items()
+        if values.get(key) == "yes" and (key not in payment_options or payment_selected)
+    ]
+    payment_has_reasoned_option = any(
+        key in payment_options and values.get(f"{key}_reason") for key, _ in selected
+    )
+    if selected:
+        _write(pdf, f"{applicant_role.title()} requests", bold=True, size=12, gap=2)
+        for key, label in selected:
+            _write(pdf, label, bold=True, gap=0)
+            reason = values.get(f"{key}_reason")
+            if not reason and key == payment_key and (not landlord or payment_has_reasoned_option):
+                continue
+            _write(pdf, reason or "(reason not filled in)")
+    _write(pdf, "Complete the signature and date manually on the official Form J.", size=9)
+
+
 def application_pdf(session: Session, case: CaseRow, prepared_by: str, built_at: datetime) -> bytes:
     draft = build_form_draft(session, case)
-    pdf = new_pdf(case.tenant_language)
+    pdf = new_pdf()
     _write(pdf, draft.form_name or "Application draft", bold=True, size=16, gap=3)
     _write(pdf, draft.disclaimer, size=9, gap=4)
     _write(pdf, f"Case: {case.title} ({case.unit})")
+    if case.applicant_role == "landlord":
+        _write(pdf, "Landlord applicant · Tenant respondent")
     _write(pdf, f"Prepared by {prepared_by} on {built_at:%Y-%m-%d %H:%M} UTC", gap=4)
-    for field in draft.fields:
-        _write(pdf, field.label, bold=True, gap=0)
-        _write(pdf, field.value or "(not filled in)")
-    _write(pdf, "Summary of events", bold=True, size=12, gap=2)
-    _write(pdf, draft.narrative.text or "(no accepted events)")
+    values = {field.key: field.value for field in draft.fields}
+    _write_form_fields(
+        pdf, (field for field in draft.fields if field.key not in MANUAL_FIELDS_BY_KEY), values,
+    )
+    _write_f1_details(pdf, values, case.applicant_role)
+    _write_form_fields(
+        pdf, (field for field in draft.fields if field.key in F2_FIELD_KEYS), values,
+    )
+    _write_requests(pdf, values, case.applicant_role)
+    if case.applicant_role == "landlord":
+        evidence = session.exec(
+            select(EvidenceRow)
+            .where(EvidenceRow.case_id == case.id)
+            .order_by(col(EvidenceRow.position), col(EvidenceRow.id))
+        ).all()
+        if evidence:
+            _write(pdf, "Evidence index", bold=True, size=12, gap=2)
+            _write(
+                pdf, "This index identifies original files. Check formats and remove location "
+                "data from filing copies.", size=9,
+            )
+            for item in evidence:
+                _write(pdf, f"{item.label} · {item.filename}", bold=True, gap=0)
+                _write(pdf, f"SHA-256: {item.sha256}", size=9)
+    else:
+        _write(pdf, "Summary of events", bold=True, size=12, gap=2)
+        _write(pdf, draft.narrative.text or "(no accepted events)")
     return bytes(pdf.output())
 
 
@@ -193,7 +350,7 @@ class EvidenceFile:
     location_removed: bool = False  # a copy made with its GPS data taken out
 
 
-def evidence_files(ev: EvidenceRow, language: str = "en") -> list[EvidenceFile]:
+def evidence_files(ev: EvidenceRow) -> list[EvidenceFile]:
     """What goes in the zip for one piece of evidence: the original, plus a PDF made from a TXT.
     A HEIC is never filed: the Program doesn't accept it, so only the JPG made from it goes in
     (nothing at all if it can't be converted). A JPG or PNG with GPS data is filed as a copy
@@ -202,7 +359,7 @@ def evidence_files(ev: EvidenceRow, language: str = "en") -> list[EvidenceFile]:
     name = evidence_zip_name(ev)
     if name is None:
         return []
-    made = _rendition(ev, name.rsplit(".", 1)[0], language)
+    made = _rendition(ev, name.rsplit(".", 1)[0])
     if ev.mime == sniff.HEIC:
         return [made] if made is not None else []
     original = _original(ev, name)
@@ -232,7 +389,7 @@ def _original(ev: EvidenceRow, name: str) -> EvidenceFile | None:
                         data, location_removed=True)
 
 
-def _rendition(ev: EvidenceRow, stem: str, language: str = "en") -> EvidenceFile | None:
+def _rendition(ev: EvidenceRow, stem: str) -> EvidenceFile | None:
     if ev.processing == "failed":
         return None  # couldn't be read at ingest (corrupt, or over the pixel limit): don't decode
     try:
@@ -250,9 +407,7 @@ def _rendition(ev: EvidenceRow, stem: str, language: str = "en") -> EvidenceFile
             decoded = sniff.decode_text(storage.read(ev.sha256))
             if decoded is None:  # not reachable for a file the type check accepted
                 return None
-            if language == "hi" and has_devanagari(decoded):
-                return None  # a PDF of it would be mostly markers; the original is filed as is
-            data = text_to_pdf(ev, decoded, language)
+            data = text_to_pdf(ev, decoded)
             return EvidenceFile(ev.label, f"{stem}.pdf", _sha(data),
                                 f"PDF made from the text file ({ev.filename})", data)
     except Exception as exc:  # the original is still filed; a missing copy must not block
@@ -272,8 +427,8 @@ def heic_to_jpeg(data: bytes) -> bytes:
     return out.getvalue()
 
 
-def text_to_pdf(ev: EvidenceRow, text: str, language: str = "en") -> bytes:
-    pdf = new_pdf(language)
+def text_to_pdf(ev: EvidenceRow, text: str) -> bytes:
+    pdf = new_pdf()
     _write(pdf, f"{ev.label}  {ev.filename}", bold=True, size=12, gap=1)
     _write(pdf, f"Text file, sha256 {ev.sha256}", size=8, gap=4)
     _write(pdf, text or "(empty)", size=9)
@@ -281,19 +436,31 @@ def text_to_pdf(ev: EvidenceRow, text: str, language: str = "en") -> bytes:
 
 
 def manifest_pdf(
-    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]]
+    evidence: list[EvidenceRow], case: CaseRow, ev_files: dict[str, list[EvidenceFile]],
+    warning: list[str],
 ) -> bytes:
-    pdf = new_pdf(case.tenant_language)
+    pdf = new_pdf()
     _write(pdf, "Evidence manifest", bold=True, size=16, gap=3)
-    _write(pdf, f"Case: {case.title}", gap=4 if case.tenant_language != "hi" else 1)
-    if case.tenant_language == "hi":
-        _write(pdf, HINDI_NOTE, size=9, gap=4)
+    _write(pdf, f"Case: {case.title}", gap=2)
+    # #127: the receipt time is the time the whole upload arrived, so four files sent together
+    # share it. Say so rather than leave it looking like a mistake.
+    _write(pdf, "Files uploaded together share one receipt time.", size=8, gap=4)
+    for line in warning:
+        _write(pdf, line, bold=True)
     if not evidence:
         _write(pdf, "No evidence files are listed.")
     for ev in evidence:
         _write(pdf, f"{ev.label}  {ev.filename}", bold=True, gap=0)
-        _write(pdf, f"Received {iso_req(ev.received_at)} from {ev.uploaded_by}", gap=0)
+        # Like mappers.iso(): a naive time is already UTC, so it must not be read as local time.
+        at = ev.received_at if ev.received_at.tzinfo else ev.received_at.replace(tzinfo=UTC)
+        received = at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        _write(pdf, f"Received {received} from {ev.uploaded_by}", gap=0)
         filed = ev_files[ev.id]
+        removed = any(item.location_removed for item in filed)
+        gps = bool((ev.metadata_ or {}).get("gps_present"))
+        location = ("removed before filing" if removed else
+                    "none in the file" if not gps else "could not be removed; see below")
+        _write(pdf, f"Location data: {location}", size=8, gap=0)
         heic = ev.mime == sniff.HEIC
         # A HEIC is received as HEIC but filed only as its JPG: "Filed as", not "Also as".
         copies = filed if heic else filed[1:]
@@ -333,14 +500,20 @@ def build_zip(
         .order_by(col(EvidenceRow.position))
     ).all())
     app_pdf = application_pdf(session, case, prepared_by, built_at)
-    ev_files = {e.id: evidence_files(e, case.tenant_language) for e in evidence}
-    man_pdf = manifest_pdf(evidence, case, ev_files)
+    ev_files = {e.id: evidence_files(e) for e in evidence}
+    run_steps = latest_run_steps(session, case.id)
+    stopped = incomplete_steps(run_steps)
+    warning = analysis_warning(run_steps)
+    man_pdf = manifest_pdf(evidence, case, ev_files, warning)
     manifest: dict[str, Any] = {
         "case_id": case.id, "version": version, "built_at": iso_req(built_at),
         "prepared_by": prepared_by,
+        "received_note": "Files uploaded together share one receipt time.",
         "tenant_attested_genuine_at": iso_req(case.tenant_attested_at)
         if case.tenant_attested_at else None,
         "caseworker_attestations": att.model_dump(),
+        "analysis_incomplete": bool(stopped),
+        "incomplete_steps": [s["label"] for s in stopped],
         "documents": {
             "application_draft.pdf": _sha(app_pdf),
             "evidence_manifest.pdf": _sha(man_pdf),
@@ -350,13 +523,17 @@ def build_zip(
              "received_at": iso_req(e.received_at), "uploaded_by": e.uploaded_by,
              "in_zip": ev_files[e.id][0].name if ev_files[e.id] else None,
              "location_data_removed": any(f.location_removed for f in ev_files[e.id]),
+             # #127: also say whether the file had location data at all; the boolean above
+             # (kept for existing readers) was false and ambiguous when there was none.
+             "location": {"present": bool((e.metadata_ or {}).get("gps_present")),
+                          "removed": any(f.location_removed for f in ev_files[e.id])},
              "rendition": {"path": ev_files[e.id][1].name, "sha256": ev_files[e.id][1].sha256}
              if len(ev_files[e.id]) > 1 and e.mime != sniff.HEIC else None}
             for e in evidence
         ],
     }
-    if case.tenant_language == "hi":
-        manifest["notes"] = [HINDI_NOTE]
+    if warning:
+        manifest["notes"] = list(warning)
     man_json = json.dumps(manifest, indent=2, ensure_ascii=False).encode()
     parts = [
         ("application_draft.pdf", app_pdf, "Application draft", "From the reviewed timeline"),
@@ -430,3 +607,22 @@ def get_package(session: Session, case: CaseRow, version: int | None) -> Package
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Package not found")
     return row
+
+
+def package_file(row: PackageRow, filename: str) -> tuple[str, bytes]:
+    entry = next((item for item in row.files if item.get("filename") == filename), None)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "File not found")
+    member_name: str = entry["filename"]
+    with storage.open_blob(row.storage_key) as blob, zipfile.ZipFile(blob) as archive:
+        data = archive.read(member_name)
+    if _sha(data) != entry.get("sha256"):
+        log.warning(
+            "package file hash mismatch for case %s v%s: %s",
+            row.case_id, row.version, member_name,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Package file does not match its recorded hash",
+        )
+    return member_name, data

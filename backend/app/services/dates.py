@@ -96,6 +96,15 @@ def parse_hearing_date(text: str) -> date | None:
     return parsed if HEARING_FIRST <= parsed <= HEARING_LAST else None
 
 
+_NO_HEARING_ANSWERS = {"none", "no hearing yet", "no hearing scheduled yet"}
+
+
+def is_no_hearing_answer(text: str) -> bool:
+    """The caseworker's "No hearing scheduled yet" answer: the UI button sends `none`, and the
+    words are accepted too. Anything else that is not a date is still rejected."""
+    return " ".join(text.lower().split()).rstrip(".") in _NO_HEARING_ANSWERS
+
+
 def hearing_has_passed(hearing: date, today: date) -> bool:
     """A hearing date before today. Today itself is still upcoming."""
     return hearing < today

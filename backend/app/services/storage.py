@@ -8,6 +8,7 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from app.config import get_settings
 
@@ -44,6 +45,10 @@ def put(data: bytes) -> StoredBlob:
         finally:
             Path(tmp).unlink(missing_ok=True)
     return StoredBlob(key=digest, sha256=digest, size_bytes=len(data))
+
+
+def open_blob(key: str) -> BinaryIO:
+    return _path(key).open("rb")
 
 
 def open_chunks(key: str) -> Iterator[bytes]:

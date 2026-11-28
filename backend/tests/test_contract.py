@@ -78,7 +78,14 @@ def test_form_draft_uses_only_accepted_events(client):
     body = client.get(f"/api/cases/{CASE}/form-draft").json()
     assert set(body) == keys(schemas.FormDraft)
     assert body["narrative"]["event_ids"] == ["te_01", "te_03"]
-    assert len(body["fields"]) == 7
+    fields = {field["key"]: field for field in body["fields"]}
+    assert len(fields) == 74
+    assert fields["move_in_date"]["status"] == "missing"
+    assert fields["move_in_date"]["required"] is False
+    assert fields["tenant_civic_street"]["status"] == "missing"
+    assert fields["applicant_email_consent"]["required"] is False
+    assert fields["request_repairs"]["value"] is None
+    assert fields["request_repairs_reason"]["required"] is False
 
 
 def test_intake_link_post_returns_url_once(client):

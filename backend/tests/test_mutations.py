@@ -3,13 +3,14 @@ form fields. Every success logs exactly one caseworker activity entry; every by-
 org-scoped; rejected and pending events never reach the form narrative.
 Stage and caseload behaviour lives in test_stage_transitions.py."""
 
+from datetime import date
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from app.models import TimelineEventRow
+from app.models import FormFieldRow, GapRow, TimelineEventRow
 
 CASE = "case_demo_001"
 FORM = f"/api/cases/{CASE}/form-draft"
@@ -36,6 +37,8 @@ MUTATIONS = [
     pytest.param("POST", "/api/gaps/gap_01/tenant-request", None, id="gap-tenant-request"),
     pytest.param("PATCH", f"{FORM}/fields/landlord_address", {"value": "5 Elm St"},
                  id="field-set"),
+    pytest.param("PATCH", f"{FORM}/fields/tenant_email", {"value": "applicant@example.test"},
+                 id="optional-field-set"),
 ]
 
 
@@ -402,6 +405,79 @@ def test_setting_field_trims_value_and_resolves_open_gap(fresh_db, client):
     assert "5 Elm St" in (gap["resolution_note"] or "")
 
 
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "banana"),
+    ("monthly_rent", "1,20.00"),
+    ("monthly_rent", "1200.001"),
+    ("monthly_rent", "0"),
+    ("monthly_rent", "1200 USD"),
+    ("tenancy_start", "tomorrow"),
+    ("tenancy_start", "2026-02-29"),
+    ("tenancy_start", "20260501"),
+    ("tenancy_start", "1899-12-31"),
+    ("tenancy_start", f"{date.today().year + 1}-01-01"),
+])
+def test_invalid_structured_field_is_422_and_changes_nothing(fresh_db, client, key, value):
+    before = _snapshot(client)
+    r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+    assert r.status_code == 422, r.text
+    assert isinstance(r.json()["detail"], str)
+    assert _snapshot(client) == before
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "CAD $1,200.5"),
+    ("tenancy_start", "2024-02-29"),
+    ("tenancy_start", "1900-01-01"),
+    ("tenancy_start", f"{date.today().year}-12-31"),
+])
+def test_valid_structured_field_can_be_saved_and_cleared(fresh_db, client, key, value):
+    url = f"{FORM}/fields/{key}"
+    r = client.patch(url, json={"value": value})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == value
+    assert r.json()["status"] == "user_entered"
+
+    r = client.patch(url, json={"value": ""})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] is None
+    assert r.json()["status"] == "missing"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("monthly_rent", "banana"),
+    ("tenancy_start", "2026-02-29"),
+])
+def test_invalid_structured_field_cannot_resolve_a_linked_gap(
+    fresh_db, client, session, key, value
+):
+    gap = session.get(GapRow, "gap_01")
+    assert gap is not None
+    gap.input = {**(gap.input or {}), "field_key": key}
+    session.add(gap)
+    session.commit()
+    before = _snapshot(client)
+
+    r = client.patch("/api/gaps/gap_01", json={"status": "resolved", "value": value})
+    assert r.status_code == 422, r.text
+    assert _snapshot(client) == before
+
+
+def test_verbatim_tenancy_date_can_still_be_confirmed(fresh_db, client, session):
+    field = session.get(FormFieldRow, (CASE, "tenancy_start"))
+    assert field is not None
+    field.value = "May 1, 2026"
+    field.status = "needs_confirmation"
+    session.add(field)
+    session.commit()
+
+    r = client.patch(f"{FORM}/fields/tenancy_start", json={"value": "May 1, 2026"})
+    assert r.status_code == 200, r.text
+    assert r.json()["value"] == "May 1, 2026"
+    assert r.json()["sources"] == field.sources
+    assert r.json()["status"] == "user_entered"
+
+
 def test_blank_field_value_sets_field_missing_and_null(fresh_db, client):
     client.patch(f"{FORM}/fields/landlord_address", json={"value": "5 Elm St"})
     r = client.patch(f"{FORM}/fields/landlord_address", json={"value": "   "})
@@ -410,6 +486,154 @@ def test_blank_field_value_sets_field_missing_and_null(fresh_db, client):
     assert r.json()["status"] == "missing"
     field = _field(client, "landlord_address")
     assert field["value"] is None and field["status"] == "missing"
+
+
+def test_old_form_projects_f2_fields_and_preserves_legacy_date(fresh_db, client, session):
+    legacy = _field(client, "tenancy_start")
+    for key in ("move_in_date", "fixed_term_start", "fixed_term_end"):
+        assert session.get(FormFieldRow, (CASE, key)) is None
+        field = _field(client, key)
+        assert field["status"] == "missing" and field["value"] is None
+        assert field["required"] is False and field["sources"] == []
+        assert session.get(FormFieldRow, (CASE, key)) is None
+
+    for key, value in (
+        ("move_in_date", "2026-05-03"),
+        ("fixed_term_start", "2026-05-01"),
+        ("fixed_term_end", "2030-05-01"),
+        ("notice_effective_date", "2030-05-01"),
+        ("lease_term", "fixed_term"),
+        ("deposit_amount", "CAD 1200.50"),
+    ):
+        response = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "user_entered"
+        assert _field(client, key)["value"] == value
+    assert _field(client, "tenancy_start") == {**legacy, "required": False}
+
+
+def test_old_form_projects_f1_fields_and_preserves_legacy_addresses(fresh_db, client, session):
+    legacy = {key: _field(client, key) for key in ("landlord_address", "rental_address")}
+    values = {
+        "tenant_civic_street": "3 Harbour Road",
+        "tenant_mailing_apartment": "4A",
+        "landlord_civic_city": "Dartmouth",
+        "landlord_mailing_province": "NS",
+        "premises_postal_code": "B3H 1A1",
+    }
+    for key, value in values.items():
+        field = _field(client, key)
+        assert field["status"] == "missing" and field["value"] is None
+        assert field["required"] is False and field["sources"] == []
+        assert session.get(FormFieldRow, (CASE, key)) is None
+        r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == value
+
+    assert {key: _field(client, key) for key in legacy} == legacy
+    assert _gap(client, "gap_01")["status"] == "open"
+
+
+def test_f1_applicant_email_consent_remains_separate_from_email(fresh_db, client):
+    email = "f1-applicant@example.test"
+    email_url = f"{FORM}/fields/tenant_email"
+    r = client.patch(email_url, json={"value": email})
+    assert r.status_code == 200, r.text
+    r = client.patch(email_url, json={"value": "f1-applicant.example.test"})
+    assert r.status_code == 422, r.text
+    assert _field(client, "tenant_email")["value"] == email
+    key = "applicant_email_consent"
+    url = f"{FORM}/fields/{key}"
+    assert _field(client, key)["value"] is None
+
+    r = client.patch(url, json={"value": "by phone"})
+    assert r.status_code == 422, r.text
+    assert _field(client, key)["value"] is None
+
+    for selected, saved in (("yes", "yes"), ("no", "no"), ("", None)):
+        r = client.patch(url, json={"value": selected})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == saved
+        assert _field(client, "tenant_email")["value"] == email
+
+
+def test_f3_requests_save_independently_without_replacing_the_existing_remedy(fresh_db, client):
+    remedy = _field(client, "remedy")
+    gaps = _gaps(client)
+    values = {
+        "request_repairs": "yes",
+        "request_repairs_reason": "Repair the damaged ceiling.",
+        "request_compliance": "yes",
+        "request_compliance_reason": "Restore heat to the rental unit.",
+        "request_rent_relief": "yes",
+        "request_rent_relief_reason": "Rent reduction for the loss of a room.",
+    }
+    for key, value in values.items():
+        original = _field(client, key)
+        assert original["value"] is None and original["required"] is False
+        r = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert r.status_code == 200, r.text
+        assert _field(client, key)["value"] == value
+
+    r = client.patch(f"{FORM}/fields/request_repairs", json={"value": "no"})
+    assert r.status_code == 422, r.text
+    assert _field(client, "request_repairs")["value"] == "yes"
+    r = client.patch(f"{FORM}/fields/request_repairs", json={"value": ""})
+    assert r.status_code == 200, r.text
+    assert _field(client, "request_repairs")["value"] is None
+    assert _field(client, "request_repairs_reason")["value"] == values["request_repairs_reason"]
+    assert _field(client, "request_payment")["value"] is None
+    assert _field(client, "remedy") == remedy and _gaps(client) == gaps
+
+    keys = {field["key"] for field in _draft(client)["fields"]}
+    for key in ("signature", "signature_date"):
+        assert key not in keys
+        assert client.patch(f"{FORM}/fields/{key}", json={"value": "Typed"}).status_code == 404
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("fixed_term_end", "2030-02-30"),
+    ("move_out_date", "1899-12-31"),
+    ("notice_given", "perhaps"),
+    ("notice_given_by", "unknown"),
+    ("lease_term", "daily"),
+    ("weekly_rent", "400 USD"),
+    ("deposit_amount", "0"),
+])
+def test_invalid_f2_edits_do_not_create_a_saved_field(fresh_db, client, session, key, value):
+    if key == "weekly_rent":
+        assert client.patch(f"{FORM}/fields/monthly_rent", json={"value": ""}).status_code == 200
+    before = _snapshot(client)
+    response = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+    assert response.status_code == 422, response.text
+    if key == "weekly_rent":
+        assert "positive CAD amount" in response.json()["detail"]
+    assert _snapshot(client) == before
+    assert session.get(FormFieldRow, (CASE, key)) is None
+
+
+def test_weekly_rent_resolves_the_same_gap_as_monthly_rent(fresh_db, client, session):
+    gap = session.get(GapRow, "gap_01")
+    assert gap is not None
+    gap.input = {**(gap.input or {}), "field_key": "monthly_rent"}
+    session.add(gap)
+    session.commit()
+
+    monthly = f"{FORM}/fields/monthly_rent"
+    weekly = f"{FORM}/fields/weekly_rent"
+    assert client.patch(weekly, json={"value": "400"}).status_code == 422
+    assert client.patch(monthly, json={"value": ""}).status_code == 200
+    assert client.patch(weekly, json={"value": "400"}).status_code == 200
+    assert _field(client, "monthly_rent")["required"] is False
+    assert _gap(client, "gap_01")["status"] == "resolved"
+    assert client.patch(monthly, json={"value": "1400"}).status_code == 422
+    refused = client.patch("/api/gaps/gap_01", json={"status": "open"})
+    assert refused.status_code == 422
+    assert _gap(client, "gap_01")["status"] == "resolved"
+
+    assert client.patch(weekly, json={"value": ""}).status_code == 200
+    assert _field(client, "monthly_rent")["required"] is True
+    assert _gap(client, "gap_01")["status"] == "open"
 
 
 def test_emptying_a_field_reopens_the_gap_it_had_resolved(fresh_db, client):
@@ -516,3 +740,64 @@ def test_malformed_date_is_rejected_with_422(fresh_db, client, value):
     )
     assert r.status_code == 422
     assert _event(client, "te_02")["date"] == before
+
+
+@pytest.mark.parametrize("role", ["tenant", "landlord"])
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [("move_in_date", "move_out_date"), ("fixed_term_start", "fixed_term_end")],
+)
+def test_form_date_pairs_reject_both_reversed_edit_directions(fresh_db, client, role, start, end):
+    form = FORM
+    if role == "landlord":
+        created = client.post("/api/cases", json={
+            "applicant_role": role,
+            "tenant_name": "Example tenant",
+            "tenant_language": "en",
+            "unit": "1 Example Road",
+            "title": "Example application",
+        })
+        assert created.status_code == 200, created.text
+        form = f"/api/cases/{created.json()['id']}/form-draft"
+
+    def save(key, value, status=200):
+        result = client.patch(f"{form}/fields/{key}", json={"value": value})
+        assert result.status_code == status, result.text
+        return result.json()
+
+    early, late = "2026-04-01", "2026-04-03"
+    save(end, early)
+    save(start, late, 422)
+    save(start, early)
+    save(end, late)
+    save(end, "2026-03-31", 422)
+    save(start, "2026-04-04", 422)
+    saved = {field["key"]: field["value"] for field in client.get(form).json()["fields"]}
+    assert (saved[start], saved[end]) == (early, late)
+    assert save(start, "")["value"] is None
+    assert save(end, "")["value"] is None
+
+
+def test_legacy_reversed_dates_can_be_confirmed_and_repaired(fresh_db, client, session):
+    start_key, end_key = "move_in_date", "move_out_date"
+    start, end = "2026-04-01", "2026-04-03"
+    for key, value in [(start_key, start), (end_key, end)]:
+        assert client.patch(f"{FORM}/fields/{key}", json={"value": value}).status_code == 200
+    field = session.get(FormFieldRow, (CASE, start_key))
+    assert field is not None
+    field.value = "2026-04-05"
+    session.add(field)
+    session.commit()
+
+    for key, value in [(end_key, end), (start_key, start)]:
+        result = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert result.status_code == 200, result.text
+
+
+def test_notice_can_record_an_effective_date_before_given_date(fresh_db, client):
+    for key, value in [
+        ("notice_given_date", "2026-04-03"),
+        ("notice_effective_date", "2026-04-01"),
+    ]:
+        result = client.patch(f"{FORM}/fields/{key}", json={"value": value})
+        assert result.status_code == 200, result.text

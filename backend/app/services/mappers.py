@@ -1,6 +1,7 @@
 """Row -> contract-shape mappers. Keeps routers thin and shapes in one place."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import ColumnElement, exists, or_
 from sqlalchemy import select as sa_select  # sqlmodel.select takes at most four columns
@@ -32,6 +33,7 @@ from app.schemas import (
     TimelineEvent,
 )
 from app.services.dates import demo_deadline
+from app.services.form_fields import covered_legacy_fields, is_required, with_optional_fields
 from app.services.legal.corpus import FORM_J_DRAFT_LABEL
 from app.services.narrative import build_narrative
 from app.services.priority import PriorityInput, compute_priority, sort_key
@@ -113,6 +115,15 @@ def has_completed_run(session: Session, case_id: str) -> bool:
     ).first() is not None
 
 
+def latest_run_steps(session: Session, case_id: str) -> list[dict[str, Any]]:
+    """The steps of the case's newest run; empty when it has none."""
+    row = session.exec(
+        select(RunRow).where(RunRow.case_id == case_id)
+        .order_by(col(RunRow.started_at).desc()).limit(1)
+    ).first()
+    return row.steps if row else []
+
+
 def reviewed_event_count(session: Session, case_id: str) -> int:
     """Events a caseworker accepted or edited: the ones that go into the form."""
     return int(session.exec(
@@ -169,6 +180,7 @@ def to_summary(
     summary = CaseSummary.model_validate(
         {
             "id": case.id,
+            "applicant_role": case.applicant_role,
             "tenant_name": case.tenant_name,
             "title": case.title,
             "unit": case.unit,
@@ -188,10 +200,13 @@ def to_summary(
     return summary, sort_key(result.priority, result.days_to_deadline, blocking, pending)
 
 
-def to_case(case: CaseRow, assignee_name: str) -> Case:
+def to_case(
+    case: CaseRow, assignee_name: str, *, has_run: bool = False, has_package: bool = False
+) -> Case:
     return Case.model_validate(
         {
             "id": case.id,
+            "applicant_role": case.applicant_role,
             "dispute_type": case.dispute_type,
             "title": case.title,
             "unit": case.unit,
@@ -200,6 +215,9 @@ def to_case(case: CaseRow, assignee_name: str) -> Case:
             "intake": to_intake(case).model_dump(),
             "created_at": iso_req(case.created_at),
             "synthetic": case.synthetic,
+            # #218: the page asks for a run or a package only when the case has one.
+            "has_run": has_run,
+            "has_package": has_package,
         }
     )
 
@@ -293,13 +311,13 @@ def to_source(row: LegalSourceRow) -> LegalSource:
     )
 
 
-def to_field(row: FormFieldRow) -> FormField:
+def to_field(row: FormFieldRow, *, covered_fields: set[str] | None = None) -> FormField:
     return FormField.model_validate(
         {
             "key": row.key,
             "label": row.label,
             "value": row.value,
-            "required": row.required,
+            "required": is_required(row, covered_fields or set()),
             "status": row.status,
             "sources": row.sources,
             "note": row.note,
@@ -324,6 +342,7 @@ def build_form_draft(session: Session, case: CaseRow) -> FormDraft:
         .where(FormFieldRow.case_id == case.id)
         .order_by(col(FormFieldRow.position))
     ).all()
+    covered_fields = covered_legacy_fields(fields)
     events = session.exec(
         select(TimelineEventRow)
         .where(TimelineEventRow.case_id == case.id)
@@ -350,7 +369,10 @@ def build_form_draft(session: Session, case: CaseRow) -> FormDraft:
         {
             "form_name": FORM_J_DRAFT_LABEL if case.form_name else "",  # also for old rows
             "disclaimer": case.form_disclaimer,
-            "fields": [to_field(f).model_dump() for f in fields],
+            "fields": [
+                to_field(f, covered_fields=covered_fields).model_dump()
+                for f in with_optional_fields(case, fields)
+            ] if fields else [],
             "narrative": narrative,
         }
     )

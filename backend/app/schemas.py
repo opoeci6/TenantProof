@@ -8,6 +8,18 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 Language = str
+ApplicantRole = Literal["tenant", "landlord"]
+PrivacyAction = Literal["hide", "show"]
+PrivacyRole = Literal["tenant", "landlord", "person", "address", "other"]
+PersonalDetailKind = Literal[
+    "name", "address", "phone", "email", "postal_code", "id_number", "other"
+]
+PersonalDetailSource = Literal["case", "found", "caseworker"]
+EvidenceKind = Literal["lease", "photo", "messages", "receipt", "letter", "other"]
+EvidenceProcessing = Literal["queued", "processing", "done", "failed"]
+FormFieldStatus = Literal["auto_filled", "needs_confirmation", "missing", "user_entered"]
+LegalSourceKind = Literal["statute", "policy", "form"]
+LegalVerifyStatus = Literal["unchanged", "changed", "unreachable", "unverified"]
 _MONTH = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
@@ -39,6 +51,7 @@ class Deadline(BaseModel):
 
 class CaseSummary(BaseModel):
     id: str
+    applicant_role: ApplicantRole = "tenant"
     tenant_name: str
     title: str
     unit: str
@@ -79,6 +92,7 @@ class Intake(BaseModel):
 
 class Case(BaseModel):
     id: str
+    applicant_role: ApplicantRole = "tenant"
     dispute_type: Literal["maintenance"]
     title: str
     unit: str
@@ -87,6 +101,10 @@ class Case(BaseModel):
     intake: Intake
     created_at: str
     synthetic: bool
+    # #218: what the case has, so the page asks for a run or a package only when there is one
+    # (GET /runs/latest and GET /package keep their 404/409 answers).
+    has_run: bool = False
+    has_package: bool = False
 
 
 class IntakeRequest(BaseModel):
@@ -120,7 +138,7 @@ class EvidenceItem(BaseModel):
     id: str
     label: str
     filename: str
-    kind: Literal["lease", "photo", "messages", "receipt", "letter", "other"]
+    kind: EvidenceKind
     mime: str
     size_bytes: int
     sha256: str
@@ -129,7 +147,7 @@ class EvidenceItem(BaseModel):
     format_check: FormatCheck
     metadata: EvidenceMetadata
     metadata_stripped_for_ai: bool
-    processing: Literal["queued", "processing", "done", "failed"]
+    processing: EvidenceProcessing
     error: str | None
     # #97: GET /cases/{case_id}/evidence/{id}/preview serves a copy without EXIF or GPS
     has_preview: bool = False
@@ -144,7 +162,7 @@ class ToolCall(BaseModel):
 class RunStep(BaseModel):
     key: Literal["ingest", "extract", "timeline", "rules", "gaps", "draft"]
     label: str
-    status: Literal["pending", "running", "done", "failed", "needs_input"]
+    status: Literal["pending", "running", "done", "incomplete", "failed", "needs_input"]
     summary: str | None
     tool_calls: list[ToolCall]
 
@@ -254,10 +272,10 @@ class Gap(BaseModel):
 class LegalSource(BaseModel):
     id: str
     title: str
-    kind: Literal["statute", "policy", "form"]
+    kind: LegalSourceKind
     url: str | None
     last_verified_at: str | None
-    verify_status: Literal["unchanged", "changed", "unreachable", "unverified"]
+    verify_status: LegalVerifyStatus
     used_for: str
 
 
@@ -266,7 +284,7 @@ class FormField(BaseModel):
     label: str
     value: str | None
     required: bool
-    status: Literal["auto_filled", "needs_confirmation", "missing", "user_entered"]
+    status: FormFieldStatus
     sources: list[SourceRef]
     note: str | None = None
 
@@ -375,8 +393,20 @@ class CaseCreate(BaseModel):
     tenant_language: Literal["en", "zh", "fr", "es", "ru", "hi"]
     unit: str = Field(min_length=1, max_length=200)  # the rental unit's address
     title: str = Field(min_length=1, max_length=120)  # one line: what is wrong
+    # #202: the form's per-submission key. A retry that carries a key the org already used gets
+    # the case that key made, instead of a duplicate. Never stored in `LIMITS`: it is an opaque
+    # token, not typed text.
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
     # Stripped before the length checks, so a whitespace-only value is refused as empty.
     model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ApplicantCaseCreate(CaseCreate):
+    """New case request for the role-aware Form J workflow."""
+
+    applicant_role: ApplicantRole = "tenant"
 
 
 class AttestationsIn(BaseModel):
@@ -420,6 +450,53 @@ class ExcerptTranslation(BaseModel):
     """A reading aid for a quoted source. Never cited or filed as evidence."""
 
     text_en: str
+
+
+class PersonalDetail(BaseModel):
+    """One personal detail of a case and the placeholder the model sees instead (issue #60).
+    `source`: from the case record or the Form J draft, found in the evidence by a pattern
+    (phone, email, postal code, street address, ID or card number), or added by a caseworker.
+    `shown` is true when a caseworker chose to let it go to the model as written; `term_id` is
+    that choice (or the caseworker's own `hide` entry), for undoing it."""
+
+    value: str
+    placeholder: str
+    kind: PersonalDetailKind
+    source: PersonalDetailSource
+    count: int  # how often it occurs in the case's evidence text
+    shown: bool = False
+    term_id: str | None = None
+
+
+class PrivacyView(BaseModel):
+    """GET /cases/{case_id}/privacy. `enabled` mirrors the PRIVACY_PLACEHOLDERS setting: when
+    false the model sees the evidence as written and the list is only a preview."""
+
+    enabled: bool
+    details: list[PersonalDetail]
+
+
+class PrivacyTermCreate(BaseModel):
+    """Body of POST /cases/{case_id}/privacy/terms."""
+
+    value: str = Field(min_length=2, max_length=200)
+    action: PrivacyAction
+    role: PrivacyRole = "other"  # what a hidden value is; ignored for `show`
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+
+
+class ModelTextPage(BaseModel):
+    locator: str
+    text: str
+
+
+class EvidenceModelText(BaseModel):
+    """GET /cases/{case_id}/evidence/{evidence_id}/model-text: an evidence item's text as the
+    model receives it, placeholders in place."""
+
+    evidence_id: str
+    label: str
+    pages: list[ModelTextPage]
 
 
 class Ok(BaseModel):

@@ -5,11 +5,13 @@ from typing import Annotated, Any
 import segno
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, select
 
 from app.config import Settings, get_settings
 from app.deps import CaseDep, SessionDep, UserDep
-from app.models import UserRow
-from app.schemas import Case, CaseCreate, CaseSummary, Intake
+from app.models import CaseRow, PackageRow, RunRow, UserRow
+from app.schemas import ApplicantCaseCreate, Case, CaseSummary, Intake
 from app.services import activity
 from app.services import cases as cases_service
 from app.services.intake_token import issue_token
@@ -59,25 +61,59 @@ def create_case(
 ) -> Case:
     """Create a case in the caseworker's own org, assigned to them (CONTRACT_CHANGES #35). The
     body is validated here, not by FastAPI, so a bad one answers 422 `{ detail: { reasons } }`
-    like the other forms the UI shows errors for."""
+    like the other forms the UI shows errors for. A body that passes but still cannot be saved
+    (a "<", nothing visible) is refused before anything is written, so a refused attempt never
+    binds its `idempotency_key`; a retry that carries a key this org already used returns the
+    case that key made (CONTRACT_CHANGES #49, #202)."""
     try:
-        parsed = CaseCreate.model_validate(body)
+        parsed = ApplicantCaseCreate.model_validate(body)
     except ValidationError as exc:
         reasons = list(dict.fromkeys(_plain(err) for err in exc.errors()))
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, {"reasons": reasons}) from None
     refused = cases_service.problems(parsed)
     if refused:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, {"reasons": refused})
-    case = cases_service.create_case(session, user, parsed)
-    session.commit()
+    existing = cases_service.find_by_idempotency_key(
+        session, user.org_id, parsed.idempotency_key
+    )
+    if existing is not None:
+        return _case_out(session, existing)
+    try:
+        case = cases_service.create_case(session, user, parsed)
+        session.commit()
+    except IntegrityError:
+        # Two requests with one key at the same time: the partial unique index lets one through
+        # and the other answers with the case the winner committed, not an error.
+        session.rollback()
+        existing = cases_service.find_by_idempotency_key(
+            session, user.org_id, parsed.idempotency_key
+        )
+        if existing is None:
+            raise
+        return _case_out(session, existing)
     session.refresh(case)
-    return to_case(case, user.name)
+    return _case_out(session, case)
+
+
+def _case_out(session: Session, case: CaseRow) -> Case:
+    """The case as the contract shows it, saying whether it has a run and a built package, so the
+    page does not ask for either when there is nothing there (#218). `GET /runs/latest` and
+    `GET /package` keep their 404/409 answers; they are simply not called."""
+    assignee = session.get(UserRow, case.assigned_to_id)
+    has_run = session.exec(
+        select(RunRow.id).where(RunRow.case_id == case.id).limit(1)
+    ).first() is not None
+    has_package = session.exec(
+        select(PackageRow.id).where(PackageRow.case_id == case.id).limit(1)
+    ).first() is not None
+    return to_case(
+        case, assignee.name if assignee else "", has_run=has_run, has_package=has_package
+    )
 
 
 @router.get("/cases/{case_id}", response_model=Case)
 def get_case(case: CaseDep, session: SessionDep) -> Case:
-    assignee = session.get(UserRow, case.assigned_to_id)
-    return to_case(case, assignee.name if assignee else "")
+    return _case_out(session, case)
 
 
 def qr_data_uri(url: str) -> str:
@@ -95,6 +131,10 @@ def send_intake_link(
 ) -> Intake:
     """Create (or re-send) the tenant link. The raw URL is returned only here; earlier links
     are revoked. Only a hash is stored."""
+    if case.applicant_role == "landlord":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Intake links are only for tenant applications."
+        )
     first_send = case.intake_status == "not_sent"
     token = issue_token(session, case.id, settings.intake_token_ttl_days)
     case.intake_sent_at = datetime.now(UTC)

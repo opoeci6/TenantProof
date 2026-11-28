@@ -60,6 +60,7 @@ def _record_answers(
             mime=sniff.TEXT,
             size=len(answer.text.encode("utf-8")),
             source=BytesIO(answer.text.encode("utf-8")),
+            text_kind="messages",  # the tenant's typed answer, cited as "message 1" (#125)
         )
         for answer in answers
     ]

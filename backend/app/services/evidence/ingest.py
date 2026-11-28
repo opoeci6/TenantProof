@@ -26,7 +26,7 @@ from sqlmodel import Session, col, func, select
 from app.config import get_settings
 from app.models import CaseRow, EvidencePageRow, EvidenceRow, RunRow
 from app.services import activity, review, storage
-from app.services.evidence import exif, ocr, sniff, strip, text
+from app.services.evidence import exif, fingerprint, ocr, sniff, strip, text
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,13 @@ _FORMAT: dict[str, dict[str, Any]] = {
     sniff.TEXT: {"accepted": True, "action": "will_export_pdf",
                  "note": "Text messages must be submitted digitally or printed. "
                          "The package adds a PDF copy."},
+}
+# #125: a TXT that is not a chat export (text.looks_like_chat), such as a letter. Evidence
+# Policy #42 page 4: digital documents must be Word, Excel or PDF; the package adds the PDF.
+_LETTER_FORMAT: dict[str, Any] = {
+    "accepted": True, "action": "will_export_pdf",
+    "note": "Digital documents must be Word, Excel or PDF (Evidence Policy #42). "
+            "The package adds a PDF copy.",
 }
 _NAME_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 MAX_NAME = 120
@@ -69,15 +76,22 @@ class Upload:
     mime: str
     size: int
     source: BinaryIO  # the spooled upload, rewound
+    # A TXT's kind when the caller knows it (a tenant's typed answer is a message); None
+    # decides from its lines (text.looks_like_chat). Ignored for other types.
+    text_kind: text.TxtKind | None = None
 
 
 @dataclass
 class _Processed:
+    kind: str | None = None  # set for a TXT from its lines; else the type's kind (_KIND)
     metadata: dict[str, Any] = field(default_factory=exif.NO_META.as_dict)
     stripped_sha256: str | None = None
     pages: text.Pages = field(default_factory=list)  # becomes evidence_page rows
     processing: str = "done"
     error: str | None = None
+    # #127: a perceptual hash of the image, kept in the metadata JSON; it only ever feeds the
+    # "possible duplicate" note and is never used to merge or drop a file.
+    image_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -173,15 +187,19 @@ def _prepare(upload: Upload, digest: str, budget: ocr.Budget | None = None) -> _
     data = upload.source.read()
     stored = storage.put(data)
     assert stored.key == digest
-    return _Ready(upload=upload, sha256=digest, done=_process(data, upload.mime, budget))
+    return _Ready(upload=upload, sha256=digest,
+                  done=_process(data, upload.mime, budget, upload.text_kind))
 
 
-def _process(data: bytes, mime: str, budget: ocr.Budget | None = None) -> _Processed:
+def _process(
+    data: bytes, mime: str, budget: ocr.Budget | None = None,
+    text_kind: text.TxtKind | None = None,
+) -> _Processed:
     """`budget` None: no OCR (OCR_ENABLED=false, or a caller that only wants the text layer)."""
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            return _process_unchecked(data, mime, budget)
+            return _process_unchecked(data, mime, budget, text_kind)
     except text.PdfTimeout:
         log.warning("evidence processing timed out for %s", mime)
         return _Processed(processing="failed", error="Reading the text took too long.")
@@ -190,19 +208,24 @@ def _process(data: bytes, mime: str, budget: ocr.Budget | None = None) -> _Proce
         return _Processed(processing="failed", error="This file could not be read.")
 
 
-def _process_unchecked(data: bytes, mime: str, budget: ocr.Budget | None) -> _Processed:
+def _process_unchecked(
+    data: bytes, mime: str, budget: ocr.Budget | None, text_kind: text.TxtKind | None = None
+) -> _Processed:
     if mime == sniff.PDF:
         # A child process with a hard time limit; it renders scanned pages only for OCR.
         pdf = text.read_pdf_isolated(data, scans=budget is not None)
         pages, skipped = _ocr_scans(pdf, budget)
         partial = None if pdf.complete else "Only part of the text could be extracted."
+        scan = next(iter(pdf.scans.values()), None)
         return _Processed(
             metadata={**exif.NO_META.as_dict(), "software": pdf.software},
             pages=pages,
             error=partial or (OCR_SKIPPED if skipped else None),
+            image_hash=fingerprint.dhash_bytes(scan) if scan else None,
         )
     if mime == sniff.TEXT:
-        return _Processed(pages=text.read_txt(data))
+        kind, pages = text.read_txt_as(data, text_kind)
+        return _Processed(kind=kind, pages=pages)
     with Image.open(io.BytesIO(data)) as img:
         meta = exif.read_meta(img).as_dict()  # before strip_image changes the image
         clean, _ = strip.strip_image(img, mime)  # also turns it upright and checks its size
@@ -213,6 +236,7 @@ def _process_unchecked(data: bytes, mime: str, budget: ocr.Budget | None) -> _Pr
     return _Processed(
         metadata=meta, stripped_sha256=storage.put(clean).key, pages=pages,
         error=OCR_SKIPPED if skipped else None,
+        image_hash=fingerprint.dhash_bytes(clean),
     )
 
 
@@ -273,6 +297,12 @@ def _insert(
     position = -1 if last is None else last
     now = datetime.now(UTC)
     added = 0
+    # #127: labels and fingerprints of what the case already has, so a photo and a PDF made from
+    # it can be called out as the same picture instead of looking like two independent files.
+    known = [
+        (row.label, (row.metadata_ or {}).get("image_hash"))
+        for row in session.exec(select(EvidenceRow).where(EvidenceRow.case_id == case_id)).all()
+    ]
     for item in ready:
         if _find(session, case_id, item.sha256) is not None:
             continue  # another request added the same file meanwhile
@@ -283,6 +313,18 @@ def _insert(
         for n, page in enumerate(item.done.pages):
             session.add(EvidencePageRow(evidence_id=row.id, locator=page["locator"],
                                         case_id=case_id, position=n, text=page["text"]))
+        duplicate = next(
+            (label for label, image in known
+             if fingerprint.looks_the_same(item.done.image_hash, image)),
+            None,
+        )
+        if duplicate:
+            row.format_check = {
+                **row.format_check,
+                "note": f"{row.format_check['note']} Possible duplicate of {duplicate}: "
+                        "the image looks the same.",
+            }
+        known.append((row.label, item.done.image_hash))
         activity.log(session, case_id, uploaded_by, actor_name,
                      f"Uploaded {row.label} ({row.filename})")
         added += 1
@@ -303,12 +345,16 @@ def _new_row(
     case_id: str, position: int, item: _Ready, uploaded_by: Uploader, now: datetime
 ) -> EvidenceRow:
     upload, done = item.upload, item.done
+    kind = done.kind or _KIND[upload.mime]  # a TXT that failed to read keeps "messages"
     return EvidenceRow(
         id=f"ev_{uuid.uuid4().hex[:16]}", case_id=case_id, position=position,
-        label=f"E-{position + 1:02d}", filename=upload.filename, kind=_KIND[upload.mime],
+        label=f"E-{position + 1:02d}", filename=upload.filename, kind=kind,
         mime=upload.mime, size_bytes=upload.size, sha256=item.sha256, received_at=now,
-        uploaded_by=uploaded_by, format_check=_format_check(upload.mime, done.processing),
-        metadata_=done.metadata, metadata_stripped_for_ai=done.processing == "done",
+        uploaded_by=uploaded_by, format_check=_format_check(upload.mime, done.processing, kind),
+        # #127: the fingerprint rides in the metadata JSON; EvidenceMetadata ignores it, the
+        # duplicate check reads it back.
+        metadata_={**done.metadata, **({"image_hash": done.image_hash} if done.image_hash else {})},
+        metadata_stripped_for_ai=done.processing == "done",
         processing=done.processing, error=done.error, stripped_sha256=done.stripped_sha256,
     )
 
@@ -321,11 +367,14 @@ _NO_COPY = {
 }
 
 
-def _format_check(mime: str, processing: str) -> dict[str, Any]:
+def _format_check(mime: str, processing: str, kind: str | None = None) -> dict[str, Any]:
     """The package makes no copy of a file that failed (package._rendition), so don't promise
-    one: HEIC and TXT then aren't in a format the tribunal takes."""
+    one: HEIC and TXT then aren't in a format the tribunal takes. A TXT letter is a digital
+    document, not text messages (#125); its PDF copy is made the same way."""
     if processing == "failed" and mime in _NO_COPY:
         return {"accepted": False, "action": "none", "note": _NO_COPY[mime]}
+    if mime == sniff.TEXT and kind == "letter":
+        return dict(_LETTER_FORMAT)
     return dict(_FORMAT[mime])
 
 

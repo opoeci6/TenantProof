@@ -14,6 +14,7 @@ from sqlmodel import Session
 from starlette.concurrency import run_in_threadpool
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from app.access_log import MaskIntakeTokens
 from app.auth import purge_expired_sessions
 from app.config import get_settings
 from app.db import get_engine
@@ -29,6 +30,7 @@ from app.routers import (
     intake,
     me,
     package,
+    privacy,
     runs,
     sources,
     timeline,
@@ -39,6 +41,9 @@ from app.services.evidence.http import UploadBodyLimit
 from app.services.intake_gate import IntakeTokenGate
 
 log = logging.getLogger(__name__)
+_access_log = logging.getLogger("uvicorn.access")
+if not any(isinstance(f, MaskIntakeTokens) for f in _access_log.filters):
+    _access_log.addFilter(MaskIntakeTokens())
 PURGE_EVERY_S = 3600.0  # #59: how often expired login sessions are cleared out
 
 
@@ -95,6 +100,8 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
     for name, value in SECURITY_HEADERS.items():
         response.headers[name] = value
+    if request.url.path.startswith("/i/"):
+        response.headers["Referrer-Policy"] = "no-referrer"
     return response
 
 
@@ -121,7 +128,7 @@ api.add_middleware(UploadBodyLimit)  # WS1: caps upload bodies before FastAPI re
 
 for module in (
     auth, me, cases, package, brief, evidence, runs, timeline, gaps, sources, form, activity,
-    intake, translation,
+    intake, translation, privacy,
 ):
     api.include_router(module.router)
 app.mount("/api", api)

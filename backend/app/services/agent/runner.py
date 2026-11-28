@@ -29,7 +29,10 @@ conversation is saved in the step's `checkpoint` key (the API never returns it).
 The hearing date is asked by code, not left to the model: when the timeline step ends and the
 case has no hearing date and the model never asked anything, the runner pauses the step with
 the same ask_caseworker pause (field `hearing_date`). That pause is `synthetic`: there is no
-model turn to continue, so the answer just completes the step."""
+model turn to continue, so the answer just completes the step.
+
+A step cut off by a limit or the run deadline ends `incomplete` (#119), not `done`. It is over all
+the same: a resume does not run it again, and a hearing-date answer leaves it `incomplete`."""
 
 import asyncio
 import copy
@@ -48,12 +51,14 @@ from app.config import get_settings
 from app.models import CaseRow, EvidenceRow, FormFieldRow, RunRow, TimelineEventRow
 from app.schemas import ToolCall
 from app.services import activity
-from app.services.agent import extract, prompts
+from app.services.agent import extract, placeholders, prompts
 from app.services.agent.evidence_text import EvidenceTextStore
 from app.services.agent.llm import (
+    LLMConfigError,
     LLMProvider,
     Message,
     Usage,
+    continuation_key,
     estimate_cost_usd,
     model_name,
 )
@@ -71,10 +76,11 @@ from app.services.agent.tools import (
     FillFormFieldOutput,
     ProposeEventOutput,
     ToolContext,
-    clean_text,
     is_fillable,
     new_nonce,
+    strip_text,
 )
+from app.services.form_fields import covered_legacy_fields
 from app.services.legal import gaps
 from app.services.legal import rules as legal_rules
 from app.services.mappers import case_counts
@@ -94,6 +100,7 @@ IMPLEMENTED_STEPS = ("extract", "timeline", "rules", "draft", "gaps")
 HEARING_QUESTION = "What is the hearing date? It is not in the evidence."
 OLD_EVENTS_KEPT = "The events from the earlier analysis were kept."
 RUN_CLOSED = "Closed: a newer analysis replaced this run."
+STEP_OVER = ("done", "incomplete")  # a resume does not run these again
 log = logging.getLogger(__name__)
 
 
@@ -216,7 +223,11 @@ def _fillable_fields(session: Session, case: CaseRow) -> list[tuple[str, str]]:
         .where(FormFieldRow.case_id == case.id)
         .order_by(col(FormFieldRow.position))
     ).all()
-    return [(row.key, row.label) for row in rows if is_fillable(row)]
+    covered_fields = covered_legacy_fields(rows)
+    return [
+        (row.key, row.label) for row in rows
+        if is_fillable(row) and row.key not in covered_fields
+    ]
 
 
 def _untouched(event: TimelineEventRow) -> bool:
@@ -255,7 +266,7 @@ def _start_timeline(session: Session, case: CaseRow) -> tuple[list[str], list[st
         )
         when = (e.date or {}).get("value") or "no date"
         state = "kept" if e.review_status == "pending" else e.review_status
-        lines.append(f"- {e.id} [{state}] {when}: {clean_text(e.title, 200)} ({cited})")
+        lines.append(f"- {e.id} [{state}] {when}: {strip_text(e.title, 200)} ({cited})")
     return lines, replaces
 
 
@@ -345,7 +356,7 @@ def _write_extract(
 
 
 _STEP_STATUS = {
-    "finished": "done", "budget": "done", "needs_input": "needs_input",
+    "finished": "done", "budget": "incomplete", "needs_input": "needs_input",
     "refused": "failed", "llm_error": "failed",
 }  # fmt: skip
 
@@ -381,13 +392,13 @@ def _usage_totals(run: RunRow, duration_ms: int, model: str) -> dict[str, Any]:
 
 
 def _final_status(session: Session, run: RunRow) -> str:
-    """CONTRACT_CHANGES #4: failed if a step failed; needs_review if a step needs input, an
-    event is pending or a blocking gap is open; else done."""
+    """CONTRACT_CHANGES #4: failed if a step failed; needs_review if a step needs input or stopped
+    early, an event is pending or a blocking gap is open; else done."""
     statuses = {s["status"] for s in run.steps}
     if "failed" in statuses:
         return "failed"
     blocking, pending = case_counts(session, run.case_id)
-    if "needs_input" in statuses or blocking or pending:
+    if statuses & {"needs_input", "incomplete"} or blocking or pending:
         return "needs_review"
     return "done"
 
@@ -400,6 +411,43 @@ def _paused_step(steps: list[dict[str, Any]]) -> dict[str, Any] | None:
         ):  # fmt: skip
             return step
     return None
+
+
+PRIVACY_KEY = "privacy_on"  # on the first step: was PRIVACY_PLACEHOLDERS on when the run began
+PLACEHOLDERS_KEY = "placeholders"  # on the first step: the run's placeholder numbering (#163)
+
+
+def _store_steps(run: RunRow, all_steps: list[dict[str, Any]], provider: LLMProvider) -> None:
+    """Save the steps with the run's placeholder numbering, so a resume can reuse it."""
+    if all_steps and isinstance(provider, placeholders.PlaceholderProvider):
+        # The map holds real names and numbers: keep it only while a pause or a crash can resume.
+        if any(s.get("checkpoint") for s in all_steps):
+            all_steps[0][PLACEHOLDERS_KEY] = provider.snapshot()
+        else:
+            all_steps[0].pop(PLACEHOLDERS_KEY, None)
+    run.steps = copy.deepcopy(all_steps)
+
+
+def can_resume_with(run: RunRow, provider: LLMProvider) -> bool:
+    if any(s.get("checkpoint") for s in run.steps):
+        began_with = next((s[PRIVACY_KEY] for s in run.steps if PRIVACY_KEY in s), None)
+        # The saved conversation holds placeholders (or real text): switching the setting
+        # during a pause would put placeholder text in saved rows, or real values to the model.
+        if began_with is not None and began_with != get_settings().privacy_placeholders:
+            return False
+    current = continuation_key(provider)
+    for step in run.steps:
+        if not step.get("checkpoint"):
+            continue
+        stored = step.get("provider_key")
+        if stored is None:
+            if getattr(provider, "requires_continuation_key", False) and not getattr(
+                provider, "accepts_unkeyed_checkpoints", False
+            ):
+                return False
+        elif stored != current:
+            return False
+    return True
 
 
 def paused_question(run: RunRow) -> dict[str, Any] | None:
@@ -521,6 +569,8 @@ def _needs_hearing_ask(case: CaseRow, state: StepState, result: LoopResult) -> b
     did not ask anything itself (one question per step, not two)."""
     if result.status not in ("finished", "budget") or case.hearing_date is not None:
         return False
+    if case.no_hearing_yet:  # a caseworker already said there is none (#124)
+        return False
     return not any(c.tool == "ask_caseworker" for c in state.tool_calls)
 
 
@@ -533,7 +583,7 @@ def _hearing_pause(step: dict[str, Any], state: StepState) -> LoopResult:
         output='{"paused":true}'))
     pending = {
         "tool_use_id": "", "results": [], "field": "hearing_date", "synthetic": True,
-        "summary": step["summary"],
+        "summary": step["summary"], "status": step["status"],
     }
     _write_step(step, state, "needs_input", HEARING_QUESTION, pending)
     return LoopResult("needs_input", HEARING_QUESTION, pending=pending)
@@ -567,6 +617,17 @@ async def execute_run(
     waiting = any(_step(all_steps, k)["status"] == "needs_input" for k in steps)
     if waiting and answer is None:
         raise ValueError("this run is waiting for the caseworker's answer")
+    if not can_resume_with(run, provider):
+        raise LLMConfigError("Paused run uses a different model configuration")
+    # Issue #60: one set of placeholders for the whole run. A resume builds them again from the
+    # case, then goes back to the numbering saved with the run (the saved conversation has it).
+    provider = placeholders.for_case(session, case, texts, provider)
+    if all_steps and isinstance(provider, placeholders.PlaceholderProvider):
+        saved_map = all_steps[0].get(PLACEHOLDERS_KEY)
+        if saved_map:
+            provider.restore(saved_map)
+    if all_steps:
+        all_steps[0].setdefault(PRIVACY_KEY, isinstance(provider, placeholders.PlaceholderProvider))
     stored = next((s["nonce"] for s in all_steps if s.get("nonce")), None)
     if nonce is not None and stored is not None and nonce != stored:
         raise ValueError("this run already uses a different evidence nonce")
@@ -585,19 +646,22 @@ async def execute_run(
     run.finished_at = None
     session.add(run)
 
+    profile_key = continuation_key(provider)
     current: tuple[dict[str, Any], StepState] | None = None
     try:
         async with asyncio.timeout(remaining):
             for key in steps:
                 step = _step(all_steps, key)
-                if step["status"] == "done":
+                if step["status"] in STEP_OVER:
                     continue  # a resume skips finished steps
+                if profile_key is not None:
+                    step["provider_key"] = profile_key
                 if key == "extract":
                     state = StepState(messages=[])
                     current = (step, state)
                     step["nonce"] = ctx.nonce
                     _write_extract(step, state, "running", None)
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
                     session.commit()
 
                     def on_item(item: extract.ItemResult, step=step, state=state) -> None:
@@ -606,14 +670,14 @@ async def execute_run(
                             output=item.tool_call_output()))
                         state.usage = state.usage + item.usage
                         _write_extract(step, state, "running", None)
-                        run.steps = copy.deepcopy(all_steps)
+                        _store_steps(run, all_steps, provider)
                         session.commit()  # this item's facts and the step, together
 
                     done = await extract.extract_case(
                         session, case.id, case.org_id, texts, provider, ctx.nonce, on_item)
                     _write_extract(step, state, "done", done.text)
                     current = None
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
                     session.commit()
                     continue
                 if key == "rules":
@@ -622,7 +686,7 @@ async def execute_run(
                     current = (step, state)
                     step["nonce"] = ctx.nonce
                     _write_extract(step, state, "running", None)
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
                     session.commit()
                     result = legal_rules.run(session, case)
                     state.tool_calls.append(
@@ -630,7 +694,7 @@ async def execute_run(
                     )
                     _write_extract(step, state, "done", result.summary)
                     current = None
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
                     session.commit()
                     continue
                 saved = (step.get("checkpoint") or {}).get("pending") or {}
@@ -660,7 +724,7 @@ async def execute_run(
                         state = StepState(messages=[])
                         step["nonce"] = ctx.nonce
                         _write_step(step, state, "done", skip)
-                        run.steps = copy.deepcopy(all_steps)
+                        _store_steps(run, all_steps, provider)
                         session.commit()
                         continue
                     kickoff = prompts.draft_kickoff(fillable)
@@ -669,18 +733,18 @@ async def execute_run(
                 current = (step, state)
                 step["nonce"] = ctx.nonce
                 if saved.get("synthetic"):  # the hearing-date answer: the step is complete
-                    _write_step(step, state, "done", saved["summary"])
+                    _write_step(step, state, saved.get("status", "done"), saved["summary"])
                     current = None
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
                     session.commit()
                     continue
                 step["status"] = "running"
-                run.steps = copy.deepcopy(all_steps)
+                _store_steps(run, all_steps, provider)
                 session.commit()
 
                 def on_turn(st: StepState, pending: dict[str, Any] | None, step=step) -> None:
                     _write_step(step, st, "running", None, pending)
-                    run.steps = copy.deepcopy(all_steps)
+                    _store_steps(run, all_steps, provider)
 
                 result = await _run_agent_step(spec, key, ctx, provider, state, on_turn)
                 _apply_result(step, state, result, spec.tally)
@@ -692,7 +756,7 @@ async def execute_run(
                     if _needs_hearing_ask(case, state, result):
                         result = _hearing_pause(step, state)
                 current = None
-                run.steps = copy.deepcopy(all_steps)
+                _store_steps(run, all_steps, provider)
                 session.commit()
                 if result.status == "needs_input":
                     break  # paused: nothing after this step runs until the answer comes
@@ -702,7 +766,7 @@ async def execute_run(
             step, state = current
             tally = _TALLIES.get(step["key"], _tally)(state)
             why = f"Stopped early: the {deadline_s:.0f} s run deadline passed ({tally})."
-            _write_step(step, state, "done", why)
+            _write_step(step, state, "incomplete", why)
             if step["key"] == "timeline":
                 _keep_old_events(session, case, step)
     except asyncio.CancelledError:
@@ -716,7 +780,7 @@ async def execute_run(
             _write_step(step, state, "failed", f"The step failed ({type(exc).__name__}).")
             if step["key"] == "timeline":
                 _keep_old_events(session, case, step)
-    run.steps = copy.deepcopy(all_steps)
+    _store_steps(run, all_steps, provider)
     run.usage = _usage_totals(
         run, previous_ms + int((time.monotonic() - started) * 1000), model_name(provider))
     run.status = _final_status(session, run)

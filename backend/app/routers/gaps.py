@@ -18,7 +18,7 @@ from app.schemas import (
     TenantRequestTranslation,
 )
 from app.services import review, tenant_request
-from app.services.agent import llm
+from app.services.agent import llm, placeholders
 from app.services.agent.evidence_text import SqlTextStore
 from app.services.mappers import to_gap
 
@@ -134,6 +134,7 @@ def translate_tenant_request(
     language = case.tenant_language
     if language.casefold().split("-")[0] == "en":
         return TenantRequestTranslation(message=message_en)
+    provider = placeholders.for_case(session, case, texts, provider)  # issue #60
     session.commit()  # end the read transaction: no connection held through the model call
     raw = asyncio.run(tenant_request.translate(provider, language, message_en))
     raw = tenant_request.unwrapped(raw)

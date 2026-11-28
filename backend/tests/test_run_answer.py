@@ -4,7 +4,7 @@ refuse a second answer. FixtureProvider only, so nothing reaches the network."""
 import asyncio
 import json
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlmodel import Session, select
@@ -104,6 +104,91 @@ def test_an_answer_resumes_the_run_and_the_agent_gets_it(
     # the resume carries on into the steps after the pause: rules (no model call), gaps, and draft
     # (no model call without evidence text)
     assert [request.fixture_key for request in later] == ["gaps-turn1"]
+
+
+def test_changed_model_cannot_claim_or_modify_a_paused_run(fresh_db, client, session):
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    provider = llm.FixtureProvider(model="first-model", scripted={"timeline-turn1": ask()})
+    row = asyncio.run(runner.execute_run(
+        session, runner.create_run(session, case), provider, InMemoryTextStore(),
+    ))
+    key = row.id
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    before = activity_lines(session)
+    api.dependency_overrides[runs_router.provider_dep] = lambda: llm.FixtureProvider(
+        model="second-model"
+    )
+    try:
+        response = client.post(URL.format(key), json={"answer": "2026-11-21"})
+    finally:
+        api.dependency_overrides.pop(runs_router.provider_dep, None)
+    assert response.status_code == 409, response.text
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    assert hearing(session) is None and activity_lines(session) == before
+
+
+def test_legacy_unbound_pause_cannot_resume_live(fresh_db, client, session):
+    row = paused_run(session)
+    key = row.id
+    before = activity_lines(session)
+    api.dependency_overrides[runs_router.provider_dep] = lambda: llm.AnthropicProvider(
+        "test-key", client=object(), base_url="https://new-provider.example",
+    )
+    try:
+        response = client.post(URL.format(key), json={"answer": "2026-11-21"})
+    finally:
+        api.dependency_overrides.pop(runs_router.provider_dep, None)
+    assert response.status_code == 409, response.text
+    assert status_of(session, key) == ("needs_review", "needs_input")
+    assert hearing(session) is None and activity_lines(session) == before
+
+
+def test_crash_checkpoint_refuses_a_different_model_before_any_call(fresh_db, session):
+    case = session.get(CaseRow, CASE)
+    assert case is not None
+    saved_provider = llm.FixtureProvider(
+        model="recorded-model", scripted={"timeline-turn1": ask()},
+    )
+    row = asyncio.run(runner.execute_run(
+        session, runner.create_run(session, case), saved_provider, InMemoryTextStore(),
+    ))
+    key = row.id
+    row.steps = [
+        {
+            **step,
+            "status": "running",
+            "checkpoint": {**step["checkpoint"], "pending": None},
+        }
+        if step["key"] == "timeline" else step
+        for step in row.steps
+    ]
+    row.status = "running"
+    session.add(row)
+    session.commit()
+    with pytest.raises(llm.LLMConfigError, match="different model configuration"):
+        asyncio.run(runner.execute_run(
+            session, row, llm.FixtureProvider(model="new-model"), InMemoryTextStore(),
+        ))
+    assert status_of(session, key) == ("running", "running")
+
+
+def test_a_checkpoint_saved_before_provider_keys_resumes_on_anthropic_only() -> None:
+    """Runs paused before PR #155 have no provider_key; Anthropic was the only live provider
+    then, so it may answer them. A chat provider still may not."""
+    from app.services.agent.chat import ChatCompletionsProvider
+
+    run = RunRow(id="run_old", case_id=CASE, status="needs_input",
+                 started_at=datetime.now(UTC), steps=[
+        {"key": "timeline", "status": "needs_input", "checkpoint": {"messages": []}},
+    ])  # fmt: skip
+    anthropic = llm.AnthropicProvider("sk-test", client=object())
+    chat = ChatCompletionsProvider("sk-test", "gpt-5-mini", provider="openai",
+                                   base_url="https://api.openai.com/v1")  # fmt: skip
+    assert runner.can_resume_with(run, anthropic)
+    assert not runner.can_resume_with(run, chat)
+    run.steps = [{**run.steps[0], "provider_key": llm.continuation_key(chat)}]
+    assert not runner.can_resume_with(run, anthropic)  # a keyed checkpoint still must match
 
 
 def test_the_field_key_is_saved_with_the_pause_and_is_not_a_field_of_the_run(
@@ -392,3 +477,95 @@ def test_a_far_hearing_is_scheduled_without_a_deadline_warning(
 def test_evidence_is_due_five_days_before_the_hearing(hearing_day: date, due: str) -> None:
     assert evidence_deadline(hearing_day) == {
         "date": due, "label": f"Must be received by · hearing {hearing_day.isoformat()}"}
+
+
+# --------------------------------------------------------------------------- no hearing yet (#124)
+
+
+@pytest.mark.parametrize("typed", ["none", "None", "No hearing yet", "no hearing scheduled yet."])
+def test_no_hearing_yet_is_stored_logged_and_resumes_the_run(
+    fresh_db, client, session: Session, resume: RecordingProvider, typed: str
+) -> None:
+    run = paused_run(session)
+    assert client.post(URL.format(run.id), json={"answer": typed}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date is None and case.no_hearing_yet is True
+    assert case.next_deadline is None  # no "must be received by" date
+    assert case.stage != "hearing_scheduled"
+    assert "Set the hearing as not scheduled yet (no evidence deadline)" in activity_lines(session)
+    assert status_of(session, run.id) == ("needs_review", "done")
+    told = [
+        b for r in resume.requests for m in r.messages if isinstance(m.content, list)
+        for b in m.content
+        if b.get("type") == "tool_result" and "No hearing is scheduled" in str(b["content"])
+    ]
+    assert told  # the agent was told there is no date, not given one
+
+
+def test_no_hearing_yet_is_never_asked_again_on_the_next_run(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    assert client.post(URL.format(run.id), json={"answer": "none"}).status_code == 200
+    row = runner.create_run(session, case_row(session))
+    row = asyncio.run(runner.execute_run(
+        session, row, RecordingProvider({
+            "timeline-turn1": turn(tool_use("finish", "u9", summary="Read the evidence."))}),
+        InMemoryTextStore(), steps=("timeline",)))
+    step = next(s for s in row.steps if s["key"] == "timeline")
+    assert step["status"] == "done" and row.finished_at is not None
+
+
+def test_a_real_date_after_no_hearing_clears_the_flag(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "none"})
+    second = paused_run(session)
+    assert client.post(URL.format(second.id), json={"answer": "2026-11-24"}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date == "2026-11-24" and case.no_hearing_yet is False
+    assert case.next_deadline is not None
+
+
+def test_no_hearing_yet_clears_an_earlier_date_and_deadline(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "2026-11-24"})
+    assert case_row(session).stage == "hearing_scheduled"
+    second = paused_run(session)
+    assert client.post(URL.format(second.id), json={"answer": "none"}).status_code == 200
+    case = case_row(session)
+    assert case.hearing_date is None and case.next_deadline is None
+    assert case.stage != "hearing_scheduled"
+
+
+def test_the_caseload_shows_no_deadline_after_no_hearing_yet(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session)
+    client.post(URL.format(run.id), json={"answer": "none"})
+    [mine] = [c for c in client.get("/api/cases").json() if c["id"] == CASE]
+    assert mine["next_deadline"] is None
+    assert "Must be received" not in (mine["priority_reason"] or "")
+
+
+def test_none_is_plain_text_when_the_question_is_not_the_hearing_date(
+    fresh_db, client, session: Session, resume: RecordingProvider
+) -> None:
+    run = paused_run(session, field=None)
+    assert client.post(URL.format(run.id), json={"answer": "none"}).status_code == 200
+    assert case_row(session).no_hearing_yet is False  # only the hearing question can say it
+
+
+@pytest.mark.parametrize("typed", ["maybe later", "banana", "nonexistent", "no"])
+def test_other_text_is_still_rejected_for_the_hearing_date(
+    fresh_db, client, session: Session, resume: RecordingProvider, typed: str
+) -> None:
+    run = paused_run(session)
+    r = client.post(URL.format(run.id), json={"answer": typed})
+    assert r.status_code == 422
+    assert r.json()["detail"]["reasons"] == ["Enter the date like 2026-11-21 or Nov 21, 2026"]
+    assert case_row(session).no_hearing_yet is False
+    assert status_of(session, run.id) == ("needs_review", "needs_input")

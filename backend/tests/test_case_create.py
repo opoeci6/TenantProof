@@ -2,12 +2,21 @@
 Fixture providers only, so nothing reaches the network."""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
 import pytest
 from sqlmodel import Session, select
 
 from app.main import api
-from app.models import ActivityRow, CaseRow, RunRow
+from app.models import (
+    ActivityRow,
+    CaseRow,
+    FormFieldRow,
+    GapRow,
+    IntakeTokenRow,
+    PackageRow,
+    RunRow,
+)
 from app.routers import runs as runs_router
 from app.services import cases as cases_service
 from app.services.agent import llm
@@ -32,6 +41,7 @@ def create(client, **changes) -> dict:
 def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, session: Session):
     body = create(client)
     assert body["id"].startswith("case_") and len(body["id"]) == 15
+    assert body["applicant_role"] == "tenant"
     assert body["tenant"] == {"name": "Ana Silva", "preferred_language": "es"}
     assert (body["title"], body["unit"]) == (BODY["title"], BODY["unit"])
     assert body["dispute_type"] == "maintenance" and body["synthetic"] is True
@@ -45,6 +55,76 @@ def test_the_case_lands_in_the_callers_org_assigned_to_them(fresh_db, client, se
     # in the caller's caseload, openable
     listed = {c["id"]: c for c in client.get(URL).json()}
     assert body["id"] in listed and listed[body["id"]]["has_demo_data"] is True
+    assert listed[body["id"]]["applicant_role"] == "tenant"
+    assert listed["case_demo_001"]["applicant_role"] == "tenant"
+
+
+@pytest.mark.parametrize("role_body", [{}, {"applicant_role": "tenant"}])
+def test_new_tenant_case_leaves_core_fields_for_analysis(fresh_db, client, session, role_body):
+    created = create(client, **role_body)
+    case_id = created["id"]
+    assert created["applicant_role"] == "tenant"
+    assert client.get(f"{URL}/{case_id}/form-draft").json()["fields"] == []
+    assert session.exec(select(FormFieldRow).where(FormFieldRow.case_id == case_id)).first() is None
+    assert client.post(f"{URL}/{case_id}/intake-link").status_code == 200
+
+
+def test_landlord_case_gets_a_scoped_manual_draft(fresh_db, client, session):
+    created = create(client, applicant_role="landlord")
+    base = f"{URL}/{created['id']}"
+    assert created["applicant_role"] == "landlord"
+    assert client.get(base).json()["applicant_role"] == "landlord"
+    listed = {item["id"]: item for item in client.get(URL).json()}
+    assert listed[created["id"]]["applicant_role"] == "landlord"
+    row = session.get(CaseRow, created["id"])
+    assert row is not None and row.applicant_role == "landlord"
+    draft = client.get(f"{base}/form-draft").json()
+    fields = {field["key"]: field for field in draft["fields"]}
+    assert fields["tenant_name"]["value"] == BODY["tenant_name"]
+    assert fields["rental_address"]["value"] == BODY["unit"]
+    assert {"tenant_email", "landlord_email", "move_in_date", "written_lease"} <= fields.keys()
+    assert {"landlord_request_unpaid_rent", "landlord_request_unpaid_rent_reason"} <= fields.keys()
+    assert {"remedy", "request_repairs", "request_repairs_reason"}.isdisjoint(fields)
+    key = "landlord_request_unpaid_rent"
+    r = client.patch(f"{base}/form-draft/fields/{key}", json={"value": "yes"})
+    assert r.is_success, r.text
+
+
+def test_landlord_intake_link_refusal_leaves_case_unchanged(fresh_db, client, session):
+    case_id = create(client, applicant_role="landlord")["id"]
+    response = client.post(f"{URL}/{case_id}/intake-link")
+    assert response.status_code == 409, response.text
+    row = session.get(CaseRow, case_id)
+    assert row is not None and row.intake_status == "not_sent" and row.intake_sent_at is None
+    tokens = select(IntakeTokenRow).where(IntakeTokenRow.case_id == case_id)
+    assert session.exec(tokens).first() is None
+    assert cases_service_log(session, case_id) == "Created the case"
+
+
+@pytest.mark.parametrize(("role", "excluded"), [
+    ("tenant", "landlord_request_unpaid_rent"),
+    ("landlord", "request_repairs"),
+])
+def test_form_and_gap_updates_reject_another_roles_field(
+    fresh_db, client, session, role, excluded,
+):
+    case_id = create(client, applicant_role=role)["id"]
+    for key in (excluded, f"{excluded}_reason"):
+        r = client.patch(f"{URL}/{case_id}/form-draft/fields/{key}", json={"value": "yes"})
+        assert r.status_code == 404, r.text
+        assert session.get(FormFieldRow, (case_id, key)) is None
+
+    gap = GapRow(
+        id="gap_outside_applicant_role", case_id=case_id, severity="blocking",
+        title="Review the request", why="The draft needs review", how_to_fix="Confirm the request",
+        input={"kind": "field", "field_key": excluded},
+    )
+    session.add(gap)
+    session.commit()
+    response = client.patch(f"/api/gaps/{gap.id}", json={"status": "dismissed"})
+    assert response.status_code == 404, response.text
+    session.refresh(gap)
+    assert gap.status == "open"
 
 
 def test_the_form_name_and_disclaimer_are_the_seeded_cases(fresh_db, client, session: Session):
@@ -84,6 +164,7 @@ def test_the_body_cannot_choose_the_org_or_the_stage(fresh_db, client, session: 
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
+        ({"applicant_role": "other"}, "Applicant role: not valid"),
         ({"tenant_language": "ar"}, CHOOSE),
         ({"tenant_language": "de"}, CHOOSE),
         ({"tenant_name": ""}, "Tenant name: enter some text"),
@@ -174,6 +255,124 @@ def test_every_page_of_an_empty_case_answers(fresh_db, client):
     assert client.get(base + "/evidence").json() == []
     assert client.get(base + "/form-draft").json()["fields"] == []
     assert client.get(base + "/runs/latest").status_code == 404  # API_CONTRACT: 404 if none
+
+
+def test_a_retried_create_returns_the_first_case_and_logs_it_once(fresh_db, client, session):
+    """#202: the retry after a lost response opens the case the first attempt made."""
+    first = create(client, idempotency_key="retry-1")
+    again = create(client, idempotency_key="retry-1")
+    assert again["id"] == first["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "retry-1")).all()
+    assert [row.id for row in rows] == [first["id"]]
+    assert cases_service_log(session, first["id"]) == "Created the case"
+    assert len([
+        c for c in client.get(URL).json() if c["tenant_name"] == BODY["tenant_name"]
+    ]) == 1
+
+
+def test_a_retried_landlord_create_does_not_duplicate_its_form_fields(fresh_db, client, session):
+    first = create(client, applicant_role="landlord", idempotency_key="retry-landlord")
+    again = create(client, applicant_role="landlord", idempotency_key="retry-landlord")
+    assert again["id"] == first["id"]
+    other = create(client, applicant_role="landlord", idempotency_key="retry-landlord-2")
+    counted = {
+        case_id: len(session.exec(
+            select(FormFieldRow).where(FormFieldRow.case_id == case_id)
+        ).all())
+        for case_id in (first["id"], other["id"])
+    }
+    assert counted[first["id"]] == counted[other["id"]] > 0
+    assert cases_service_log(session, first["id"]) == "Created the case"
+
+
+def test_two_deliberate_submissions_are_two_cases(fresh_db, client, session):
+    first = create(client, idempotency_key="one")
+    second = create(client, idempotency_key="two")
+    third = create(client)  # no key at all, as a caller that does not send one
+    assert len({first["id"], second["id"], third["id"]}) == 3
+    assert len(session.exec(select(CaseRow).where(CaseRow.id == third["id"])).all()) == 1
+
+
+def test_another_org_using_the_same_key_creates_its_own_case(
+    fresh_db, client, other_org_client, session: Session,
+):
+    """Keys are scoped per org: the same string in another org is a different submission."""
+    mine = create(client, idempotency_key="shared-key")
+    theirs = create(other_org_client, idempotency_key="shared-key")
+    assert theirs["id"] != mine["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "shared-key")).all()
+    assert len({row.org_id for row in rows}) == 2
+
+
+@pytest.mark.parametrize(("key", "reason"), [
+    ("", "Submission key: enter some text"),
+    ("   ", "Submission key: enter some text"),
+    ("x" * 65, "Submission key: at most 64 characters"),
+    ("<bad>", "Submission key: not valid"),
+])
+def test_a_bad_submission_key_is_422_and_binds_nothing(fresh_db, client, session, key, reason):
+    before = len(session.exec(select(CaseRow)).all())
+    r = client.post(URL, json={**BODY, "idempotency_key": key})
+    assert r.status_code == 422
+    assert r.json()["detail"]["reasons"] == [reason]
+    session.expire_all()
+    assert len(session.exec(select(CaseRow)).all()) == before
+
+
+def test_a_refused_body_does_not_bind_its_key(fresh_db, client, session):
+    """The 422 comes before the lookup or the write, so the key is free for the corrected retry."""
+    refused = client.post(
+        URL, json={**BODY, "title": "Heat < 15C", "idempotency_key": "after-refusal"}
+    )
+    assert refused.status_code == 422
+    assert session.exec(
+        select(CaseRow).where(CaseRow.idempotency_key == "after-refusal")
+    ).first() is None
+    made = create(client, idempotency_key="after-refusal")
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "after-refusal")).all()
+    assert [row.id for row in rows] == [made["id"]]
+
+
+def test_a_key_race_returns_the_case_that_won(fresh_db, client, session, monkeypatch):
+    """Two requests with one key: the index refuses the second insert and the handler answers
+    with the case the winner committed, not a 500."""
+    first = create(client, idempotency_key="race-key")
+    real = cases_service.find_by_idempotency_key
+    calls = {"n": 0}
+
+    def racing(session_: Session, org_id: str, key: str | None):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else real(session_, org_id, key)
+
+    monkeypatch.setattr(cases_service, "find_by_idempotency_key", racing)
+    again = client.post(URL, json={**BODY, "idempotency_key": "race-key"})
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == first["id"]
+    rows = session.exec(select(CaseRow).where(CaseRow.idempotency_key == "race-key")).all()
+    assert [row.id for row in rows] == [first["id"]]
+    assert cases_service_log(session, first["id"]) == "Created the case"
+
+
+def test_the_case_says_whether_it_has_a_run_and_a_package(fresh_db, client, session: Session):
+    """#218: the page reads these flags instead of asking for a run and a package it has not got.
+    The two endpoints keep their 404 answers for a caller that does ask."""
+    body = create(client)
+    base = f"{URL}/{body['id']}"
+    assert (body["has_run"], body["has_package"]) == (False, False)
+    assert client.get(f"{base}/runs/latest").status_code == 404
+    assert client.get(f"{base}/package").status_code == 404
+    session.add(RunRow(
+        id="run_flag", case_id=body["id"], status="running", started_at=datetime.now(UTC),
+    ))
+    session.add(PackageRow(
+        id="pkg_flag", case_id=body["id"], version=1, sha256="0" * 64, storage_key="blob",
+        size_bytes=1, prepared_by="Sam Rivera", attestations={},
+    ))
+    session.commit()
+    flags = client.get(base).json()
+    assert (flags["has_run"], flags["has_package"]) == (True, True)
+    assert client.get(f"{base}/runs/latest").status_code == 200
+    assert client.get(f"{base}/package").status_code == 200
 
 
 def test_the_intake_link_works_on_a_new_case(fresh_db, client):

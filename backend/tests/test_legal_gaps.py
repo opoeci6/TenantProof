@@ -1,14 +1,26 @@
 """The gaps step: the deterministic checks first, then the agent that drafts requests to the
 tenant. Fixture providers only, so nothing reaches the network."""
 
+from datetime import UTC, datetime
+
 import pytest
 from sqlmodel import Session, col, select
 
-from app.models import ActivityRow, CaseRow, EvidencePageRow, GapRow, LegalSourceRow
+from app.models import (
+    ActivityRow,
+    CaseRow,
+    EvidencePageRow,
+    EvidenceRow,
+    FormFieldRow,
+    GapRow,
+    LegalSourceRow,
+)
 from app.services.agent import llm, loop, runner
 from app.services.agent import tools as t
+from app.services.evidence.ingest import OCR_SKIPPED, PHOTO_OCR_LOCATOR
+from app.services.form_fields import F3_REQUESTS, remedy_input
 from app.services.legal import gaps
-from app.services.legal.gap_checks import UNATTESTED_TITLE
+from app.services.legal.gap_checks import REMEDY_HOW_TO_FIX, UNATTESTED_TITLE
 from tests.agent_support import (
     CASE,
     RecordingProvider,
@@ -57,6 +69,23 @@ def run_gaps(session: Session, script: dict[str, llm.LLMResponse], case_id: str 
 # --- the deterministic checks ----------------------------------------------------------------
 
 
+def test_optional_only_case_still_gets_baseline_form_fields(fresh_db, session):
+    case = session.get(CaseRow, LIVE)
+    assert case is not None
+    manual = FormFieldRow(
+        case_id=LIVE, key="tenant_email", label="Tenant email", required=False,
+        value="applicant@example.test", status="user_entered",
+    )
+    session.add(manual)
+    session.commit()
+
+    assert gaps.ensure_form_fields(session, case) == 7
+    session.commit()
+    assert gaps.ensure_form_fields(session, case) == 0
+    session.refresh(manual)
+    assert manual.value == "applicant@example.test" and manual.status == "user_entered"
+
+
 def test_the_demo_case_already_has_every_gap_the_checks_find(fresh_db, session):
     """The seeded gaps cover both missing fields, the two photo problems and the notice, so the
     checks add none of those again (or the demo would show the same gap twice). The one gap they
@@ -84,13 +113,22 @@ def test_an_empty_case_gets_the_form_and_a_blocking_gap_per_missing_field(fresh_
 
 def test_a_field_gap_points_at_the_form_and_its_field(fresh_db, session):
     prepare(session, LIVE)
-    gap = next(
-        g for g in gaps_of(session, LIVE)
-        if g.input and g.input.get("field_key") == "remedy"
-    )
-    assert gap.input == {"type": "text", "field_key": "remedy", "placeholder": ""}
-    source = session.get(LegalSourceRow, gap.source_id)
+    found = gaps_of(session, LIVE)
+    remedy = next(g for g in found if g.input and g.input.get("field_key") == "remedy")
+    assert remedy.input == {
+        "type": "choice",
+        "field_key": "remedy",
+        "options": list(F3_REQUESTS.values()),
+    }
+    assert remedy.input == remedy_input()
+    assert remedy.how_to_fix == REMEDY_HOW_TO_FIX
+    source = session.get(LegalSourceRow, remedy.source_id)
     assert source is not None and source.kind == "form"
+
+    address = next(
+        g for g in found if g.input and g.input.get("field_key") == "landlord_address"
+    )
+    assert address.input == {"type": "text", "field_key": "landlord_address", "placeholder": ""}
 
 
 def test_a_dismissed_gap_does_not_come_back(fresh_db, session):
@@ -281,12 +319,17 @@ def test_an_instruction_inside_the_evidence_changes_no_gap(fresh_db, session):
 
 
 def test_the_step_ends_at_the_tool_budget(fresh_db, session):
-    script = {f"gaps-turn{i}": turn(tool_use("list_evidence", f"u{i}")) for i in range(1, 60)}
+    script = {
+        f"gaps-turn{i}": turn(tool_use(
+            "create_gap", f"u{i}", severity="recommended", title=f"Gap {i}",
+            why="Because.", how_to_fix="Add it.",
+        )) for i in range(1, 60)
+    }
     done = run_gaps(session, script)
 
     step = next(s for s in done.steps if s["key"] == "gaps")
     assert len(step["tool_calls"]) == loop.MAX_TOOL_CALLS == 40
-    assert step["status"] == "done" and step["summary"].startswith("Stopped early")
+    assert step["status"] == "incomplete" and step["summary"].startswith("Stopped early")
 
 
 def test_open_blocking_gaps_make_the_run_needs_review(fresh_db, session):
@@ -404,3 +447,325 @@ def test_the_kickoff_gives_each_open_gap_its_id_and_field(fresh_db, session):
     line = next(x for x in prepared.open_gaps if "Monthly rent" in x)
     assert line.startswith(f"- {rent.id} [blocking] ")
     assert "(field monthly_rent)" in line and line.endswith("(no draft yet)")
+
+
+# --- #172: remedy gap uses Form J F3 choices -------------------------------------------------
+
+
+def test_create_gap_uses_f3_choices_for_remedy_and_deduplicates_before_rules(
+    fresh_db, session
+) -> None:
+    gaps.ensure_form_fields(session, session.get(CaseRow, LIVE))  # type: ignore[arg-type]
+    session.commit()
+    res = call(
+        "create_gap",
+        make_ctx(session, case_id=LIVE),
+        {
+            "severity": "blocking",
+            "title": "Confirm what the tenant is asking for",
+            "why": "The application needs the outcome the tenant wants.",
+            "how_to_fix": REMEDY_HOW_TO_FIX,
+            "field_key": "remedy",
+        },
+    )
+    assert isinstance(res, t.CreateGapOutput)
+    session.commit()
+    created = session.get(GapRow, res.gap_id)
+    assert created is not None and created.input == remedy_input()
+
+    prepare(session, LIVE)
+    remedy_gaps = [
+        g for g in gaps_of(session, LIVE) if (g.input or {}).get("field_key") == "remedy"
+    ]
+    assert len(remedy_gaps) == 1 and remedy_gaps[0].id == res.gap_id
+
+    other = call(
+        "create_gap",
+        make_ctx(session, case_id=LIVE),
+        {
+            "severity": "blocking",
+            "title": "Landlord address needed",
+            "why": "w",
+            "how_to_fix": "h",
+            "field_key": "landlord_address",
+        },
+    )
+    assert isinstance(other, t.CreateGapOutput)
+    session.commit()
+    other_row = session.get(GapRow, other.gap_id)
+    assert other_row is not None and other_row.input == {
+        "type": "text",
+        "field_key": "landlord_address",
+        "placeholder": "",
+    }
+
+
+def test_fixture_gaps_run_creates_choice_remedy_gap_and_saving_choices_fills_remedy(
+    fresh_db, client, session
+) -> None:
+    done = run_gaps(
+        session,
+        {"gaps-turn1": turn(tool_use("finish", "g1", summary="Done."))},
+        case_id=LIVE,
+    )
+    assert done.status == "needs_review"
+    remedy_gap = next(
+        g for g in gaps_of(session, LIVE) if (g.input or {}).get("field_key") == "remedy"
+    )
+    assert remedy_gap.input == remedy_input()
+
+    chosen = f"{F3_REQUESTS['request_repairs']}; {F3_REQUESTS['request_rent_relief']}"
+    saved = client.patch(
+        f"/api/gaps/{remedy_gap.id}",
+        json={
+            "status": "resolved",
+            "value": chosen,
+            "resolution_note": f"Tenant's choice: {chosen}",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["status"] == "resolved"
+    form = client.get(f"/api/cases/{LIVE}/form-draft").json()
+    remedy_field = next(f for f in form["fields"] if f["key"] == "remedy")
+    assert remedy_field["value"] == chosen
+    assert remedy_field["status"] == "user_entered"
+
+    # Asked of the tenant first (waiting_tenant), the choice is saved the same way.
+    reopened = client.patch(f"/api/gaps/{remedy_gap.id}", json={"status": "open"})
+    assert reopened.status_code == 200
+    session.expire_all()
+    waiting = session.get(GapRow, remedy_gap.id)
+    assert waiting is not None
+    waiting.status = "waiting_tenant"
+    session.add(waiting)
+    session.commit()
+    again = client.patch(
+        f"/api/gaps/{remedy_gap.id}",
+        json={"status": "resolved", "value": F3_REQUESTS["request_repairs"]},
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["status"] == "resolved"
+
+
+def test_landlord_case_never_gets_a_remedy_gap(fresh_db, client, session) -> None:
+    created = client.post(
+        "/api/cases",
+        json={
+            "applicant_role": "landlord",
+            "tenant_name": "Jordan Lee",
+            "tenant_language": "fr",
+            "unit": "1444 Hollis St, Unit 2",
+            "title": "Unpaid rent",
+        },
+    )
+    assert created.status_code == 200
+    case_id = created.json()["id"]
+
+    prepare(session, case_id)
+    found = gaps_of(session, case_id)
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in found)
+
+    refused = call(
+        "create_gap",
+        make_ctx(session, case_id=case_id),
+        {
+            "severity": "blocking",
+            "title": "What the tenant is asking for",
+            "why": "w",
+            "how_to_fix": REMEDY_HOW_TO_FIX,
+            "field_key": "remedy",
+        },
+    )
+    assert isinstance(refused, t.ToolError) and refused.kind == "invalid_input"
+
+    template = session.get(CaseRow, CASE)
+    assert template is not None
+    bare = CaseRow(
+        id="case_landlord_bare",
+        org_id=template.org_id,
+        assigned_to_id=template.assigned_to_id,
+        dispute_type="maintenance",
+        title="Unpaid rent",
+        unit="100 Main St",
+        tenant_name="Alex",
+        tenant_language="en",
+        applicant_role="landlord",
+        stage="needs_review",
+        form_name="Partial Form J draft",
+        form_disclaimer="Draft.",
+        intake_status="not_sent",
+    )
+    session.add(bare)
+    session.commit()
+    prepared = prepare(session, bare.id)
+    assert prepared.fields_added == 6
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, bare.id))
+
+
+def test_a_landlord_case_with_an_old_remedy_row_gets_no_remedy_gap(fresh_db, session) -> None:
+    """A landlord case that already has an empty required `remedy` row (made before the role
+    existed, or by hand) is still not asked for the tenant's remedy: `case_facts` leaves it out."""
+    template = session.get(CaseRow, CASE)
+    assert template is not None
+    case = CaseRow(
+        id="case_landlord_old_remedy", org_id=template.org_id,
+        assigned_to_id=template.assigned_to_id, dispute_type="maintenance", title="Unpaid rent",
+        unit="100 Main St", tenant_name="Alex", tenant_language="en", applicant_role="landlord",
+        stage="needs_review", form_name="Partial Form J draft", form_disclaimer="Draft.",
+        intake_status="not_sent",
+    )  # fmt: skip
+    session.add(case)
+    session.add(FormFieldRow(case_id=case.id, key="remedy", position=0,
+                             label="What the tenant is asking for", required=True,
+                             status="missing"))  # fmt: skip
+    session.commit()
+    prepare(session, case.id)
+    assert not any((g.input or {}).get("field_key") == "remedy" for g in gaps_of(session, case.id))
+
+
+# --- #173: screenshots with OCR text skip "Original photo" ----------------------------------
+
+
+def test_screenshot_photo_checks_in_gap_checks() -> None:
+    from app.services.legal.gap_checks import CaseFacts, EvidenceFact, specs
+
+    found = specs(
+        CaseFacts(
+            attested=True,
+            fields=(),
+            evidence=(
+                EvidenceFact("e1", "E-01", "photo", no_metadata=True, screenshot=True),
+                EvidenceFact("e2", "E-02", "photo", no_metadata=True, screenshot=False),
+                EvidenceFact("e3", "E-03", "photo", no_metadata=True, edited=True, screenshot=True),
+            ),
+        )
+    )
+    titles_found = {spec.title for spec in found}
+    assert "Original photo for E-01" not in titles_found
+    assert "Original photo for E-02" in titles_found
+    assert "Original photo for E-03" not in titles_found
+    assert "Unedited version of E-03" in titles_found
+
+
+def _add_photo(
+    session: Session,
+    ev_id: str,
+    label: str,
+    *,
+    captured_at: str | None = None,
+    device: str | None = None,
+    software: str | None = None,
+    ocr_text: str | None = None,
+    error: str | None = None,
+) -> None:
+    session.add(
+        EvidenceRow(
+            id=ev_id,
+            case_id=LIVE,
+            position=int(label.split("-")[1]),
+            label=label,
+            filename=f"{ev_id}.png",
+            kind="photo",
+            mime="image/png",
+            size_bytes=1234,
+            sha256=ev_id.ljust(64, "0"),
+            received_at=datetime.now(UTC),
+            uploaded_by="tenant",
+            format_check={"accepted": True, "action": "none", "note": "PNG is an accepted format."},
+            metadata_={
+                "captured_at": captured_at,
+                "gps_present": False,
+                "device": device,
+                "software": software,
+            },
+            metadata_stripped_for_ai=True,
+            processing="done",
+            error=error,
+        )
+    )
+    session.flush()
+    if ocr_text is not None:
+        session.add(
+            EvidencePageRow(
+                evidence_id=ev_id,
+                locator=PHOTO_OCR_LOCATOR,
+                case_id=LIVE,
+                position=1,
+                text=ocr_text,
+            )
+        )
+
+
+def test_screenshot_vs_camera_photo_vs_edited_photo_gaps(fresh_db, session) -> None:
+    _add_photo(
+        session,
+        "ev_shot",
+        "E-01",
+        ocr_text="Bonjour, notre plombier passera mardi matin pour reparer le mur.",
+    )
+    _add_photo(session, "ev_cam", "E-02")
+    _add_photo(
+        session,
+        "ev_edited",
+        "E-03",
+        software="Adobe Photoshop",
+        ocr_text="Votre loyer reste du le 1er du mois sans exception.",
+    )
+    _add_photo(
+        session,
+        "ev_short_ocr",
+        "E-04",
+        ocr_text="Trop court",
+    )
+    _add_photo(
+        session,
+        "ev_device",
+        "E-05",
+        device="Apple iPhone 15",
+        ocr_text="Avis affiche sur la porte d'entree du logement.",
+    )
+    _add_photo(
+        session,
+        "ev_sign_cam",
+        "E-06",
+        captured_at="2026-09-10T14:20:00",
+        ocr_text="Avis affiche sur la porte d'entree du logement.",
+    )
+    _add_photo(
+        session,
+        "ev_ocr_skipped_err",
+        "E-07",
+        ocr_text="Texte present mais marque OCR_SKIPPED sur l'item.",
+        error=OCR_SKIPPED,
+    )
+    _add_photo(
+        session,
+        "ev_ocr_skipped_text",
+        "E-08",
+        ocr_text=OCR_SKIPPED,
+    )
+    session.commit()
+
+    case = session.get(CaseRow, LIVE)
+    assert case is not None
+    facts = {f.evidence_id: f for f in gaps.case_facts(session, case).evidence}
+    assert facts["ev_shot"].screenshot is True
+    assert facts["ev_cam"].screenshot is False
+    assert facts["ev_edited"].screenshot is True
+    assert facts["ev_short_ocr"].screenshot is False
+    assert facts["ev_device"].screenshot is False
+    assert facts["ev_sign_cam"].screenshot is False
+    assert facts["ev_ocr_skipped_err"].screenshot is False
+    assert facts["ev_ocr_skipped_text"].screenshot is False
+
+    prepare(session, LIVE)
+    found = titles(session, LIVE)
+    assert "Original photo for E-01" not in found
+    assert "Original photo for E-02" in found
+    assert "Original photo for E-03" not in found
+    assert "Unedited version of E-03" in found
+    assert "Original photo for E-04" in found
+    assert "Original photo for E-05" in found
+    assert "Original photo for E-06" not in found
+    assert "Original photo for E-07" in found
+    assert "Original photo for E-08" in found
