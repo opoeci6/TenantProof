@@ -181,7 +181,7 @@ What is built and what is not: [docs/STATUS.md](docs/STATUS.md). Not built: the 
 
 ## Team
 
-[Lameda12](https://github.com/Lameda12), [leozhang5867](https://github.com/leozhang5867), [NineJZ356](https://github.com/NineJZ356), [opoeci6](https://github.com/opoeci6), [YCL0609](https://github.com/YCL0609).
+[Lameda12](https://github.com/Lameda12), [leozhang5867](https://github.com/leozhang5867) (chunyu), [NineJZ356](https://github.com/NineJZ356), [opoeci6](https://github.com/opoeci6), [YCL0609](https://github.com/YCL0609).
 
 ## Contributing
 
